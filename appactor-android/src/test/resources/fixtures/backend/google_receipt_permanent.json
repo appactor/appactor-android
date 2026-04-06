@@ -1,0 +1,10 @@
+{
+  "status": "permanent_error",
+  "requestId": "req_google_receipt_permanent_001",
+  "error": {
+    "code": "PACKAGE_MISMATCH",
+    "message": "packageName does not match app configuration"
+  },
+  "acknowledgePurchase": false,
+  "consumePurchase": false
+}

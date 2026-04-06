@@ -1,0 +1,65 @@
+{
+  "status": "ok",
+  "requestId": "req_google_receipt_ok_001",
+  "customer": {
+    "managementUrl": null,
+    "tokenBalance": {
+      "renewable": 0,
+      "nonRenewable": 0,
+      "total": 0
+    },
+    "firstSeen": "2026-03-10T09:00:00.000Z",
+    "lastSeen": "2026-03-14T12:15:00.000Z",
+    "entitlements": {
+      "premium": {
+        "isActive": true,
+        "status": "active",
+        "expiresAt": "2026-04-14T09:00:00.000Z",
+        "purchaseDate": "2026-03-14T09:00:00.000Z",
+        "startsAt": "2026-03-14T09:00:00.000Z",
+        "productId": "com.appactor.pro.monthly",
+        "basePlanId": "monthly001",
+        "offerId": "intro7d",
+        "store": "play_store",
+        "grantedBy": "purchase",
+        "ownershipType": "purchased",
+        "periodType": "normal",
+        "isSandbox": false,
+        "gracePeriodExpiresAt": null,
+        "billingIssueDetectedAt": null,
+        "unsubscribeDetectedAt": null,
+        "cancellationReason": null,
+        "renewedAt": "2026-03-14T09:00:00.000Z",
+        "activePromotionalOfferType": "intro7d",
+        "activePromotionalOfferId": "intro7d"
+      }
+    },
+    "subscriptions": {
+      "android:com.appactor.pro.monthly:monthly001": {
+        "isActive": true,
+        "status": "active",
+        "purchaseDate": "2026-03-14T09:00:00.000Z",
+        "startsAt": "2026-03-14T09:00:00.000Z",
+        "expiresAt": "2026-04-14T09:00:00.000Z",
+        "store": "play_store",
+        "productId": "com.appactor.pro.monthly",
+        "basePlanId": "monthly001",
+        "offerId": "intro7d",
+        "isSandbox": false,
+        "autoRenew": true,
+        "periodType": "normal",
+        "gracePeriodExpiresAt": null,
+        "unsubscribeDetectedAt": null,
+        "cancellationReason": null,
+        "renewedAt": "2026-03-14T09:00:00.000Z",
+        "originalTransactionId": "google_purchase_token_sub_123",
+        "latestTransactionId": "GPA.1234-5678-9012-34567",
+        "activePromotionalOfferType": "intro7d",
+        "activePromotionalOfferId": "intro7d"
+      }
+    },
+    "nonSubscriptions": {}
+  },
+  "acknowledgePurchase": true,
+  "consumePurchase": false
+}

@@ -1,0 +1,60 @@
+{
+  "requestDate": "2026-03-14T12:05:00.000Z",
+  "requestDateMs": 1773489900000,
+  "requestId": "req_android_customer_expired_001",
+  "customer": {
+    "managementUrl": null,
+    "tokenBalance": null,
+    "firstSeen": "2025-12-01T09:00:00.000Z",
+    "lastSeen": "2026-03-01T08:30:00.000Z",
+    "entitlements": {
+      "premium": {
+        "isActive": false,
+        "status": "expired",
+        "expiresAt": "2026-02-28T09:00:00.000Z",
+        "purchaseDate": "2026-01-28T09:00:00.000Z",
+        "startsAt": "2026-01-28T09:00:00.000Z",
+        "productId": "com.appactor.pro.monthly",
+        "basePlanId": "monthly001",
+        "offerId": null,
+        "store": "play_store",
+        "grantedBy": "purchase",
+        "ownershipType": "purchased",
+        "periodType": "normal",
+        "isSandbox": false,
+        "gracePeriodExpiresAt": null,
+        "billingIssueDetectedAt": null,
+        "unsubscribeDetectedAt": "2026-02-20T10:00:00.000Z",
+        "cancellationReason": "user_cancelled",
+        "renewedAt": "2026-01-28T09:00:00.000Z",
+        "activePromotionalOfferType": null,
+        "activePromotionalOfferId": null
+      }
+    },
+    "subscriptions": {
+      "android:com.appactor.pro.monthly:monthly001": {
+        "isActive": false,
+        "status": "expired",
+        "purchaseDate": "2026-01-28T09:00:00.000Z",
+        "startsAt": "2026-01-28T09:00:00.000Z",
+        "expiresAt": "2026-02-28T09:00:00.000Z",
+        "store": "play_store",
+        "productId": "com.appactor.pro.monthly",
+        "basePlanId": "monthly001",
+        "offerId": null,
+        "isSandbox": false,
+        "autoRenew": false,
+        "periodType": "normal",
+        "gracePeriodExpiresAt": null,
+        "unsubscribeDetectedAt": "2026-02-20T10:00:00.000Z",
+        "cancellationReason": "user_cancelled",
+        "renewedAt": "2026-01-28T09:00:00.000Z",
+        "originalTransactionId": "google_purchase_token_sub_old_123",
+        "latestTransactionId": "GPA.9876-5432-1098-76543",
+        "activePromotionalOfferType": null,
+        "activePromotionalOfferId": null
+      }
+    },
+    "nonSubscriptions": {}
+  }
+}
