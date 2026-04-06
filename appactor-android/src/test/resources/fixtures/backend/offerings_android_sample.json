@@ -1,0 +1,117 @@
+{
+  "data": {
+    "currentOffering": {
+      "id": "off_main_android",
+      "lookupKey": "main",
+      "displayName": "Main",
+      "isCurrent": true,
+      "metadata": {},
+      "packages": [
+        {
+          "id": "pkg_pro_monthly",
+          "packageType": "monthly",
+          "displayName": "Pro Monthly",
+          "position": 0,
+          "isActive": true,
+          "metadata": {},
+          "tokenAmount": null,
+          "products": [
+            {
+              "id": "prod_google_monthly_001",
+              "store": "play_store",
+              "productId": "com.appactor.pro.monthly",
+              "storeProductId": "com.appactor.pro.monthly",
+              "productType": "subscription",
+              "basePlanId": "monthly001",
+              "offerId": "intro7d",
+              "displayName": "AppActor Pro Monthly"
+            }
+          ]
+        },
+        {
+          "id": "pkg_coin_pack_100",
+          "packageType": "consumable",
+          "displayName": "100 Coins",
+          "position": 1,
+          "isActive": true,
+          "metadata": {},
+          "tokenAmount": 100,
+          "products": [
+            {
+              "id": "prod_google_coins_100",
+              "store": "play_store",
+              "productId": "com.appactor.coins.100",
+              "storeProductId": "com.appactor.coins.100",
+              "productType": "consumable",
+              "basePlanId": null,
+              "offerId": null,
+              "displayName": "100 Coins"
+            }
+          ]
+        }
+      ]
+    },
+    "offerings": [
+      {
+        "id": "off_main_android",
+        "lookupKey": "main",
+        "displayName": "Main",
+        "isCurrent": true,
+        "metadata": {},
+        "packages": [
+          {
+            "id": "pkg_pro_monthly",
+            "packageType": "monthly",
+            "displayName": "Pro Monthly",
+            "position": 0,
+            "isActive": true,
+            "metadata": {},
+            "tokenAmount": null,
+            "products": [
+              {
+                "id": "prod_google_monthly_001",
+                "store": "play_store",
+                "productId": "com.appactor.pro.monthly",
+                "storeProductId": "com.appactor.pro.monthly",
+                "productType": "subscription",
+                "basePlanId": "monthly001",
+                "offerId": "intro7d",
+                "displayName": "AppActor Pro Monthly"
+              }
+            ]
+          },
+          {
+            "id": "pkg_coin_pack_100",
+            "packageType": "consumable",
+            "displayName": "100 Coins",
+            "position": 1,
+            "isActive": true,
+            "metadata": {},
+            "tokenAmount": 100,
+            "products": [
+              {
+                "id": "prod_google_coins_100",
+                "store": "play_store",
+                "productId": "com.appactor.coins.100",
+                "storeProductId": "com.appactor.coins.100",
+                "productType": "consumable",
+                "basePlanId": null,
+                "offerId": null,
+                "displayName": "100 Coins"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "productEntitlements": {
+      "android:com.appactor.pro.monthly:monthly001": [
+        "premium"
+      ],
+      "android:com.appactor.coins.100": [
+        "coin_pack_100"
+      ]
+    }
+  },
+  "requestId": "req_android_offerings_001"
+}
