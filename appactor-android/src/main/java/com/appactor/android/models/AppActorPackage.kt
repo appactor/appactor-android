@@ -22,6 +22,7 @@ public data class AppActorPackage(
     val position: Int? = null,
     val oldPurchaseToken: String? = null,
     val replacementMode: AppActorSubscriptionReplacementMode? = null,
+    val offeringId: String? = null,
 ) {
     public val identifier: String
         get() = customTypeIdentifier ?: id

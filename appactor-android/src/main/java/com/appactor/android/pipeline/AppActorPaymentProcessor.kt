@@ -162,6 +162,8 @@ internal class AppActorPaymentProcessor(
                 request = request,
                 expectedPrimaryProductId = appActorPackage.productId,
                 appUserIdOverride = appUserId,
+                offeringId = appActorPackage.offeringId,
+                packageId = appActorPackage.id,
             )
         } finally {
             purchaseMutex.unlock()
@@ -255,6 +257,8 @@ internal class AppActorPaymentProcessor(
         request: AppActorStoreProductRequest,
         expectedPrimaryProductId: String,
         appUserIdOverride: String? = null,
+        offeringId: String? = null,
+        packageId: String? = null,
     ): AppActorPurchaseResult {
         val appUserId = appUserIdOverride
             ?.takeIf { it.isNotBlank() }
@@ -286,7 +290,14 @@ internal class AppActorPaymentProcessor(
                         } ?: launchResult.purchases.first()
                         var primaryOutcome: ProcessingOutcome? = null
                         launchResult.purchases.forEach { purchase ->
-                            val outcome = enqueueAndProcess(purchase, productEntitlements, appUserId)
+                            val isPrimary = purchase.purchaseToken == primaryPurchase.purchaseToken
+                            val outcome = enqueueAndProcess(
+                                purchase = purchase,
+                                productEntitlements = productEntitlements,
+                                appUserIdOverride = appUserId,
+                                offeringId = if (isPrimary) offeringId else null,
+                                packageId = if (isPrimary) packageId else null,
+                            )
                             if (purchase.purchaseToken == primaryPurchase.purchaseToken) {
                                 primaryOutcome = outcome
                             }
@@ -630,9 +641,11 @@ internal class AppActorPaymentProcessor(
         purchase: AppActorStorePurchase,
         productEntitlements: Map<String, List<String>>,
         appUserIdOverride: String? = null,
+        offeringId: String? = null,
+        packageId: String? = null,
     ): ProcessingOutcome {
         val normalizedPurchase = normalizePurchaseForPosting(purchase)
-        val item = makeQueueItem(normalizedPurchase, appUserIdOverride)
+        val item = makeQueueItem(normalizedPurchase, appUserIdOverride, offeringId, packageId)
         val existing = queueStore.get(item.key)
         if (existing?.phase == AppActorReceiptQueuePhase.DeadLettered) {
             val revived = reviveRecoverableDeadLetter(
@@ -699,6 +712,8 @@ internal class AppActorPaymentProcessor(
             rawPurchaseData = incoming.rawPurchaseData ?: existing.rawPurchaseData,
             purchaseSignature = incoming.purchaseSignature ?: existing.purchaseSignature,
             isAutoRenewing = incoming.isAutoRenewing ?: existing.isAutoRenewing,
+            offeringId = incoming.offeringId ?: existing.offeringId,
+            packageId = incoming.packageId ?: existing.packageId,
             isAcknowledged = existing.isAcknowledged || incoming.isAcknowledged,
             retryCount = 0,
             nextRetryAtMillis = 0L,
@@ -1415,6 +1430,8 @@ internal class AppActorPaymentProcessor(
     private fun makeQueueItem(
         purchase: AppActorStorePurchase,
         appUserIdOverride: String? = null,
+        offeringId: String? = null,
+        packageId: String? = null,
     ): AppActorReceiptQueueItem {
         val appUserId = appUserIdOverride?.takeIf { it.isNotBlank() }
             ?: identityStore.currentAppUserId
@@ -1452,6 +1469,8 @@ internal class AppActorPaymentProcessor(
             lastUpdatedAtMillis = now,
             phase = AppActorReceiptQueuePhase.NeedsPost,
             lastError = null,
+            offeringId = offeringId,
+            packageId = packageId,
         )
     }
 

@@ -56,6 +56,7 @@ internal data class PackageSurrogate(
     @SerialName("token_amount") val tokenAmount: Int? = null,
     val position: Int? = null,
     @SerialName("server_id") val serverId: String? = null,
+    @SerialName("offering_id") val offeringId: String? = null,
 ) {
     constructor(from: AppActorPackage) : this(
         id = from.id,
@@ -76,6 +77,7 @@ internal data class PackageSurrogate(
         tokenAmount = from.tokenAmount,
         position = from.position,
         serverId = from.serverId,
+        offeringId = from.offeringId,
     )
 }
 

@@ -306,7 +306,7 @@ internal class AppActorHttpBackendClient(
                             statusCode = rawResponse.statusCode,
                             requestId = resolvedRequestId,
                             error = errorEnvelope?.error,
-                            rawBody = rawResponse.rawBody,
+                            rawBodyLength = rawResponse.rawBody?.length,
                         )
                         retryAfterOverride = parseRetryAfterHeader(rawResponse.retryAfterHeader)
                         if (attempt < totalAttempts - 1) {
@@ -320,7 +320,7 @@ internal class AppActorHttpBackendClient(
                             statusCode = rawResponse.statusCode,
                             requestId = resolvedRequestId,
                             error = errorEnvelope?.error,
-                            rawBody = rawResponse.rawBody,
+                            rawBodyLength = rawResponse.rawBody?.length,
                         )
                         if (attempt < totalAttempts - 1) {
                             continue
@@ -334,7 +334,7 @@ internal class AppActorHttpBackendClient(
                             statusCode = rawResponse.statusCode,
                             requestId = resolvedRequestId,
                             error = errorEnvelope?.error,
-                            rawBody = rawResponse.rawBody,
+                            rawBodyLength = rawResponse.rawBody?.length,
                         )
                     }
                 }

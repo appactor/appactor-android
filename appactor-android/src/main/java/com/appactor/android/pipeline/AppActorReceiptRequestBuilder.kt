@@ -30,6 +30,8 @@ internal object AppActorReceiptRequestBuilder {
             rawPurchaseData = item.rawPurchaseData,
             purchaseSignature = item.purchaseSignature,
             countryCode = item.countryCode,
+            offeringId = item.offeringId,
+            packageId = item.packageId,
         )
     }
 

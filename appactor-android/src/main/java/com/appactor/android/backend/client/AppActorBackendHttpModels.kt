@@ -70,7 +70,7 @@ internal sealed class AppActorBackendException(
         val statusCode: Int,
         val requestId: String? = null,
         val error: AppActorBackendErrorDTO? = null,
-        val rawBody: String? = null,
+        val rawBodyLength: Int? = null,
     ) : AppActorBackendException(
         message = buildString {
             append("HTTP ").append(statusCode)
