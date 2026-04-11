@@ -5,6 +5,7 @@ package com.appactor.android.api {
     method public suspend Object? activeEntitlementKeysOffline(kotlin.coroutines.Continuation<? super java.util.Set<? extends java.lang.String>>);
     method public boolean canMakePurchases(optional java.util.Set<? extends com.appactor.android.models.AppActorStoreCapability> requiredCapabilities);
     method public suspend Object? configure(android.content.Context context, String apiKey, optional com.appactor.android.models.AppActorOptions options, kotlin.coroutines.Continuation<? super kotlin.Unit>);
+    method public void enableInstallReferrer();
     method public String? getAppUserId();
     method public com.appactor.android.models.AppActorOfferings? getCachedOfferings();
     method public com.appactor.android.models.AppActorRemoteConfigs? getCachedRemoteConfigs();
@@ -13,6 +14,7 @@ package com.appactor.android.api {
     method public kotlinx.coroutines.flow.StateFlow<com.appactor.android.models.AppActorCustomerInfo> getCustomerInfoFlow();
     method public suspend Object? getExperimentAssignment(String experimentKey, kotlin.coroutines.Continuation<? super com.appactor.android.models.AppActorExperimentAssignment?>);
     method public kotlin.jvm.functions.Function1<com.appactor.android.models.AppActorCustomerInfo,kotlin.Unit>? getOnCustomerInfoChanged();
+    method public kotlin.jvm.functions.Function2<java.lang.String,com.appactor.android.models.AppActorCustomerInfo,kotlin.Unit>? getOnDeferredPurchaseResolved();
     method public kotlin.jvm.functions.Function1<com.appactor.android.models.AppActorReceiptPipelineEvent,kotlin.Unit>? getOnReceiptPipelineEvent();
     method public com.appactor.android.models.AppActorConfigValue? getRemoteConfig(String key);
     method public Boolean? getRemoteConfigBool(String key);
@@ -33,9 +35,11 @@ package com.appactor.android.api {
     method public suspend Object? purchase(android.app.Activity activity, com.appactor.android.models.AppActorPurchaseParams params, kotlin.coroutines.Continuation<? super com.appactor.android.models.AppActorPurchaseResult>);
     method public suspend Object? reset(kotlin.coroutines.Continuation<? super kotlin.Unit>);
     method public suspend Object? restorePurchases(kotlin.coroutines.Continuation<? super com.appactor.android.models.AppActorCustomerInfo>);
+    method public void setFallbackOfferings(byte[] jsonData);
     method public void setLogHandler(kotlin.jvm.functions.Function4<? super java.lang.String,? super java.lang.String,? super java.lang.String,? super java.lang.String,kotlin.Unit>? handler);
     method public void setLogLevel(com.appactor.android.models.AppActorLogLevel level);
     method public void setOnCustomerInfoChanged(kotlin.jvm.functions.Function1<? super com.appactor.android.models.AppActorCustomerInfo,kotlin.Unit>?);
+    method public void setOnDeferredPurchaseResolved(kotlin.jvm.functions.Function2<? super java.lang.String,? super com.appactor.android.models.AppActorCustomerInfo,kotlin.Unit>?);
     method public void setOnReceiptPipelineEvent(kotlin.jvm.functions.Function1<? super com.appactor.android.models.AppActorReceiptPipelineEvent,kotlin.Unit>?);
     method public suspend Object? syncPurchases(kotlin.coroutines.Continuation<? super com.appactor.android.models.AppActorCustomerInfo>);
     property public final String? appUserId;
@@ -46,6 +50,7 @@ package com.appactor.android.api {
     property public final boolean isAnonymous;
     property public final boolean isConfigured;
     property public final kotlin.jvm.functions.Function1<com.appactor.android.models.AppActorCustomerInfo,kotlin.Unit>? onCustomerInfoChanged;
+    property public final kotlin.jvm.functions.Function2<java.lang.String,com.appactor.android.models.AppActorCustomerInfo,kotlin.Unit>? onDeferredPurchaseResolved;
     property public final kotlin.jvm.functions.Function1<com.appactor.android.models.AppActorReceiptPipelineEvent,kotlin.Unit>? onReceiptPipelineEvent;
     property public final String sdkVersion;
     property public final com.appactor.android.api.AppActor shared;
@@ -70,6 +75,7 @@ package com.appactor.android.api {
     method public static void getCustomerInfo(optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorCustomerInfo>? onSuccess);
     method public static void getCustomerInfo(optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorCustomerInfo>? onSuccess, optional com.appactor.android.models.AppActorBridgeErrorCallback? onError);
     method public static com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorCustomerInfo>? getCustomerInfoListener();
+    method public static kotlin.jvm.functions.Function2<java.lang.String,com.appactor.android.models.AppActorCustomerInfo,kotlin.Unit>? getDeferredPurchaseListener();
     method public static void getExperimentAssignment(String experimentKey);
     method public static void getExperimentAssignment(String experimentKey, optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorExperimentAssignment?>? onSuccess);
     method public static void getExperimentAssignment(String experimentKey, optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorExperimentAssignment?>? onSuccess, optional com.appactor.android.models.AppActorBridgeErrorCallback? onError);
@@ -112,6 +118,10 @@ package com.appactor.android.api {
     method public static void restorePurchases(optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorCustomerInfo>? onSuccess);
     method public static void restorePurchases(optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorCustomerInfo>? onSuccess, optional com.appactor.android.models.AppActorBridgeErrorCallback? onError);
     method public static void setCustomerInfoListener(com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorCustomerInfo>? listener);
+    method public static void setDeferredPurchaseListener(kotlin.jvm.functions.Function2<? super java.lang.String,? super com.appactor.android.models.AppActorCustomerInfo,kotlin.Unit>? listener);
+    method public static void setFallbackOfferings(byte[] jsonData);
+    method public static void setFallbackOfferings(byte[] jsonData, optional kotlin.jvm.functions.Function0<kotlin.Unit>? onSuccess);
+    method public static void setFallbackOfferings(byte[] jsonData, optional kotlin.jvm.functions.Function0<kotlin.Unit>? onSuccess, optional com.appactor.android.models.AppActorBridgeErrorCallback? onError);
     method public static void setReceiptPipelineListener(com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorBridgeReceiptEvent>? listener);
     method public static void syncPurchases();
     method public static void syncPurchases(optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorCustomerInfo>? onSuccess);
@@ -164,12 +174,14 @@ package com.appactor.android.models {
     field public static final String CODE_ALREADY_CONFIGURED = "ALREADY_CONFIGURED";
     field public static final String CODE_CUSTOMER_NOT_FOUND = "CUSTOMER_NOT_FOUND";
     field public static final String CODE_DECODING = "DECODING";
+    field public static final String CODE_INVALID_OFFER = "INVALID_OFFER";
     field public static final String CODE_NETWORK = "NETWORK";
     field public static final String CODE_NOT_AVAILABLE = "NOT_AVAILABLE";
     field public static final String CODE_NOT_CONFIGURED = "NOT_CONFIGURED";
     field public static final String CODE_PRODUCT_NOT_AVAILABLE = "PRODUCT_NOT_AVAILABLE";
     field public static final String CODE_PURCHASE_ALREADY_IN_PROGRESS = "PURCHASE_ALREADY_IN_PROGRESS";
     field public static final String CODE_PURCHASE_FAILED = "PURCHASE_FAILED";
+    field public static final String CODE_PURCHASE_INELIGIBLE = "PURCHASE_INELIGIBLE";
     field public static final String CODE_RECEIPT_POST_FAILED = "RECEIPT_POST_FAILED";
     field public static final String CODE_RECEIPT_QUEUED_FOR_RETRY = "RECEIPT_QUEUED_FOR_RETRY";
     field public static final String CODE_SERVER = "SERVER";
@@ -444,12 +456,42 @@ package com.appactor.android.models {
     property public final Throwable? throwable;
   }
 
+  public static final class AppActorError.IntermediateCertInvalid extends com.appactor.android.models.AppActorError {
+    ctor public AppActorError.IntermediateCertInvalid(String description, optional Throwable? cause);
+    method public String component1();
+    method public Throwable? component2();
+    method public com.appactor.android.models.AppActorError.IntermediateCertInvalid copy(String description, Throwable? cause);
+    method public String getDescription();
+    property public Throwable? cause;
+    property public final String description;
+  }
+
+  public static final class AppActorError.IntermediateKeyExpired extends com.appactor.android.models.AppActorError {
+    ctor public AppActorError.IntermediateKeyExpired(String description, optional Throwable? cause);
+    method public String component1();
+    method public Throwable? component2();
+    method public com.appactor.android.models.AppActorError.IntermediateKeyExpired copy(String description, Throwable? cause);
+    method public String getDescription();
+    property public Throwable? cause;
+    property public final String description;
+  }
+
   public static final class AppActorError.InvalidConfiguration extends com.appactor.android.models.AppActorError {
     ctor public AppActorError.InvalidConfiguration(String reason);
     method public String component1();
     method public com.appactor.android.models.AppActorError.InvalidConfiguration copy(String reason);
     method public String getReason();
     property public final String reason;
+  }
+
+  public static final class AppActorError.InvalidOffer extends com.appactor.android.models.AppActorError {
+    ctor public AppActorError.InvalidOffer(String description, optional Throwable? cause);
+    method public String component1();
+    method public Throwable? component2();
+    method public com.appactor.android.models.AppActorError.InvalidOffer copy(String description, Throwable? cause);
+    method public String getDescription();
+    property public Throwable? cause;
+    property public final String description;
   }
 
   public static final class AppActorError.Network extends com.appactor.android.models.AppActorError {
@@ -461,6 +503,16 @@ package com.appactor.android.models {
     method public Throwable? getThrowable();
     property public final String description;
     property public final Throwable? throwable;
+  }
+
+  public static final class AppActorError.NonceMismatch extends com.appactor.android.models.AppActorError {
+    ctor public AppActorError.NonceMismatch(String description, optional Throwable? cause);
+    method public String component1();
+    method public Throwable? component2();
+    method public com.appactor.android.models.AppActorError.NonceMismatch copy(String description, Throwable? cause);
+    method public String getDescription();
+    property public Throwable? cause;
+    property public final String description;
   }
 
   public static final class AppActorError.NotConfigured extends com.appactor.android.models.AppActorError {
@@ -498,6 +550,16 @@ package com.appactor.android.models {
     property public final Throwable? throwable;
   }
 
+  public static final class AppActorError.PurchaseIneligible extends com.appactor.android.models.AppActorError {
+    ctor public AppActorError.PurchaseIneligible(String description, optional Throwable? cause);
+    method public String component1();
+    method public Throwable? component2();
+    method public com.appactor.android.models.AppActorError.PurchaseIneligible copy(String description, Throwable? cause);
+    method public String getDescription();
+    property public Throwable? cause;
+    property public final String description;
+  }
+
   public static final class AppActorError.ReceiptPostFailed extends com.appactor.android.models.AppActorError {
     ctor public AppActorError.ReceiptPostFailed(String description, optional Throwable? throwable);
     method public String component1();
@@ -532,6 +594,26 @@ package com.appactor.android.models {
     property public final String description;
     property public final Integer? statusCode;
     property public final Throwable? throwable;
+  }
+
+  public static final class AppActorError.SignatureMissing extends com.appactor.android.models.AppActorError {
+    ctor public AppActorError.SignatureMissing(String description, optional Throwable? cause);
+    method public String component1();
+    method public Throwable? component2();
+    method public com.appactor.android.models.AppActorError.SignatureMissing copy(String description, Throwable? cause);
+    method public String getDescription();
+    property public Throwable? cause;
+    property public final String description;
+  }
+
+  public static final class AppActorError.SignatureTimestampOutOfRange extends com.appactor.android.models.AppActorError {
+    ctor public AppActorError.SignatureTimestampOutOfRange(String description, optional Throwable? cause);
+    method public String component1();
+    method public Throwable? component2();
+    method public com.appactor.android.models.AppActorError.SignatureTimestampOutOfRange copy(String description, Throwable? cause);
+    method public String getDescription();
+    property public Throwable? cause;
+    property public final String description;
   }
 
   public static final class AppActorError.SignatureVerificationFailed extends com.appactor.android.models.AppActorError {
@@ -693,30 +775,14 @@ package com.appactor.android.models {
   public final class AppActorOptions {
     ctor public AppActorOptions();
     ctor public AppActorOptions(optional com.appactor.android.models.AppActorLogLevel? logLevel);
-    ctor public AppActorOptions(optional com.appactor.android.models.AppActorLogLevel? logLevel, optional boolean enableInstallReferrer);
-    ctor public AppActorOptions(optional com.appactor.android.models.AppActorLogLevel? logLevel, optional boolean enableInstallReferrer, optional com.appactor.android.models.AppActorPlatformInfo? platformInfo);
-    ctor public AppActorOptions(optional com.appactor.android.models.AppActorLogLevel? logLevel, optional boolean enableInstallReferrer, optional com.appactor.android.models.AppActorPlatformInfo? platformInfo, optional boolean autoSyncPurchasesOnConfigure);
-    ctor public AppActorOptions(optional com.appactor.android.models.AppActorLogLevel? logLevel, optional boolean enableInstallReferrer, optional com.appactor.android.models.AppActorPlatformInfo? platformInfo, optional boolean autoSyncPurchasesOnConfigure, optional boolean fetchOfferingsOnConfigure);
-    ctor public AppActorOptions(optional com.appactor.android.models.AppActorLogLevel? logLevel, optional boolean enableInstallReferrer, optional com.appactor.android.models.AppActorPlatformInfo? platformInfo, optional boolean autoSyncPurchasesOnConfigure, optional boolean fetchOfferingsOnConfigure, optional boolean refreshCustomerInfoOnForeground);
+    ctor public AppActorOptions(optional com.appactor.android.models.AppActorLogLevel? logLevel, optional com.appactor.android.models.AppActorPlatformInfo? platformInfo);
     method public com.appactor.android.models.AppActorLogLevel? component1();
-    method public boolean component2();
-    method public com.appactor.android.models.AppActorPlatformInfo? component3();
-    method public boolean component4();
-    method public boolean component5();
-    method public boolean component6();
-    method public com.appactor.android.models.AppActorOptions copy(com.appactor.android.models.AppActorLogLevel? logLevel, boolean enableInstallReferrer, com.appactor.android.models.AppActorPlatformInfo? platformInfo, boolean autoSyncPurchasesOnConfigure, boolean fetchOfferingsOnConfigure, boolean refreshCustomerInfoOnForeground);
-    method public boolean getAutoSyncPurchasesOnConfigure();
-    method public boolean getEnableInstallReferrer();
-    method public boolean getFetchOfferingsOnConfigure();
+    method public com.appactor.android.models.AppActorPlatformInfo? component2();
+    method public com.appactor.android.models.AppActorOptions copy(com.appactor.android.models.AppActorLogLevel? logLevel, com.appactor.android.models.AppActorPlatformInfo? platformInfo);
     method public com.appactor.android.models.AppActorLogLevel? getLogLevel();
     method public com.appactor.android.models.AppActorPlatformInfo? getPlatformInfo();
-    method public boolean getRefreshCustomerInfoOnForeground();
-    property public final boolean autoSyncPurchasesOnConfigure;
-    property public final boolean enableInstallReferrer;
-    property public final boolean fetchOfferingsOnConfigure;
     property public final com.appactor.android.models.AppActorLogLevel? logLevel;
     property public final com.appactor.android.models.AppActorPlatformInfo? platformInfo;
-    property public final boolean refreshCustomerInfoOnForeground;
   }
 
   public enum AppActorOwnershipType {
@@ -733,7 +799,7 @@ package com.appactor.android.models {
   }
 
   public final class AppActorPackage {
-    ctor public AppActorPackage(String id, optional com.appactor.android.models.AppActorPackageType packageType, optional String? customTypeIdentifier, com.appactor.android.models.AppActorStore store, String productId, optional String? storeProductId, optional String? serverId, optional com.appactor.android.models.AppActorProductType productType, optional String? basePlanId, optional String? offerId, optional String? localizedPriceString, optional Double? price, optional String? currencyCode, optional String? displayName, optional String? productName, optional String? productDescription, optional java.util.Map<java.lang.String,? extends java.lang.Object?> metadata, optional Integer? tokenAmount, optional Integer? position, optional String? oldPurchaseToken, optional com.appactor.android.models.AppActorSubscriptionReplacementMode? replacementMode);
+    ctor public AppActorPackage(String id, optional com.appactor.android.models.AppActorPackageType packageType, optional String? customTypeIdentifier, com.appactor.android.models.AppActorStore store, String productId, optional String? storeProductId, optional String? serverId, optional com.appactor.android.models.AppActorProductType productType, optional String? basePlanId, optional String? offerId, optional String? localizedPriceString, optional Double? price, optional String? currencyCode, optional String? displayName, optional String? productName, optional String? productDescription, optional java.util.Map<java.lang.String,? extends java.lang.Object?> metadata, optional Integer? tokenAmount, optional Integer? position, optional String? oldPurchaseToken, optional com.appactor.android.models.AppActorSubscriptionReplacementMode? replacementMode, optional String? offeringId);
     method public String component1();
     method public String? component10();
     method public String? component11();
@@ -748,6 +814,7 @@ package com.appactor.android.models {
     method public com.appactor.android.models.AppActorPackageType component2();
     method public String? component20();
     method public com.appactor.android.models.AppActorSubscriptionReplacementMode? component21();
+    method public String? component22();
     method public String? component3();
     method public com.appactor.android.models.AppActorStore component4();
     method public String component5();
@@ -755,7 +822,7 @@ package com.appactor.android.models {
     method public String? component7();
     method public com.appactor.android.models.AppActorProductType component8();
     method public String? component9();
-    method public com.appactor.android.models.AppActorPackage copy(String id, com.appactor.android.models.AppActorPackageType packageType, String? customTypeIdentifier, com.appactor.android.models.AppActorStore store, String productId, String? storeProductId, String? serverId, com.appactor.android.models.AppActorProductType productType, String? basePlanId, String? offerId, String? localizedPriceString, Double? price, String? currencyCode, String? displayName, String? productName, String? productDescription, java.util.Map<java.lang.String,? extends java.lang.Object?> metadata, Integer? tokenAmount, Integer? position, String? oldPurchaseToken, com.appactor.android.models.AppActorSubscriptionReplacementMode? replacementMode);
+    method public com.appactor.android.models.AppActorPackage copy(String id, com.appactor.android.models.AppActorPackageType packageType, String? customTypeIdentifier, com.appactor.android.models.AppActorStore store, String productId, String? storeProductId, String? serverId, com.appactor.android.models.AppActorProductType productType, String? basePlanId, String? offerId, String? localizedPriceString, Double? price, String? currencyCode, String? displayName, String? productName, String? productDescription, java.util.Map<java.lang.String,? extends java.lang.Object?> metadata, Integer? tokenAmount, Integer? position, String? oldPurchaseToken, com.appactor.android.models.AppActorSubscriptionReplacementMode? replacementMode, String? offeringId);
     method public String? getBasePlanId();
     method public String? getCurrencyCode();
     method public String? getCustomTypeIdentifier();
@@ -765,6 +832,7 @@ package com.appactor.android.models {
     method public String? getLocalizedPriceString();
     method public java.util.Map<java.lang.String,java.lang.Object?> getMetadata();
     method public String? getOfferId();
+    method public String? getOfferingId();
     method public String? getOldPurchaseToken();
     method public com.appactor.android.models.AppActorPackageType getPackageType();
     method public Integer? getPosition();
@@ -787,6 +855,7 @@ package com.appactor.android.models {
     property public final String? localizedPriceString;
     property public final java.util.Map<java.lang.String,java.lang.Object?> metadata;
     property public final String? offerId;
+    property public final String? offeringId;
     property public final String? oldPurchaseToken;
     property public final com.appactor.android.models.AppActorPackageType packageType;
     property public final Integer? position;

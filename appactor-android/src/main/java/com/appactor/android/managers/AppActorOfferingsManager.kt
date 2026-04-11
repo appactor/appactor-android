@@ -166,8 +166,25 @@ internal class AppActorOfferingsManager(
                 response.isNotModified -> {
                     cached()?.takeIf { !forceRefresh } ?: run {
                         val cachedValue = cacheStore.handleNotModified(response.eTag) ?: cacheStore.load()
-                            ?: throw IllegalStateException("Offerings cache missing for 304 response.")
-                        decodeAndEnrich(cachedValue.payload, cachedValue.cachedAtMillis, generation, AppActorDiagnosticsDataSource.Cache)
+                        val decoded = cachedValue?.let {
+                            try {
+                                decodeAndEnrich(it.payload, it.cachedAtMillis, generation, AppActorDiagnosticsDataSource.Cache)
+                            } catch (ce: kotlinx.coroutines.CancellationException) {
+                                throw ce
+                            } catch (_: Exception) {
+                                null
+                            }
+                        }
+                        if (decoded != null) {
+                            decoded
+                        } else {
+                            val fallback = fallbackDTO
+                            if (fallback != null) {
+                                enrichAndCache(fallback, 0L, generation, AppActorDiagnosticsDataSource.Cache)
+                            } else {
+                                throw IllegalStateException("Offerings cache missing for 304 response with no fallback.")
+                            }
+                        }
                     }
                 }
 
@@ -296,7 +313,7 @@ internal class AppActorOfferingsManager(
 
         val offeringPairs = sourceOfferings.mapNotNull { offeringDTO ->
             val packages = offeringDTO.packages.mapNotNull { packageDTO ->
-                packageDTO.toEnrichedPackage(resolvedProducts)
+                packageDTO.toEnrichedPackage(resolvedProducts, offeringId = offeringDTO.id)
             }
             if (packages.isEmpty()) {
                 null
@@ -336,6 +353,7 @@ internal class AppActorOfferingsManager(
 
     private fun AppActorPackageDTO.toEnrichedPackage(
         resolvedProducts: Map<String, AppActorStoreProduct>,
+        offeringId: String,
     ): AppActorPackage? {
         val selected = products
             .filter { AppActorStore.fromWireValue(it.store) == AppActorStore.PlayStore }
@@ -379,6 +397,7 @@ internal class AppActorOfferingsManager(
             metadata = metadata.toMetadata(),
             tokenAmount = tokenAmount,
             position = position,
+            offeringId = offeringId,
         )
     }
 

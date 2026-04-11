@@ -296,6 +296,7 @@ internal class AppActorCustomerManager(
             is AppActorBackendException.Network -> true
             is AppActorBackendException.Http -> throwable.statusCode >= 500
             is IOException -> true
+            is IllegalStateException -> true
             else -> false
         }
     }

@@ -32,13 +32,15 @@ internal class AppActorExperimentManager(
     private var lastRequestId: String? = null
     @Volatile
     private var cacheGeneration: Long = 0
+    @Volatile
+    private var lastCacheUserId: String? = null
 
     suspend fun getAssignment(
         experimentKey: String,
         appUserId: String,
     ): AppActorExperimentAssignment? {
         val request = CompletableDeferred<AppActorExperimentAssignment?>()
-        return when (val requestState = prepareRequest(experimentKey, request)) {
+        return when (val requestState = prepareRequest(appUserId, experimentKey, request)) {
             is ExperimentRequestState.Cached -> requestState.assignment
             is ExperimentRequestState.Await -> requestState.deferred.await()
             is ExperimentRequestState.Execute -> {
@@ -77,6 +79,7 @@ internal class AppActorExperimentManager(
             cachedAssignments.clear()
             inFlight.clear()
             lastRequestId = null
+            lastCacheUserId = null
             current
         }
         cancelled.forEach { it.cancel(CancellationException("Experiment cache cleared.")) }
@@ -84,12 +87,13 @@ internal class AppActorExperimentManager(
     }
 
     private fun prepareRequest(
+        appUserId: String,
         experimentKey: String,
         request: CompletableDeferred<AppActorExperimentAssignment?>,
     ): ExperimentRequestState {
         return stateLock.withLock {
             val cached = cachedAssignments[experimentKey]
-            if (cached != null && isFresh(cached.cachedAtMillis)) {
+            if (cached != null && isFresh(cached.cachedAtMillis) && lastCacheUserId == appUserId) {
                 return@withLock ExperimentRequestState.Cached(cached.assignment?.toPublic())
             }
             inFlight[experimentKey]?.let { existing ->
@@ -152,6 +156,7 @@ internal class AppActorExperimentManager(
         stateLock.withLock {
             ensureGenerationLocked(requestGeneration)
             cachedAssignments.putAll(decoded.entries)
+            lastCacheUserId = appUserId
         }
     }
 
@@ -182,6 +187,7 @@ internal class AppActorExperimentManager(
             ensureGenerationLocked(requestGeneration)
             lastRequestId = requestId
             cachedAssignments[experimentKey] = cached
+            lastCacheUserId = appUserId
             persistCache(appUserId, verified)
             ensureGenerationLocked(requestGeneration)
             cached.assignment?.toPublic()

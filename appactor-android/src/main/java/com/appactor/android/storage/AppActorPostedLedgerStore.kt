@@ -2,6 +2,7 @@ package com.appactor.android.storage
 
 import android.content.Context
 import com.appactor.android.backend.client.AppActorBackendJson
+import com.appactor.android.internal.logging.AppActorLogger
 import kotlinx.serialization.Serializable
 import java.io.File
 import java.util.concurrent.locks.ReentrantLock
@@ -73,11 +74,14 @@ internal class AppActorAtomicJsonPostedLedgerStore(
             return ledger!!
         }
 
-        val raw = runCatching { file.readText() }.getOrNull()
+        val raw = runCatching { file.readText() }
+            .onFailure { AppActorLogger.warn("[$TAG] Posted ledger read failed: ${it.message}") }
+            .getOrNull()
         val persisted = raw?.let {
             runCatching {
                 AppActorBackendJson.instance.decodeFromString<PersistedLedgerState>(it)
-            }.getOrNull()
+            }.onFailure { AppActorLogger.warn("[$TAG] Posted ledger decode failed: ${it.message}") }
+                .getOrNull()
         }
 
         if (persisted == null) {
@@ -113,7 +117,8 @@ internal class AppActorAtomicJsonPostedLedgerStore(
             AppActorBackendJson.instance.encodeToString(
                 PersistedLedgerState(entries = entries)
             )
-        }.getOrNull() ?: return false
+        }.onFailure { AppActorLogger.warn("[$TAG] Posted ledger encode failed: ${it.message}") }
+            .getOrNull() ?: return false
         file.parentFile?.mkdirs()
         val tempFile = File(file.parentFile, "${file.name}.tmp")
         val writeSucceeded = runCatching {
@@ -122,7 +127,8 @@ internal class AppActorAtomicJsonPostedLedgerStore(
                 file.writeText(encoded)
                 tempFile.delete()
             }
-        }.isSuccess
+        }.onFailure { AppActorLogger.warn("[$TAG] Posted ledger persist failed: ${it.message}") }
+            .isSuccess
         if (writeSucceeded) {
             ledger = entries.toMutableMap()
         }
@@ -135,6 +141,7 @@ internal class AppActorAtomicJsonPostedLedgerStore(
     )
 
     companion object {
+        private const val TAG = "PostedLedgerStore"
         const val LEDGER_RETENTION_MILLIS: Long = 90L * 24 * 60 * 60 * 1_000
         const val MAX_LEDGER_ENTRIES: Int = 5_000
         fun deletePersistedFile(context: Context) {

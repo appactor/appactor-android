@@ -38,10 +38,12 @@ internal class AppActorRemoteConfigManager(
     private var cacheGeneration: Long = 0
     @Volatile
     private var lastLoadSource: AppActorDiagnosticsDataSource? = null
+    @Volatile
+    private var lastCacheUserId: String? = null
 
     suspend fun getRemoteConfigs(appUserId: String): AppActorRemoteConfigs {
         val request = CompletableDeferred<AppActorRemoteConfigs>()
-        return when (val requestState = prepareRequest(request)) {
+        return when (val requestState = prepareRequest(appUserId, request)) {
             is RemoteConfigRequestState.Cached -> requestState.configs
             is RemoteConfigRequestState.Await -> requestState.deferred.await()
             is RemoteConfigRequestState.Execute -> {
@@ -81,6 +83,7 @@ internal class AppActorRemoteConfigManager(
             cachedAtMillis = null
             lastRequestId = null
             lastLoadSource = null
+            lastCacheUserId = null
             current
         }
         cancelled?.cancel(CancellationException("Remote config cache cleared."))
@@ -88,10 +91,11 @@ internal class AppActorRemoteConfigManager(
     }
 
     private fun prepareRequest(
+        appUserId: String,
         request: CompletableDeferred<AppActorRemoteConfigs>,
     ): RemoteConfigRequestState {
         return stateLock.withLock {
-            if (isMemoryCacheFreshLocked()) {
+            if (isMemoryCacheFreshLocked() && lastCacheUserId == appUserId) {
                 lastLoadSource = AppActorDiagnosticsDataSource.Cache
                 return@withLock RemoteConfigRequestState.Cached(requireNotNull(cachedConfigs))
             }
@@ -133,6 +137,7 @@ internal class AppActorRemoteConfigManager(
                             cachedAtMillis = cachedValue.cachedAtMillis,
                             requestId = response.requestId,
                             requestGeneration = requestGeneration,
+                            appUserId = appUserId,
                         )
                     }
                 }
@@ -161,6 +166,7 @@ internal class AppActorRemoteConfigManager(
                     cachedAtMillis = cachedValue.cachedAtMillis,
                     requestId = null,
                     requestGeneration = requestGeneration,
+                    appUserId = appUserId,
                 )
             } else {
                 throw throwable.toAppActorError("Failed to fetch remote configs.")
@@ -173,6 +179,7 @@ internal class AppActorRemoteConfigManager(
         cachedAtMillis: Long,
         requestId: String?,
         requestGeneration: Long,
+        appUserId: String,
     ): AppActorRemoteConfigs {
         val decoded = AppActorBackendJson.instance.decodeFromString<AppActorRemoteConfigsEnvelopeDTO>(payload)
         val configs = decoded.toModel()
@@ -182,6 +189,7 @@ internal class AppActorRemoteConfigManager(
             this.cachedAtMillis = cachedAtMillis
             this.lastRequestId = requestId ?: decoded.requestId
             lastLoadSource = AppActorDiagnosticsDataSource.Cache
+            lastCacheUserId = appUserId
             configs
         }
     }
@@ -210,6 +218,7 @@ internal class AppActorRemoteConfigManager(
             this.cachedAtMillis = cachedAtMillis
             this.lastRequestId = requestId ?: decoded.requestId
             lastLoadSource = AppActorDiagnosticsDataSource.Network
+            lastCacheUserId = appUserId
             configs
         }
     }
@@ -224,6 +233,7 @@ internal class AppActorRemoteConfigManager(
             is AppActorBackendException.Network -> true
             is AppActorBackendException.Http -> throwable.statusCode >= 500
             is IOException -> true
+            is IllegalStateException -> true
             else -> false
         }
     }

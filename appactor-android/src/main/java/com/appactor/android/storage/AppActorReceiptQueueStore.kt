@@ -46,6 +46,8 @@ internal data class AppActorReceiptQueueItem(
     val claimedAtMillis: Long? = null,
     val phase: AppActorReceiptQueuePhase = AppActorReceiptQueuePhase.NeedsPost,
     val lastError: String? = null,
+    val offeringId: String? = null,
+    val packageId: String? = null,
 ) {
     companion object {
         fun makeKey(
@@ -114,6 +116,8 @@ internal class AppActorAtomicJsonReceiptQueueStore(
                     rawPurchaseData = item.rawPurchaseData ?: existing.rawPurchaseData,
                     purchaseSignature = item.purchaseSignature ?: existing.purchaseSignature,
                     countryCode = item.countryCode ?: existing.countryCode,
+                    offeringId = item.offeringId ?: existing.offeringId,
+                    packageId = item.packageId ?: existing.packageId,
                     isAcknowledged = existing.isAcknowledged || item.isAcknowledged,
                     shouldAcknowledge = existing.shouldAcknowledge || item.shouldAcknowledge,
                     shouldConsume = existing.shouldConsume || item.shouldConsume,

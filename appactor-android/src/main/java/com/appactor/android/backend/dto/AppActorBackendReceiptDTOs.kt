@@ -24,6 +24,8 @@ internal data class AppActorGoogleReceiptRequestDTO(
     val rawPurchaseData: String? = null,
     val purchaseSignature: String? = null,
     val countryCode: String? = null,
+    val offeringId: String? = null,
+    val packageId: String? = null,
 )
 
 @Serializable
