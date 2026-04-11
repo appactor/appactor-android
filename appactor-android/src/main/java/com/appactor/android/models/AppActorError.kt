@@ -29,6 +29,10 @@ public sealed class AppActorError(
     public data class Server(
         val description: String,
         val statusCode: Int? = null,
+        /** Which rate-limit layer triggered the error (e.g. "ip", "app", "route"). Null for non-rate-limit errors. */
+        val scope: String? = null,
+        /** Server-suggested retry delay in seconds. Null when the server doesn't provide one. */
+        val retryAfterSeconds: Double? = null,
         val throwable: Throwable? = null,
     ) : AppActorError(message = description, cause = throwable)
 

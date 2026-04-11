@@ -62,6 +62,7 @@ internal data class AppActorReceiptQueueItem(
 
 internal interface AppActorReceiptQueueStore {
     fun upsert(item: AppActorReceiptQueueItem)
+    fun upsertAll(items: List<AppActorReceiptQueueItem>)
     fun get(key: String): AppActorReceiptQueueItem?
     fun claimReady(limit: Int, nowMillis: Long = System.currentTimeMillis()): List<AppActorReceiptQueueItem>
     fun update(item: AppActorReceiptQueueItem)
@@ -107,7 +108,7 @@ internal class AppActorAtomicJsonReceiptQueueStore(
                 item
             } else {
                 item.copy(
-                    productType = if (item.productType != "unknown") item.productType else existing.productType,
+                    productType = if (item.productType != RECOVERABLE_PRODUCT_TYPE) item.productType else existing.productType,
                     orderId = item.orderId ?: existing.orderId,
                     basePlanId = item.basePlanId ?: existing.basePlanId,
                     offerId = item.offerId ?: existing.offerId,
@@ -129,7 +130,24 @@ internal class AppActorAtomicJsonReceiptQueueStore(
                     lastError = existing.lastError,
                 )
             }
-            persist(updated, rateLimitCooldownMillis)
+            if (!persist(updated, rateLimitCooldownMillis)) {
+                // Disk write failed — keep the in-memory state so the current
+                // session can still process this item. It will be lost on restart.
+                items = updated.toMutableMap()
+                AppActorLogger.warn("[$TAG] Receipt queue persist failed on upsert for key=${item.key}; in-memory state updated, will be lost on restart")
+            }
+        }
+    }
+
+    override fun upsertAll(items: List<AppActorReceiptQueueItem>) {
+        if (items.isEmpty()) return
+        lock.withLock {
+            val updated = loadState().toMutableMap()
+            items.forEach { item -> updated[item.key] = item }
+            if (!persist(updated, rateLimitCooldownMillis)) {
+                this.items = updated.toMutableMap()
+                AppActorLogger.warn("[$TAG] Receipt queue persist failed on upsertAll (${items.size} items); in-memory state updated, will be lost on restart")
+            }
         }
     }
 
@@ -174,7 +192,10 @@ internal class AppActorAtomicJsonReceiptQueueStore(
         lock.withLock {
             val updated = loadState().toMutableMap()
             updated[item.key] = item
-            persist(updated, rateLimitCooldownMillis)
+            if (!persist(updated, rateLimitCooldownMillis)) {
+                items = updated.toMutableMap()
+                AppActorLogger.warn("[$TAG] Receipt queue persist failed on update for key=${item.key}; in-memory state updated, will be lost on restart")
+            }
         }
     }
 
@@ -182,7 +203,10 @@ internal class AppActorAtomicJsonReceiptQueueStore(
         lock.withLock {
             val updated = loadState().toMutableMap()
             updated.remove(key)
-            persist(updated, rateLimitCooldownMillis)
+            if (!persist(updated, rateLimitCooldownMillis)) {
+                items = updated.toMutableMap()
+                AppActorLogger.warn("[$TAG] Receipt queue persist failed on remove for key=$key; in-memory state updated, will be lost on restart")
+            }
         }
     }
 
@@ -223,7 +247,10 @@ internal class AppActorAtomicJsonReceiptQueueStore(
         if (consumable.isEmpty()) return emptyList()
         val updated = current.toMutableMap()
         consumable.forEach { updated.remove(it.key) }
-        persist(updated, rateLimitCooldownMillis)
+        if (!persist(updated, rateLimitCooldownMillis)) {
+            items = updated.toMutableMap()
+            AppActorLogger.warn("[$TAG] Receipt queue persist failed on consumeDeadLettered (${consumable.size} items); in-memory state updated, will be lost on restart")
+        }
         consumable
     }
 

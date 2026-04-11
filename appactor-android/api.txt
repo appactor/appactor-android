@@ -583,15 +583,21 @@ package com.appactor.android.models {
   }
 
   public static final class AppActorError.Server extends com.appactor.android.models.AppActorError {
-    ctor public AppActorError.Server(String description, optional Integer? statusCode, optional Throwable? throwable);
+    ctor public AppActorError.Server(String description, optional Integer? statusCode, optional String? scope, optional Double? retryAfterSeconds, optional Throwable? throwable);
     method public String component1();
     method public Integer? component2();
-    method public Throwable? component3();
-    method public com.appactor.android.models.AppActorError.Server copy(String description, Integer? statusCode, Throwable? throwable);
+    method public String? component3();
+    method public Double? component4();
+    method public Throwable? component5();
+    method public com.appactor.android.models.AppActorError.Server copy(String description, Integer? statusCode, String? scope, Double? retryAfterSeconds, Throwable? throwable);
     method public String getDescription();
+    method public Double? getRetryAfterSeconds();
+    method public String? getScope();
     method public Integer? getStatusCode();
     method public Throwable? getThrowable();
     property public final String description;
+    property public final Double? retryAfterSeconds;
+    property public final String? scope;
     property public final Integer? statusCode;
     property public final Throwable? throwable;
   }

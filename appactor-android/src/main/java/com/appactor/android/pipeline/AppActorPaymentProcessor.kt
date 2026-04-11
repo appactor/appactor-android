@@ -2,6 +2,7 @@ package com.appactor.android.pipeline
 
 import android.app.Activity
 import com.appactor.android.backend.client.AppActorBackendClient
+import com.appactor.android.internal.logging.AppActorLogger
 import com.appactor.android.backend.client.AppActorBackendException
 import com.appactor.android.backend.dto.AppActorCustomerEnvelopeDTO
 import com.appactor.android.backend.dto.AppActorGoogleBatchResultDTO
@@ -215,16 +216,26 @@ internal class AppActorPaymentProcessor(
         appUserIdOverride: String? = null,
     ): AppActorCustomerInfo? {
         if (appUserIdOverride == null) {
-            val buffered = transitionMutex.withLock {
-                val userId = identityTransitionAppUserId ?: return@withLock false
+            val overflow = transitionMutex.withLock {
+                val userId = identityTransitionAppUserId ?: return@withLock null
+                val overflowPurchases = mutableListOf<AppActorStorePurchase>()
                 purchases.forEach { purchase ->
                     if (identityTransitionBuffer.size < maxTransitionBufferSize) {
                         identityTransitionBuffer.add(BufferedPurchase(purchase, userId))
+                    } else {
+                        overflowPurchases.add(purchase)
+                        AppActorLogger.warn("[PaymentProcessor] Transition buffer full ($maxTransitionBufferSize), purchase ${purchase.productId} will use current identity instead of buffered identity")
                     }
                 }
-                true
+                overflowPurchases
             }
-            if (buffered) return null
+            if (overflow == null) {
+                // Fall through — no identity transition active.
+            } else if (overflow.isEmpty()) {
+                return null
+            } else {
+                return processPurchaseUpdates(purchases = overflow, appUserIdOverride = identityStore.currentAppUserId ?: identityStore.ensureAppUserId())
+            }
         }
         return pipelineMutex.withLock {
             if (purchases.isEmpty()) return@withLock null
@@ -421,6 +432,7 @@ internal class AppActorPaymentProcessor(
                     },
                     appUserId = resolvedAppUserId,
                 )
+                enqueueFailedBatchPurchases(syncCandidates, successfulPurchaseKeys, productEntitlements, resolvedAppUserId)
                 latestCustomer = customerManager.cachedInfo(resolvedAppUserId)
             } catch (_: Throwable) {
                 syncCandidates.forEach { purchase ->
@@ -543,6 +555,7 @@ internal class AppActorPaymentProcessor(
                     },
                     appUserId = resolvedAppUserId,
                 )
+                enqueueFailedBatchPurchases(activeCandidates, successfulPurchaseKeys, productEntitlements, resolvedAppUserId)
                 latestBatchCustomer = customerManager.cachedInfo(resolvedAppUserId)
             } catch (throwable: Throwable) {
                 val fallbackCustomer = runCatching {
@@ -618,6 +631,42 @@ internal class AppActorPaymentProcessor(
     ): AppActorCustomerInfo? {
         return pipelineMutex.withLock {
             drainAllLocked(limit)
+        }
+    }
+
+    /**
+     * Re-enqueues dead-lettered receipts whose product type has been resolved,
+     * giving them a fresh retry cycle. Called once per session at startup so
+     * that transient backend failures from a previous session get another chance
+     * when conditions may have changed (network restored, backend fixed, etc.).
+     */
+    suspend fun retryDeadLetteredItems() {
+        val items = queueStore.consumeDeadLettered()
+        if (items.isEmpty()) return
+        val now = dateProviderMillis()
+        val revived = items.map { item ->
+            item.copy(
+                phase = AppActorReceiptQueuePhase.NeedsPost,
+                retryCount = 0,
+                nextRetryAtMillis = now,
+                claimedAtMillis = null,
+                lastUpdatedAtMillis = now,
+                lastError = null,
+            )
+        }
+        queueStore.upsertAll(revived)
+        revived.forEach { item ->
+            onPipelineEvent(
+                AppActorReceiptPipelineEvent.RetryScheduled(
+                    key = appActorPublicReceiptId(item.key),
+                    productId = item.productId,
+                    retryCount = 0,
+                    nextRetryAtMillis = now,
+                    errorCode = "launch_retry",
+                    appUserId = item.appUserId,
+                    orderId = item.orderId,
+                )
+            )
         }
     }
 
@@ -778,6 +827,11 @@ internal class AppActorPaymentProcessor(
                     purchase = history,
                     isActive = false,
                 )
+            } else if (history != null) {
+                // History-only purchase with Unknown type — cannot be sent in bulk
+                // restore. Defer to follow-up sync which will pick it up if the
+                // product metadata becomes available.
+                followUpSyncRequired = true
             }
         }
 
@@ -850,6 +904,22 @@ internal class AppActorPaymentProcessor(
                 )
             }
         }
+    }
+
+    /**
+     * Enqueue purchases that failed in a batch sync/restore individually so they
+     * enter the normal pipeline and are eventually finalized at Google. Without
+     * this, partial-success batches leave purchases unacknowledged and Google
+     * auto-refunds them after 3 days.
+     */
+    private suspend fun enqueueFailedBatchPurchases(
+        candidates: List<AppActorStorePurchase>,
+        successfulKeys: Set<String>,
+        productEntitlements: Map<String, List<String>>,
+        appUserId: String,
+    ) {
+        candidates.filter { !successfulKeys.contains(batchPurchaseKey(it)) }
+            .forEach { enqueueAndProcess(it, productEntitlements, appUserId) }
     }
 
     private fun adoptResolvedAppUserId(

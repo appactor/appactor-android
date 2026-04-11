@@ -71,6 +71,7 @@ internal sealed class AppActorBackendException(
         val requestId: String? = null,
         val error: AppActorBackendErrorDTO? = null,
         val rawBodyLength: Int? = null,
+        val retryAfterSeconds: Double? = null,
     ) : AppActorBackendException(
         message = buildString {
             append("HTTP ").append(statusCode)

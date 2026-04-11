@@ -100,7 +100,7 @@ class AppActorJavaAsyncTests {
     }
 
     @Test
-    fun `java async backend 503 errors stay classified as network errors`() = runBlocking {
+    fun `java async backend 503 errors are classified as transient server errors`() = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val latch = CountDownLatch(1)
         val callbackOnMain = AtomicReference<Boolean?>()
@@ -136,7 +136,7 @@ class AppActorJavaAsyncTests {
             )
 
             assertTrue(awaitMainThreadCallback(latch, timeoutMillis = 15_000L))
-            assertTrue(capturedError.get() is AppActorError.Network)
+            assertTrue(capturedError.get() is AppActorError.Server)
             assertEquals(true, callbackOnMain.get())
         }
     }
