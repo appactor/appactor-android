@@ -131,6 +131,12 @@ public object AppActor {
                     )
                 }
 
+                override suspend fun retryDeadLetteredItems(
+                    runtimeState: AppActorRuntimeState,
+                ) {
+                    runtimeState.paymentProcessor.retryDeadLetteredItems()
+                }
+
                 override suspend fun fetchOfferings(
                     runtimeState: AppActorRuntimeState,
                 ): AppActorDiagnosticsDataSource? {
@@ -1222,7 +1228,13 @@ private fun Throwable.toPublicAppActorError(
         )
         is AppActorBackendException.Http -> {
             if (statusCode >= 500 || statusCode == 429) {
-                AppActorError.Network(message ?: defaultMessage, this)
+                AppActorError.Server(
+                    description = message ?: defaultMessage,
+                    statusCode = statusCode,
+                    scope = error?.scope,
+                    retryAfterSeconds = retryAfterSeconds,
+                    throwable = this,
+                )
             } else {
                 AppActorError.Unknown(message ?: defaultMessage, this)
             }

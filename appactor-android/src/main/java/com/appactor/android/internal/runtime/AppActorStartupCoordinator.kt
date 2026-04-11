@@ -27,6 +27,8 @@ internal interface AppActorStartupCoordinatorHost {
 
     suspend fun syncCurrentPurchases(snapshot: AppActorOperationSnapshot): AppActorCustomerInfo?
 
+    suspend fun retryDeadLetteredItems(runtimeState: AppActorRuntimeState)
+
     suspend fun fetchOfferings(runtimeState: AppActorRuntimeState): AppActorDiagnosticsDataSource?
 
     suspend fun fetchCustomerInfo(
@@ -166,6 +168,7 @@ internal class AppActorStartupCoordinator(
         val offeringsJob = launch { runStartupOfferingsFetch(runtimeState) }
 
         runStartupPurchaseSync(runtimeState)
+        runStartupDeadLetterRetry(runtimeState)
         runStartupCustomerRefresh(runtimeState)
 
         offeringsJob.join()
@@ -227,6 +230,12 @@ internal class AppActorStartupCoordinator(
                     source = AppActorDiagnosticsDataSource.Network,
                 )
             }
+        }
+    }
+
+    private suspend fun runStartupDeadLetterRetry(runtimeState: AppActorRuntimeState) {
+        timedPhase(runtimeState, "dead_letter_retry", AppActorDebugCategory.Purchase) {
+            host.retryDeadLetteredItems(runtimeState)
         }
     }
 

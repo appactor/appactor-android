@@ -399,8 +399,11 @@ class AppActorPaymentProcessorTests {
         val info = dependencies.processor.syncCurrentPurchases()
 
         assertTrue(info?.hasActiveEntitlement("premium") == true)
-        assertEquals(listOf("token_sync_ok"), dependencies.acknowledgedTokens)
-        assertFalse(dependencies.ledgerStore.isPosted("google:com.appactor.pro.monthly:monthly001:token_sync_conflict"))
+        // Synced purchase is finalized via batch path; conflicted purchase is
+        // individually enqueued and processed through the receipt pipeline,
+        // ensuring it gets acknowledged so Google does not auto-refund after 3 days.
+        assertEquals(listOf("token_sync_ok", "token_sync_conflict"), dependencies.acknowledgedTokens)
+        assertTrue(dependencies.ledgerStore.isPosted("google:com.appactor.pro.monthly:monthly001:token_sync_conflict"))
     }
 
     @Test
@@ -973,8 +976,10 @@ class AppActorPaymentProcessorTests {
         val info = dependencies.processor.restorePurchases()
 
         assertTrue(info.hasActiveEntitlement("premium"))
-        assertEquals(listOf("token_restore_ok"), dependencies.acknowledgedTokens)
-        assertFalse(dependencies.ledgerStore.isPosted("google:com.appactor.pro.monthly:monthly001:token_restore_conflict"))
+        // Synced purchase is finalized via batch path; conflicted purchase is
+        // individually enqueued and processed, ensuring Google acknowledgement.
+        assertEquals(listOf("token_restore_ok", "token_restore_conflict"), dependencies.acknowledgedTokens)
+        assertTrue(dependencies.ledgerStore.isPosted("google:com.appactor.pro.monthly:monthly001:token_restore_conflict"))
     }
 
     @Test

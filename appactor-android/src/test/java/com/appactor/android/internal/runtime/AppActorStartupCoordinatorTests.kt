@@ -68,10 +68,11 @@ class AppActorStartupCoordinatorTests {
         handles.bootstrapCompletionJob?.join()
 
         assertTrue(host.deferredStepsExpected!!.await(5, TimeUnit.SECONDS))
-        awaitCondition { host.operationOrder.size >= 4 }
+        awaitCondition { host.operationOrder.size >= 5 }
         val order = host.operationOrder.toList()
         assertEquals("identify", order.first())
-        assertTrue("sync must come before customer", order.indexOf("sync") < order.indexOf("customer"))
+        assertTrue("sync must come before dead_letter_retry", order.indexOf("sync") < order.indexOf("dead_letter_retry"))
+        assertTrue("dead_letter_retry must come before customer", order.indexOf("dead_letter_retry") < order.indexOf("customer"))
         assertTrue("offerings must be present", order.contains("offerings"))
         runtime.scope.cancel()
     }
@@ -248,6 +249,10 @@ class AppActorStartupCoordinatorTests {
             releaseBootstrapSnapshot?.let { assertTrue(it.await(5, TimeUnit.SECONDS)) }
             deferredStepsExpected?.countDown()
             return null
+        }
+
+        override suspend fun retryDeadLetteredItems(runtimeState: AppActorRuntimeState) {
+            operationOrder += "dead_letter_retry"
         }
 
         override suspend fun fetchOfferings(runtimeState: AppActorRuntimeState): AppActorDiagnosticsDataSource? {

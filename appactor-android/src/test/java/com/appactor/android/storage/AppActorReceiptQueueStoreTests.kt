@@ -63,15 +63,17 @@ class AppActorReceiptQueueStoreTests {
     }
 
     @Test
-    fun `queue store does not keep in memory mutations when disk persist fails`() {
+    fun `queue store preserves in memory state when disk persist fails`() {
         val brokenDirectory = brokenDirectory("queue-broken")
         val store = AppActorAtomicJsonReceiptQueueStore(context, brokenDirectory)
 
-        store.upsert(queueItem())
+        val item = queueItem()
+        store.upsert(item)
 
-        assertEquals(0, store.pendingCount())
-        assertTrue(store.snapshot().isEmpty())
-        assertEquals(null, store.getRateLimitCooldownMillis())
+        // In-memory state is updated so the current session can still process
+        // the item, even though disk write failed (it will be lost on restart).
+        assertEquals(1, store.pendingCount())
+        assertEquals(listOf(item.key), store.snapshot().map { it.key })
     }
 
     @Test

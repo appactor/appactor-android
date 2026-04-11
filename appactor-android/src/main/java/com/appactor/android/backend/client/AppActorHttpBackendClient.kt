@@ -302,13 +302,15 @@ internal class AppActorHttpBackendClient(
 
                     429 -> {
                         additionalNonRetryableHandler?.invoke(rawResponse.statusCode, resolvedRequestId)
+                        val parsedRetryAfter = parseRetryAfterHeader(rawResponse.retryAfterHeader)
                         lastError = AppActorBackendException.Http(
                             statusCode = rawResponse.statusCode,
                             requestId = resolvedRequestId,
                             error = errorEnvelope?.error,
                             rawBodyLength = rawResponse.rawBody?.length,
+                            retryAfterSeconds = parsedRetryAfter,
                         )
-                        retryAfterOverride = parseRetryAfterHeader(rawResponse.retryAfterHeader)
+                        retryAfterOverride = parsedRetryAfter
                         if (attempt < totalAttempts - 1) {
                             continue
                         }
