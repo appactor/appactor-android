@@ -42,6 +42,10 @@ internal class AppActorCustomerCacheStore(
         )
     }
 
+    fun resetFreshness(appUserId: String) {
+        eTagManager.resetFreshness(AppActorCacheResource.Customer(appUserId))
+    }
+
     fun clear(appUserId: String) {
         eTagManager.clear(AppActorCacheResource.Customer(appUserId))
     }

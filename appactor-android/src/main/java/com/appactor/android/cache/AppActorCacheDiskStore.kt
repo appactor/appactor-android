@@ -72,6 +72,12 @@ internal class AppActorCacheDiskStore(
         return updated
     }
 
+    fun resetFreshness(resource: AppActorCacheResource) = lock.withLock {
+        val entry = load(resource) ?: return
+        val stale = entry.copy(cachedAtMillis = 0L)
+        save(stale, resource)
+    }
+
     fun clear(resource: AppActorCacheResource) = lock.withLock {
         fileFor(resource).delete()
     }

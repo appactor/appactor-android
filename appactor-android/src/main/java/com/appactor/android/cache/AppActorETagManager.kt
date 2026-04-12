@@ -78,6 +78,10 @@ internal class AppActorETagManager(
         }
     }
 
+    fun resetFreshness(resource: AppActorCacheResource) {
+        diskStore.resetFreshness(resource)
+    }
+
     fun clear(resource: AppActorCacheResource) {
         diskStore.clear(resource)
     }
