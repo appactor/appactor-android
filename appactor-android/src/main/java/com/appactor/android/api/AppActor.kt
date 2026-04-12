@@ -43,6 +43,7 @@ import com.appactor.android.models.AppActorPurchaseResult
 import com.appactor.android.models.AppActorReceiptPipelineEvent
 import com.appactor.android.internal.AppActorSDK
 import com.appactor.android.models.AppActorRemoteConfigs
+import com.appactor.android.models.AppActorVerificationResult
 import com.appactor.android.models.AppActorSuccessCallback
 import com.appactor.android.models.toLegacyOptions
 import com.appactor.android.models.toAppActorPackage
@@ -634,6 +635,7 @@ public object AppActor {
                     managementUrl = baseCustomer.managementUrl,
                     isComputedOffline = true,
                     productEntitlements = baseCustomer.productEntitlements,
+                    verification = AppActorVerificationResult.NotRequested,
                 ) to AppActorDiagnosticsDataSource.Offline
             }
 

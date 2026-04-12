@@ -45,13 +45,16 @@ class AppActorStoreReadinessTests {
         )
         AppActor.storeAdapterFactory = { fakeStoreAdapter }
 
-        AppActor.configure(
-            AppActorConfiguration(
-                context = context,
-                apiKey = "pk_test_123",
-                options = startupDisabledOptions(),
+        stubBackend().use { backend ->
+            AppActor.configure(
+                AppActorConfiguration(
+                    context = context,
+                    apiKey = "pk_test_123",
+                    baseUrl = backend.baseUrl,
+                    options = testOptionsForLocalBackend(),
+                )
             )
-        )
+        }
 
         assertEquals(expectedStorefront, AppActor.getStorefront())
         assertEquals(fakeStoreAdapter.capabilities, AppActor.getStoreCapabilities())
@@ -75,13 +78,16 @@ class AppActorStoreReadinessTests {
         )
         AppActor.storeAdapterFactory = { fakeStoreAdapter }
 
-        AppActor.configure(
-            AppActorConfiguration(
-                context = context,
-                apiKey = "pk_test_123",
-                options = startupDisabledOptions(),
+        stubBackend().use { backend ->
+            AppActor.configure(
+                AppActorConfiguration(
+                    context = context,
+                    apiKey = "pk_test_123",
+                    baseUrl = backend.baseUrl,
+                    options = testOptionsForLocalBackend(),
+                )
             )
-        )
+        }
 
         assertEquals(initialStorefront, AppActor.getStorefront())
         assertTrue(AppActor.canMakePurchases(setOf(AppActorStoreCapability.Purchases)))
@@ -115,13 +121,16 @@ class AppActorStoreReadinessTests {
         )
         AppActor.storeAdapterFactory = { fakeStoreAdapter }
 
-        AppActor.configure(
-            AppActorConfiguration(
-                context = context,
-                apiKey = "pk_test_123",
-                options = startupDisabledOptions(),
+        stubBackend().use { backend ->
+            AppActor.configure(
+                AppActorConfiguration(
+                    context = context,
+                    apiKey = "pk_test_123",
+                    baseUrl = backend.baseUrl,
+                    options = testOptionsForLocalBackend(),
+                )
             )
-        )
+        }
         fakeStoreAdapter.connect()
 
         val storefrontLatch = CountDownLatch(1)
@@ -168,4 +177,5 @@ class AppActorStoreReadinessTests {
         assertTrue(AppActorJava.canMakePurchases())
         assertFalse(AppActorJava.canMakePurchases(setOf(AppActorStoreCapability.Subscriptions)))
     }
+
 }

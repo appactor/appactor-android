@@ -3,6 +3,7 @@ package com.appactor.android.cache
 import android.content.Context
 import com.appactor.android.backend.client.AppActorBackendJson
 import com.appactor.android.internal.logging.AppActorLogger
+import com.appactor.android.models.AppActorVerificationResult
 import java.io.File
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
@@ -93,7 +94,7 @@ internal class AppActorCacheDiskStore(
                 AppActorBackendJson.instance.decodeFromString<AppActorCacheEntry>(file.readText())
             }.onFailure { AppActorLogger.warn("[$TAG] Cache entry decode failed during cleanup: ${it.message}") }
                 .getOrNull()
-            if (entry == null || !entry.responseVerified) {
+            if (entry == null || entry.resolvedStatus == AppActorVerificationResult.Failed) {
                 file.delete()
             }
         }

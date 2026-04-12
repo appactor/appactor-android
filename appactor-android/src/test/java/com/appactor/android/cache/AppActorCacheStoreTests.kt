@@ -2,6 +2,7 @@ package com.appactor.android.cache
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import com.appactor.android.models.AppActorVerificationResult
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -40,8 +41,8 @@ class AppActorCacheStoreTests {
     }
 
     @Test
-    fun `etag manager ignores unverified cache when verification is required`() {
-        val diskStore = AppActorCacheDiskStore(context, tempDirectory("cache-verification"))
+    fun `not requested entries are served when verification is enabled`() {
+        val diskStore = AppActorCacheDiskStore(context, tempDirectory("cache-not-requested"))
         val manager = AppActorETagManager(diskStore = diskStore, responseVerificationEnabled = true)
 
         manager.storeFresh(
@@ -51,8 +52,35 @@ class AppActorCacheStoreTests {
             verified = false,
         )
 
-        assertNull(manager.eTag(AppActorCacheResource.Offerings))
-        assertNull(manager.cached(AppActorCacheResource.Offerings))
+        assertNotNull(
+            "NotRequested entries should be served (transitional)",
+            manager.eTag(AppActorCacheResource.Offerings),
+        )
+        assertNotNull(
+            "NotRequested entries should be served (transitional)",
+            manager.cached(AppActorCacheResource.Offerings),
+        )
+    }
+
+    @Test
+    fun `failed entries are rejected when verification is enabled`() {
+        val directory = tempDirectory("cache-failed")
+        val diskStore = AppActorCacheDiskStore(context, directory)
+        val manager = AppActorETagManager(diskStore = diskStore, responseVerificationEnabled = true)
+
+        diskStore.save(
+            entry = AppActorCacheEntry(
+                payload = """{"hello":"world"}""",
+                eTag = "\"etag_123\"",
+                cachedAtMillis = System.currentTimeMillis(),
+                responseVerified = false,
+                verificationStatus = AppActorVerificationResult.Failed,
+            ),
+            resource = AppActorCacheResource.Offerings,
+        )
+
+        assertNull("Failed entries should be rejected", manager.eTag(AppActorCacheResource.Offerings))
+        assertNull("Failed entries should be rejected", manager.cached(AppActorCacheResource.Offerings))
     }
 
     @Test
@@ -98,6 +126,77 @@ class AppActorCacheStoreTests {
         assertNotEquals(first, second)
         assertTrue(first.startsWith("customer_"))
         assertTrue(second.startsWith("customer_"))
+    }
+
+    @Test
+    fun `legacy cache entry without verificationStatus falls back to responseVerified`() {
+        val directory = tempDirectory("cache-legacy")
+        val diskStore = AppActorCacheDiskStore(context, directory)
+        val resource = AppActorCacheResource.Offerings
+
+        val legacyJson = """{"payload":"{\"data\":{}}","eTag":"\"etag_legacy\"","cachedAtMillis":${System.currentTimeMillis()},"responseVerified":true}"""
+        directory.mkdirs()
+        File(directory, "${resource.cacheKey}.json").writeText(legacyJson)
+
+        val entry = diskStore.load(resource)
+
+        assertNotNull(entry)
+        assertNull("Legacy entry should have null verificationStatus", entry?.verificationStatus)
+        assertEquals(AppActorVerificationResult.Verified, entry?.resolvedStatus)
+    }
+
+    @Test
+    fun `legacy cache entry with responseVerified false resolves to Failed`() {
+        val directory = tempDirectory("cache-legacy-false")
+        val diskStore = AppActorCacheDiskStore(context, directory)
+        val resource = AppActorCacheResource.Offerings
+
+        val legacyJson = """{"payload":"{\"data\":{}}","eTag":"\"etag_legacy\"","cachedAtMillis":${System.currentTimeMillis()},"responseVerified":false}"""
+        directory.mkdirs()
+        File(directory, "${resource.cacheKey}.json").writeText(legacyJson)
+
+        val entry = diskStore.load(resource)
+
+        assertNotNull(entry)
+        assertEquals(AppActorVerificationResult.Failed, entry?.resolvedStatus)
+    }
+
+    @Test
+    fun `clearAllUnverified deletes Failed but keeps NotRequested and Verified`() {
+        val directory = tempDirectory("cache-clear-unverified")
+        val diskStore = AppActorCacheDiskStore(context, directory)
+        val manager = AppActorETagManager(diskStore = diskStore, responseVerificationEnabled = true)
+
+        manager.storeFresh(
+            resource = AppActorCacheResource.Offerings,
+            payload = """{"verified":"true"}""",
+            eTag = "\"etag_v\"",
+            verified = true,
+        )
+
+        manager.storeFresh(
+            resource = AppActorCacheResource.RemoteConfigs("user1"),
+            payload = """{"not_requested":"true"}""",
+            eTag = "\"etag_nr\"",
+            verified = false,
+        )
+
+        diskStore.save(
+            entry = AppActorCacheEntry(
+                payload = """{"failed":"true"}""",
+                eTag = "\"etag_f\"",
+                cachedAtMillis = System.currentTimeMillis(),
+                responseVerified = false,
+                verificationStatus = AppActorVerificationResult.Failed,
+            ),
+            resource = AppActorCacheResource.Customer("failed_user"),
+        )
+
+        manager.clearUnverifiedIfNeeded()
+
+        assertNotNull("Verified entry should survive", diskStore.load(AppActorCacheResource.Offerings))
+        assertNotNull("NotRequested entry should survive", diskStore.load(AppActorCacheResource.RemoteConfigs("user1")))
+        assertNull("Failed entry should be deleted", diskStore.load(AppActorCacheResource.Customer("failed_user")))
     }
 
     private fun tempDirectory(name: String): File {

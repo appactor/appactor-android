@@ -316,3 +316,10 @@ internal fun remoteConfigEnvelope(
         }
     """.trimIndent()
 }
+
+internal fun stubBackend(): TestBackendServer = TestBackendServer {
+    MockResponse()
+        .setResponseCode(401)
+        .addHeader("Content-Type", "application/json")
+        .setBody("""{"error":{"code":"AUTH_ERROR","message":"Invalid API key"}}""")
+}

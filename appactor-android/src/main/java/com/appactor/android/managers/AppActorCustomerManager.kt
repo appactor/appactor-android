@@ -17,6 +17,7 @@ import com.appactor.android.internal.AppActorSDK
 import com.appactor.android.models.AppActorConfiguration
 import com.appactor.android.models.AppActorCustomerInfo
 import com.appactor.android.models.AppActorDiagnosticsDataSource
+import com.appactor.android.models.AppActorVerificationResult
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -74,6 +75,7 @@ internal class AppActorCustomerManager(
         lastLoadSource = AppActorDiagnosticsDataSource.Network
         return mapped.copy(
             appUserId = finalAppUserId,
+            verification = AppActorVerificationResult.from(response.signatureVerified),
         )
     }
 
@@ -105,6 +107,7 @@ internal class AppActorCustomerManager(
         return mapped.copy(
             appUserId = finalAppUserId,
             requestId = response.requestId ?: mapped.requestId,
+            verification = AppActorVerificationResult.from(response.signatureVerified),
         )
     }
 
@@ -158,7 +161,10 @@ internal class AppActorCustomerManager(
                     if (cached != null) {
                         val decoded = decodeCachedCustomer(appUserId, cached.payload)
                         lastLoadSource = AppActorDiagnosticsDataSource.Cache
-                        decoded.copy(requestId = response.requestId ?: decoded.requestId)
+                        decoded.copy(
+                            requestId = response.requestId ?: decoded.requestId,
+                            verification = cached.verification,
+                        )
                     } else {
                         // 304 but cache is missing/corrupt — retry without ETag to get fresh 200.
                         val retry = backendClient.getCustomer(appUserId = appUserId, eTag = null)
@@ -182,7 +188,10 @@ internal class AppActorCustomerManager(
             val fallback = if (!forceRefresh) {
                 cacheStore.load(appUserId)
                     ?.takeIf { shouldFallbackToCache(throwable) }
-                    ?.let { decodeCachedCustomer(appUserId, it.payload) }
+                    ?.let {
+                        val decoded = decodeCachedCustomer(appUserId, it.payload)
+                        decoded.copy(verification = it.verification)
+                    }
             } else {
                 null
             }
@@ -210,8 +219,10 @@ internal class AppActorCustomerManager(
     }
 
     fun cachedInfo(appUserId: String): AppActorCustomerInfo? {
-        val payload = cacheStore.load(appUserId)?.payload ?: return null
-        return runCatching { decodeCachedCustomer(appUserId, payload) }.getOrNull()
+        val cached = cacheStore.load(appUserId) ?: return null
+        return runCatching {
+            decodeCachedCustomer(appUserId, cached.payload).copy(verification = cached.verification)
+        }.getOrNull()
     }
 
     fun lastLoadSource(): AppActorDiagnosticsDataSource? = lastLoadSource
@@ -284,6 +295,7 @@ internal class AppActorCustomerManager(
             .copy(
                 appUserId = body.appUserId ?: appUserId,
                 requestId = response.requestId ?: body.requestId,
+                verification = AppActorVerificationResult.from(response.signatureVerified),
             )
     }
 

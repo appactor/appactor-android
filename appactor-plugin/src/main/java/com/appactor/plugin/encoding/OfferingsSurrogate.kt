@@ -9,11 +9,13 @@ internal data class OfferingsSurrogate(
     val current: OfferingSurrogate? = null,
     val all: Map<String, OfferingSurrogate> = emptyMap(),
     @SerialName("product_entitlements") val productEntitlements: Map<String, List<String>> = emptyMap(),
+    @SerialName("verification") val verification: String = "notRequested",
 ) {
     constructor(from: AppActorOfferings) : this(
         current = from.current?.let { OfferingSurrogate(it) },
         all = from.all.mapValues { OfferingSurrogate(it.value) },
         productEntitlements = from.productEntitlements,
+        verification = from.verification.wireValue,
     )
 }
 

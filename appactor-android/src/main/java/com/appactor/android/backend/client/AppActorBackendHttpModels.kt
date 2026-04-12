@@ -15,19 +15,22 @@ internal data class AppActorResponseSignatureHeaders(
     val requestNonce: String? = null,
     val signature: String? = null,
     val signatureTimestamp: String? = null,
+    val salt: String? = null,
 ) {
     companion object {
         fun fromHeaders(headers: okhttp3.Headers): AppActorResponseSignatureHeaders? {
             val requestNonce = headers["X-AppActor-Request-Nonce"]
             val signature = headers["X-AppActor-Signature"]
             val signatureTimestamp = headers["X-AppActor-Signature-Timestamp"]
-            if (requestNonce == null && signature == null && signatureTimestamp == null) {
+            val salt = headers["X-AppActor-Signature-Salt"]
+            if (requestNonce == null && signature == null && signatureTimestamp == null && salt == null) {
                 return null
             }
             return AppActorResponseSignatureHeaders(
                 requestNonce = requestNonce,
                 signature = signature,
                 signatureTimestamp = signatureTimestamp,
+                salt = salt,
             )
         }
     }

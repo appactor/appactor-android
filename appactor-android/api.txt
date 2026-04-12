@@ -286,13 +286,14 @@ package com.appactor.android.models {
   }
 
   public final class AppActorCustomerInfo {
-    ctor public AppActorCustomerInfo(optional java.util.Map<java.lang.String,com.appactor.android.models.AppActorEntitlementInfo> entitlements, optional java.util.Map<java.lang.String,com.appactor.android.models.AppActorSubscriptionInfo> subscriptions, optional java.util.Map<java.lang.String,? extends java.util.List<com.appactor.android.models.AppActorNonSubscription>> nonSubscriptions, optional java.util.Map<java.lang.String,java.lang.Integer>? consumableBalances, optional com.appactor.android.models.AppActorTokenBalance? tokenBalance, optional String? snapshotDate, optional String? appUserId, optional String? requestId, optional String? requestDate, optional String? firstSeen, optional String? lastSeen, optional String? managementUrl, optional boolean isComputedOffline, optional java.util.Map<java.lang.String,? extends java.util.List<java.lang.String>> productEntitlements);
+    ctor public AppActorCustomerInfo(optional java.util.Map<java.lang.String,com.appactor.android.models.AppActorEntitlementInfo> entitlements, optional java.util.Map<java.lang.String,com.appactor.android.models.AppActorSubscriptionInfo> subscriptions, optional java.util.Map<java.lang.String,? extends java.util.List<com.appactor.android.models.AppActorNonSubscription>> nonSubscriptions, optional java.util.Map<java.lang.String,java.lang.Integer>? consumableBalances, optional com.appactor.android.models.AppActorTokenBalance? tokenBalance, optional String? snapshotDate, optional String? appUserId, optional String? requestId, optional String? requestDate, optional String? firstSeen, optional String? lastSeen, optional String? managementUrl, optional boolean isComputedOffline, optional java.util.Map<java.lang.String,? extends java.util.List<java.lang.String>> productEntitlements, optional com.appactor.android.models.AppActorVerificationResult verification);
     method public java.util.Map<java.lang.String,com.appactor.android.models.AppActorEntitlementInfo> component1();
     method public String? component10();
     method public String? component11();
     method public String? component12();
     method public boolean component13();
     method public java.util.Map<java.lang.String,java.util.List<java.lang.String>> component14();
+    method public com.appactor.android.models.AppActorVerificationResult component15();
     method public java.util.Map<java.lang.String,com.appactor.android.models.AppActorSubscriptionInfo> component2();
     method public java.util.Map<java.lang.String,java.util.List<com.appactor.android.models.AppActorNonSubscription>> component3();
     method public java.util.Map<java.lang.String,java.lang.Integer>? component4();
@@ -301,7 +302,7 @@ package com.appactor.android.models {
     method public String? component7();
     method public String? component8();
     method public String? component9();
-    method public com.appactor.android.models.AppActorCustomerInfo copy(java.util.Map<java.lang.String,com.appactor.android.models.AppActorEntitlementInfo> entitlements, java.util.Map<java.lang.String,com.appactor.android.models.AppActorSubscriptionInfo> subscriptions, java.util.Map<java.lang.String,? extends java.util.List<com.appactor.android.models.AppActorNonSubscription>> nonSubscriptions, java.util.Map<java.lang.String,java.lang.Integer>? consumableBalances, com.appactor.android.models.AppActorTokenBalance? tokenBalance, String? snapshotDate, String? appUserId, String? requestId, String? requestDate, String? firstSeen, String? lastSeen, String? managementUrl, boolean isComputedOffline, java.util.Map<java.lang.String,? extends java.util.List<java.lang.String>> productEntitlements);
+    method public com.appactor.android.models.AppActorCustomerInfo copy(java.util.Map<java.lang.String,com.appactor.android.models.AppActorEntitlementInfo> entitlements, java.util.Map<java.lang.String,com.appactor.android.models.AppActorSubscriptionInfo> subscriptions, java.util.Map<java.lang.String,? extends java.util.List<com.appactor.android.models.AppActorNonSubscription>> nonSubscriptions, java.util.Map<java.lang.String,java.lang.Integer>? consumableBalances, com.appactor.android.models.AppActorTokenBalance? tokenBalance, String? snapshotDate, String? appUserId, String? requestId, String? requestDate, String? firstSeen, String? lastSeen, String? managementUrl, boolean isComputedOffline, java.util.Map<java.lang.String,? extends java.util.List<java.lang.String>> productEntitlements, com.appactor.android.models.AppActorVerificationResult verification);
     method public java.util.Set<java.lang.String> getActiveEntitlementKeys();
     method public java.util.Map<java.lang.String,com.appactor.android.models.AppActorEntitlementInfo> getActiveEntitlements();
     method public String? getAppUserId();
@@ -317,6 +318,7 @@ package com.appactor.android.models {
     method public String? getSnapshotDate();
     method public java.util.Map<java.lang.String,com.appactor.android.models.AppActorSubscriptionInfo> getSubscriptions();
     method public com.appactor.android.models.AppActorTokenBalance? getTokenBalance();
+    method public com.appactor.android.models.AppActorVerificationResult getVerification();
     method public boolean hasActiveEntitlement(String key);
     method public boolean isComputedOffline();
     property public final java.util.Set<java.lang.String> activeEntitlementKeys;
@@ -335,6 +337,7 @@ package com.appactor.android.models {
     property public final String? snapshotDate;
     property public final java.util.Map<java.lang.String,com.appactor.android.models.AppActorSubscriptionInfo> subscriptions;
     property public final com.appactor.android.models.AppActorTokenBalance? tokenBalance;
+    property public final com.appactor.android.models.AppActorVerificationResult verification;
     field public static final com.appactor.android.models.AppActorCustomerInfo.Companion Companion;
   }
 
@@ -763,19 +766,22 @@ package com.appactor.android.models {
   }
 
   public final class AppActorOfferings {
-    ctor public AppActorOfferings(optional com.appactor.android.models.AppActorOffering? current, optional java.util.Map<java.lang.String,com.appactor.android.models.AppActorOffering> all, optional java.util.Map<java.lang.String,? extends java.util.List<java.lang.String>> productEntitlements);
+    ctor public AppActorOfferings(optional com.appactor.android.models.AppActorOffering? current, optional java.util.Map<java.lang.String,com.appactor.android.models.AppActorOffering> all, optional java.util.Map<java.lang.String,? extends java.util.List<java.lang.String>> productEntitlements, optional com.appactor.android.models.AppActorVerificationResult verification);
     method public com.appactor.android.models.AppActorOffering? component1();
     method public java.util.Map<java.lang.String,com.appactor.android.models.AppActorOffering> component2();
     method public java.util.Map<java.lang.String,java.util.List<java.lang.String>> component3();
-    method public com.appactor.android.models.AppActorOfferings copy(com.appactor.android.models.AppActorOffering? current, java.util.Map<java.lang.String,com.appactor.android.models.AppActorOffering> all, java.util.Map<java.lang.String,? extends java.util.List<java.lang.String>> productEntitlements);
+    method public com.appactor.android.models.AppActorVerificationResult component4();
+    method public com.appactor.android.models.AppActorOfferings copy(com.appactor.android.models.AppActorOffering? current, java.util.Map<java.lang.String,com.appactor.android.models.AppActorOffering> all, java.util.Map<java.lang.String,? extends java.util.List<java.lang.String>> productEntitlements, com.appactor.android.models.AppActorVerificationResult verification);
     method public java.util.Map<java.lang.String,com.appactor.android.models.AppActorOffering> getAll();
     method public com.appactor.android.models.AppActorOffering? getCurrent();
     method public java.util.Map<java.lang.String,java.util.List<java.lang.String>> getProductEntitlements();
+    method public com.appactor.android.models.AppActorVerificationResult getVerification();
     method public com.appactor.android.models.AppActorOffering? offering(String id);
     method public com.appactor.android.models.AppActorOffering? offeringByLookupKey(String lookupKey);
     property public final java.util.Map<java.lang.String,com.appactor.android.models.AppActorOffering> all;
     property public final com.appactor.android.models.AppActorOffering? current;
     property public final java.util.Map<java.lang.String,java.util.List<java.lang.String>> productEntitlements;
+    property public final com.appactor.android.models.AppActorVerificationResult verification;
   }
 
   public final class AppActorOptions {
@@ -1309,6 +1315,21 @@ package com.appactor.android.models {
     property public final int nonRenewable;
     property public final int renewable;
     property public final int total;
+  }
+
+  @kotlinx.serialization.Serializable public enum AppActorVerificationResult {
+    method public String getWireValue();
+    method public boolean isVerified();
+    property public final boolean isVerified;
+    property public final String wireValue;
+    enum_constant public static final com.appactor.android.models.AppActorVerificationResult Failed;
+    enum_constant public static final com.appactor.android.models.AppActorVerificationResult NotRequested;
+    enum_constant public static final com.appactor.android.models.AppActorVerificationResult Verified;
+    field public static final com.appactor.android.models.AppActorVerificationResult.Companion Companion;
+  }
+
+  public static final class AppActorVerificationResult.Companion {
+    method public com.appactor.android.models.AppActorVerificationResult from(boolean signatureVerified);
   }
 
 }
