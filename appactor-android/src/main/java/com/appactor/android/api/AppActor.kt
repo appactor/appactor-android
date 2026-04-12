@@ -149,7 +149,6 @@ public object AppActor {
                 ): Pair<AppActorCustomerInfo, AppActorDiagnosticsDataSource?> {
                     val info = snapshot.runtime.customerManager.getCustomerInfo(
                         appUserId = snapshot.appUserId,
-                        forceRefresh = true,
                         persistIdentityState = false,
                     )
                     return info to snapshot.runtime.customerManager.lastLoadSource()
@@ -612,6 +611,9 @@ public object AppActor {
                 throwIfCancellation(throwable)
                 val error = throwable.toPublicAppActorError("Failed to fetch customer info.")
                 if (!error.isTransient) throw error
+                // Defensive: reset freshness so staleness timer retries immediately
+                // if a concurrent path populated the cache during this fetch.
+                snapshot.runtime.customerManager.resetFreshness(snapshot.appUserId)
                 val offlineKeys = snapshot.runtime.customerManager.activeEntitlementKeysOffline(snapshot.appUserId)
                 if (offlineKeys.isEmpty()) throw error
                 val baseCustomer = snapshot.runtime.lastCustomerInfo
@@ -753,11 +755,14 @@ public object AppActor {
             )
             val info = snapshot.runtime.customerManager.getCustomerInfo(
                 appUserId = snapshot.appUserId,
-                forceRefresh = true,
                 persistIdentityState = false,
             )
             if (persistCustomerInfoIfCurrent(snapshot, info)) {
-                publishCustomerInfoIfCurrent(snapshot, info, AppActorDiagnosticsDataSource.Network)
+                publishCustomerInfoIfCurrent(
+                    snapshot = snapshot,
+                    info = info,
+                    source = snapshot.runtime.customerManager.lastLoadSource(),
+                )
             }
             info
         }
@@ -850,7 +855,6 @@ public object AppActor {
             }
             val info = snapshot.runtime.customerManager.getCustomerInfo(
                 appUserId = snapshot.appUserId,
-                forceRefresh = false,
                 persistIdentityState = false,
             )
             if (persistCustomerInfoIfCurrent(snapshot, info)) {

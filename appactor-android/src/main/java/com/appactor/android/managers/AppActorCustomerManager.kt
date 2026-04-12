@@ -3,6 +3,7 @@ package com.appactor.android.managers
 import android.os.Build
 import com.appactor.android.backend.client.AppActorBackendClient
 import com.appactor.android.backend.client.AppActorBackendException
+import com.appactor.android.backend.client.AppActorBackendHttpResponse
 import com.appactor.android.backend.client.AppActorBackendJson
 import com.appactor.android.backend.dto.AppActorCustomerEnvelopeDTO
 import com.appactor.android.backend.dto.AppActorIdentifyRequestDTO
@@ -121,13 +122,8 @@ internal class AppActorCustomerManager(
         forceRefresh: Boolean = false,
         persistIdentityState: Boolean = true,
     ): AppActorCustomerInfo {
-        if (!forceRefresh) {
-            val cached = cacheStore.load(appUserId)
-            if (cached != null && isCacheFresh(cached.cachedAtMillis)) {
-                lastLoadSource = AppActorDiagnosticsDataSource.Cache
-                return decodeCachedCustomer(appUserId, cached.payload)
-            }
-        }
+        // No cache guard — always goes to network (ETag/304 handles bandwidth).
+        // forceRefresh only controls: skip ETag (guarantee fresh 200) + skip in-flight dedup.
 
         if (!forceRefresh) {
             inflightMutex.withLock {
@@ -159,29 +155,18 @@ internal class AppActorCustomerManager(
                 response.isNotModified -> {
                     val cached = cacheStore.handleNotModified(appUserId = appUserId, rotatedETag = response.eTag)
                         ?: cacheStore.load(appUserId)
-                        ?: throw IllegalStateException("Customer cache missing for 304 response.")
-                    val decoded = decodeCachedCustomer(appUserId, cached.payload)
-                    lastLoadSource = AppActorDiagnosticsDataSource.Cache
-                    decoded.copy(requestId = response.requestId ?: decoded.requestId)
+                    if (cached != null) {
+                        val decoded = decodeCachedCustomer(appUserId, cached.payload)
+                        lastLoadSource = AppActorDiagnosticsDataSource.Cache
+                        decoded.copy(requestId = response.requestId ?: decoded.requestId)
+                    } else {
+                        // 304 but cache is missing/corrupt — retry without ETag to get fresh 200.
+                        val retry = backendClient.getCustomer(appUserId = appUserId, eTag = null)
+                        processFreshResponse(appUserId, retry)
+                    }
                 }
 
-                else -> {
-                    val body = requireNotNull(response.body) { "Customer response body was null." }
-                    saveEnvelope(
-                        appUserId = appUserId,
-                        envelope = body.copy(appUserId = body.appUserId ?: appUserId),
-                        eTag = response.eTag,
-                        verified = response.signatureVerified,
-                    )
-                    body.toModel(productEntitlements = offeringsManager.currentProductEntitlements())
-                        .copy(
-                            appUserId = body.appUserId ?: appUserId,
-                            requestId = response.requestId ?: body.requestId,
-                        )
-                        .also {
-                            lastLoadSource = AppActorDiagnosticsDataSource.Network
-                        }
-                }
+                else -> processFreshResponse(appUserId, response)
             }
 
             if (persistIdentityState) {
@@ -240,6 +225,10 @@ internal class AppActorCustomerManager(
         saveEnvelope(appUserId, envelope, eTag, verified)
     }
 
+    fun resetFreshness(appUserId: String) {
+        cacheStore.resetFreshness(appUserId)
+    }
+
     fun clearCache(appUserId: String) {
         cacheStore.clear(appUserId)
         lastLoadSource = null
@@ -277,6 +266,25 @@ internal class AppActorCustomerManager(
             eTag = eTag,
             verified = verified,
         )
+    }
+
+    private fun processFreshResponse(
+        appUserId: String,
+        response: AppActorBackendHttpResponse<AppActorCustomerEnvelopeDTO>,
+    ): AppActorCustomerInfo {
+        val body = requireNotNull(response.body) { "Customer response body was null." }
+        saveEnvelope(
+            appUserId = appUserId,
+            envelope = body.copy(appUserId = body.appUserId ?: appUserId),
+            eTag = response.eTag,
+            verified = response.signatureVerified,
+        )
+        lastLoadSource = AppActorDiagnosticsDataSource.Network
+        return body.toModel(productEntitlements = offeringsManager.currentProductEntitlements())
+            .copy(
+                appUserId = body.appUserId ?: appUserId,
+                requestId = response.requestId ?: body.requestId,
+            )
     }
 
     private fun appVersion(): String? {

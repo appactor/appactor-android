@@ -79,11 +79,17 @@ class AppActorCustomerManagerTests {
     }
 
     @Test
-    fun `get customer info returns fresh cache without network call`() = runBlocking {
+    fun `get customer info always goes to network with etag for 304`() = runBlocking {
+        val cachedEnvelope = fixtureCustomer("fixtures/backend/customer_android_active.json")
         val mockClient = mockk<AppActorBackendClient>(relaxed = true)
         coEvery { mockClient.getOfferings(any()) } returns freshOfferingsResponse(fixtureOfferings())
-        coEvery { mockClient.identify(any()) } returns freshCustomerResponse(
-            fixtureCustomer("fixtures/backend/customer_android_active.json")
+        coEvery { mockClient.identify(any()) } returns freshCustomerResponse(cachedEnvelope)
+        coEvery { mockClient.getCustomer(any(), any()) } returns AppActorBackendHttpResponse(
+            body = null,
+            statusCode = 304,
+            requestId = "req_304",
+            eTag = "\"etag_customer\"",
+            isNotModified = true,
         )
         val manager = createCustomerManager(mockClient)
         manager.identify()
@@ -91,7 +97,26 @@ class AppActorCustomerManagerTests {
         val info = manager.getCustomerInfo("user_android_123")
 
         assertTrue(info.hasActiveEntitlement("premium"))
-        coVerify(exactly = 0) { mockClient.getCustomer(any(), any()) }
+        coVerify(exactly = 1) { mockClient.getCustomer(any(), any()) }
+    }
+
+    @Test
+    fun `resetFreshness preserves data and etag but makes cache stale`() = runBlocking {
+        val mockClient = mockk<AppActorBackendClient>(relaxed = true)
+        coEvery { mockClient.getOfferings(any()) } returns freshOfferingsResponse(fixtureOfferings())
+        coEvery { mockClient.identify(any()) } returns freshCustomerResponse(
+            fixtureCustomer("fixtures/backend/customer_android_active.json")
+        )
+        val manager = createCustomerManager(mockClient)
+        manager.identify()
+        assertTrue(manager.isCustomerCacheFresh("user_android_123"))
+
+        manager.resetFreshness("user_android_123")
+
+        assertFalse(manager.isCustomerCacheFresh("user_android_123"))
+        // Data is still accessible via cachedInfo (ETag preserved for 304)
+        val cached = manager.cachedInfo("user_android_123")
+        assertEquals("user_android_123", cached?.appUserId)
     }
 
     @Test
