@@ -38,31 +38,29 @@ class AppActorConfigureTests {
     @Test
     fun `configure ignores repeated calls until reset`() = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        AppActor.configure(
-            AppActorConfiguration(
-                context = context,
-                apiKey = "pk_test_123",
-                appUserId = "user_a",
-                options = AppActorConfiguration.Options(
-                    verifyResponseSignatures = false,
-                    requireResponseSignatures = false,
-                ),
+        stubBackend().use { backend ->
+            AppActor.configure(
+                AppActorConfiguration(
+                    context = context,
+                    apiKey = "pk_test_123",
+                    appUserId = "user_a",
+                    baseUrl = backend.baseUrl,
+                    options = testOptionsForLocalBackend(),
+                )
             )
-        )
 
-        AppActor.configure(
-            AppActorConfiguration(
-                context = context,
-                apiKey = "pk_test_456",
-                appUserId = "user_b",
-                options = AppActorConfiguration.Options(
-                    verifyResponseSignatures = false,
-                    requireResponseSignatures = false,
-                ),
+            AppActor.configure(
+                AppActorConfiguration(
+                    context = context,
+                    apiKey = "pk_test_456",
+                    appUserId = "user_b",
+                    baseUrl = backend.baseUrl,
+                    options = testOptionsForLocalBackend(),
+                )
             )
-        )
 
-        assertEquals("user_a", AppActor.appUserId)
+            assertEquals("user_a", AppActor.appUserId)
+        }
     }
 
     @Test
@@ -120,16 +118,20 @@ class AppActorConfigureTests {
     @Test
     fun `app actor options configure seeds anonymous identity with parity defaults`() = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
+        stubBackend().use { backend ->
+            AppActor.configure(
+                AppActorConfiguration(
+                    context = context,
+                    apiKey = "pk_test_options",
+                    baseUrl = backend.baseUrl,
+                    options = testOptionsForLocalBackend(),
+                )
+            )
 
-        AppActor.shared.configure(
-            context = context,
-            apiKey = "pk_test_options",
-            options = AppActorOptions(),
-        )
-
-        assertTrue(AppActor.shared.isConfigured)
-        assertTrue(AppActor.shared.isAnonymous)
-        assertTrue(AppActor.shared.appUserId?.startsWith("appactor-anon-") == true)
+            assertTrue(AppActor.shared.isConfigured)
+            assertTrue(AppActor.shared.isAnonymous)
+            assertTrue(AppActor.shared.appUserId?.startsWith("appactor-anon-") == true)
+        }
     }
 
     @Test
@@ -150,17 +152,20 @@ class AppActorConfigureTests {
         val preferences = context.getSharedPreferences("appactor_identity", Context.MODE_PRIVATE)
         preferences.edit().clear().commit()
 
-        AppActor.configure(
-            AppActorConfiguration(
-                context = context,
-                apiKey = "pk_test_123",
-                appUserId = "user_android_123",
-                options = startupDisabledOptions(),
+        stubBackend().use { backend ->
+            AppActor.configure(
+                AppActorConfiguration(
+                    context = context,
+                    apiKey = "pk_test_123",
+                    appUserId = "user_android_123",
+                    baseUrl = backend.baseUrl,
+                    options = testOptionsForLocalBackend(),
+                )
             )
-        )
 
-        assertEquals("user_android_123", preferences.getString("appactor_billing_app_user_id", null))
-        assertNotNull(preferences.getString("appactor_billing_install_id", null))
+            assertEquals("user_android_123", preferences.getString("appactor_billing_app_user_id", null))
+            assertNotNull(preferences.getString("appactor_billing_install_id", null))
+        }
     }
 
     @Test
@@ -177,18 +182,21 @@ class AppActorConfigureTests {
             resource = AppActorCacheResource.Offerings,
         )
 
-        AppActor.configure(
-            AppActorConfiguration(
-                context = context,
-                apiKey = "pk_test_123",
-                options = AppActorConfiguration.Options(
-                    verifyResponseSignatures = true,
-                    requireResponseSignatures = false,
-                ),
+        stubBackend().use { backend ->
+            AppActor.configure(
+                AppActorConfiguration(
+                    context = context,
+                    apiKey = "pk_test_123",
+                    baseUrl = backend.baseUrl,
+                    options = AppActorConfiguration.Options(
+                        verifyResponseSignatures = true,
+                        requireResponseSignatures = false,
+                    ),
+                )
             )
-        )
 
-        assertNull(AppActorCacheDiskStore(context).load(AppActorCacheResource.Offerings))
+            assertNull(AppActorCacheDiskStore(context).load(AppActorCacheResource.Offerings))
+        }
     }
 
     @Test
@@ -196,14 +204,17 @@ class AppActorConfigureTests {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val preferences = context.getSharedPreferences("appactor_identity", Context.MODE_PRIVATE)
 
-        AppActor.configure(
-            AppActorConfiguration(
-                context = context,
-                apiKey = "pk_test_123",
-                appUserId = "user_android_123",
-                options = startupDisabledOptions(),
+        stubBackend().use { backend ->
+            AppActor.configure(
+                AppActorConfiguration(
+                    context = context,
+                    apiKey = "pk_test_123",
+                    appUserId = "user_android_123",
+                    baseUrl = backend.baseUrl,
+                    options = testOptionsForLocalBackend(),
+                )
             )
-        )
+        }
 
         preferences.edit()
             .putString("appactor_billing_server_user_id", "server_user_123")
@@ -232,4 +243,5 @@ class AppActorConfigureTests {
         assertTrue(AppActorAtomicJsonPostedLedgerStore(context).snapshot().isEmpty())
         assertFalse(File(context.cacheDir, "appactor/http-cache").exists())
     }
+
 }

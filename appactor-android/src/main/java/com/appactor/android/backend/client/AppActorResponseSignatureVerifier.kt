@@ -32,12 +32,18 @@ internal object AppActorResponseSignatureVerifier {
     internal fun verify(
         headers: AppActorResponseSignatureHeaders?,
         body: String,
-        sentNonce: String,
+        sentNonce: String?,
+        apiKey: String,
+        requestPath: String,
+        eTag: String,
     ): VerificationResult {
         return verify(
             headers = headers,
             body = body,
             sentNonce = sentNonce,
+            apiKey = apiKey,
+            requestPath = requestPath,
+            eTag = eTag,
             v1PublicKey = decodeKey(v1PublicKeyBase64),
             rootPublicKey = decodeKey(rootPublicKeyBase64),
             nowEpochSeconds = System.currentTimeMillis() / 1000.0,
@@ -45,6 +51,25 @@ internal object AppActorResponseSignatureVerifier {
     }
 
     internal fun verify(
+        headers: AppActorResponseSignatureHeaders?,
+        body: String,
+        sentNonce: String?,
+        apiKey: String,
+        requestPath: String,
+        eTag: String,
+        v1PublicKey: ByteArray?,
+        rootPublicKey: ByteArray?,
+        nowEpochSeconds: Double,
+    ): VerificationResult {
+        if (sentNonce != null) {
+            return verifyNonceBased(headers, body, sentNonce, v1PublicKey, rootPublicKey, nowEpochSeconds)
+        }
+        return verifySaltBased(headers, body, apiKey, requestPath, eTag, v1PublicKey, rootPublicKey, nowEpochSeconds)
+    }
+
+    // ── Nonce-based verification ──
+
+    private fun verifyNonceBased(
         headers: AppActorResponseSignatureHeaders?,
         body: String,
         sentNonce: String,
@@ -60,6 +85,36 @@ internal object AppActorResponseSignatureVerifier {
             return VerificationResult.NonceMismatch
         }
 
+        val payload = noncePayloadBytes(sentNonce, timestamp, body)
+        return validateTimestampAndDispatch(signatureBase64, timestamp, payload, v1PublicKey, rootPublicKey, nowEpochSeconds)
+    }
+
+    private fun verifySaltBased(
+        headers: AppActorResponseSignatureHeaders?,
+        body: String,
+        apiKey: String,
+        requestPath: String,
+        eTag: String,
+        v1PublicKey: ByteArray?,
+        rootPublicKey: ByteArray?,
+        nowEpochSeconds: Double,
+    ): VerificationResult {
+        val salt = headers?.salt ?: return VerificationResult.SigningNotSupported
+        val signatureBase64 = headers.signature ?: return VerificationResult.SignatureMissing
+        val timestamp = headers.signatureTimestamp ?: return VerificationResult.SignatureMissing
+
+        val payload = saltPayloadBytes(salt, apiKey, requestPath, timestamp, eTag, body)
+        return validateTimestampAndDispatch(signatureBase64, timestamp, payload, v1PublicKey, rootPublicKey, nowEpochSeconds)
+    }
+
+    private fun validateTimestampAndDispatch(
+        signatureBase64: String,
+        timestamp: String,
+        payload: ByteArray,
+        v1PublicKey: ByteArray?,
+        rootPublicKey: ByteArray?,
+        nowEpochSeconds: Double,
+    ): VerificationResult {
         val timestampValue = timestamp.toDoubleOrNull()
             ?.takeIf { it.isFinite() }
             ?: return VerificationResult.SignatureMissing
@@ -74,17 +129,13 @@ internal object AppActorResponseSignatureVerifier {
         return when (signatureBlob.size) {
             v1SignatureSize -> verifyV1(
                 signature = signatureBlob,
-                sentNonce = sentNonce,
-                timestamp = timestamp,
-                body = body,
+                payload = payload,
                 publicKey = v1PublicKey,
             )
 
             v2BlobSize -> verifyV2(
                 blob = signatureBlob,
-                sentNonce = sentNonce,
-                timestamp = timestamp,
-                body = body,
+                payload = payload,
                 rootPublicKey = rootPublicKey,
                 nowEpochSeconds = nowEpochSeconds,
             )
@@ -95,13 +146,10 @@ internal object AppActorResponseSignatureVerifier {
 
     private fun verifyV1(
         signature: ByteArray,
-        sentNonce: String,
-        timestamp: String,
-        body: String,
+        payload: ByteArray,
         publicKey: ByteArray?,
     ): VerificationResult {
         val key = publicKey ?: return VerificationResult.PublicKeyUnavailable
-        val payload = payloadBytes(sentNonce, timestamp, body)
         val isValid = verifyEd25519(
             publicKey = key,
             signature = signature,
@@ -112,9 +160,7 @@ internal object AppActorResponseSignatureVerifier {
 
     private fun verifyV2(
         blob: ByteArray,
-        sentNonce: String,
-        timestamp: String,
-        body: String,
+        payload: ByteArray,
         rootPublicKey: ByteArray?,
         nowEpochSeconds: Double,
     ): VerificationResult {
@@ -156,17 +202,28 @@ internal object AppActorResponseSignatureVerifier {
         val payloadValid = verifyEd25519(
             publicKey = intermediatePublicKey,
             signature = payloadSignature,
-            payload = payloadBytes(sentNonce, timestamp, body),
+            payload = payload,
         )
         return if (payloadValid) VerificationResult.Success else VerificationResult.SignatureInvalid
     }
 
-    private fun payloadBytes(
+    private fun noncePayloadBytes(
         sentNonce: String,
         timestamp: String,
         body: String,
     ): ByteArray {
         return "$sentNonce\n$timestamp\n$body".toByteArray(Charsets.UTF_8)
+    }
+
+    private fun saltPayloadBytes(
+        salt: String,
+        apiKey: String,
+        requestPath: String,
+        timestamp: String,
+        eTag: String,
+        body: String,
+    ): ByteArray {
+        return "$salt\n$apiKey\n$requestPath\n$timestamp\n$eTag\n$body".toByteArray(Charsets.UTF_8)
     }
 
     private fun verifyEd25519(

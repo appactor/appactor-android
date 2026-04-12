@@ -9,7 +9,8 @@ internal object AppActorAuthHeaderProvider {
     fun apply(
         builder: Request.Builder,
         configuration: AppActorConfiguration,
-    ): String {
+        path: String,
+    ): String? {
         when (configuration.headerMode) {
             AppActorConfiguration.HeaderMode.Bearer -> {
                 builder.header("Authorization", "Bearer ${configuration.apiKey}")
@@ -24,6 +25,10 @@ internal object AppActorAuthHeaderProvider {
             platformInfo.version?.takeIf(String::isNotBlank)?.let { version ->
                 builder.header("X-Platform-Flavor-Version", version)
             }
+        }
+
+        if (!AppActorEndpointSigningPolicy.forPath(path).needsNonce) {
+            return null
         }
 
         val nonce = UUID.randomUUID().toString()

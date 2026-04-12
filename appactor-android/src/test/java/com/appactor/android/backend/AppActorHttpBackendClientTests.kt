@@ -17,6 +17,8 @@ import okhttp3.Response
 import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -266,6 +268,94 @@ class AppActorHttpBackendClientTests {
 
         assertEquals("flutter", capturedFlavor)
         assertEquals("3.0.0", capturedVersion)
+    }
+
+    @Test
+    fun `offerings request does not include nonce header`() = runBlocking {
+        var capturedNonce: String? = "UNSET"
+        val client = backendClient(
+            okHttpClient = OkHttpClient.Builder()
+                .addInterceptor { chain ->
+                    capturedNonce = chain.request().header("X-AppActor-Nonce")
+                    response(
+                        chain = chain,
+                        code = 200,
+                        body = """
+                            {
+                              "requestId": "req_off_001",
+                              "data": {
+                                "offerings": [],
+                                "currentOfferingId": null
+                              }
+                            }
+                        """.trimIndent(),
+                    )
+                }
+                .build(),
+            options = AppActorConfiguration.Options(
+                verifyResponseSignatures = false,
+                requireResponseSignatures = false,
+            ),
+        )
+
+        client.getOfferings(eTag = null)
+
+        assertNull("Offerings request should NOT include X-AppActor-Nonce", capturedNonce)
+    }
+
+    @Test
+    fun `remote config request does not include nonce header`() = runBlocking {
+        var capturedNonce: String? = "UNSET"
+        val client = backendClient(
+            okHttpClient = OkHttpClient.Builder()
+                .addInterceptor { chain ->
+                    capturedNonce = chain.request().header("X-AppActor-Nonce")
+                    response(
+                        chain = chain,
+                        code = 200,
+                        body = """
+                            {
+                              "requestId": "req_remote_nonce",
+                              "data": []
+                            }
+                        """.trimIndent(),
+                    )
+                }
+                .build(),
+            options = AppActorConfiguration.Options(
+                verifyResponseSignatures = false,
+                requireResponseSignatures = false,
+            ),
+        )
+
+        client.getRemoteConfigs(appUserId = null, appVersion = null, country = null, eTag = null)
+
+        assertNull("Remote config request should NOT include X-AppActor-Nonce", capturedNonce)
+    }
+
+    @Test
+    fun `identify request includes nonce header`() = runBlocking {
+        var capturedNonce: String? = null
+        val client = backendClient(
+            okHttpClient = OkHttpClient.Builder()
+                .addInterceptor { chain ->
+                    capturedNonce = chain.request().header("X-AppActor-Nonce")
+                    response(
+                        chain = chain,
+                        code = 200,
+                        body = fixture("fixtures/backend/identify_android_sample.json"),
+                    )
+                }
+                .build(),
+            options = AppActorConfiguration.Options(
+                verifyResponseSignatures = false,
+                requireResponseSignatures = false,
+            ),
+        )
+
+        client.identify(AppActorIdentifyRequestDTO(appUserId = "user_android_123"))
+
+        assertNotNull("Identify request MUST include X-AppActor-Nonce", capturedNonce)
     }
 
     private fun backendClient(

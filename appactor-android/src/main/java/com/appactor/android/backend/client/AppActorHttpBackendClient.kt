@@ -135,13 +135,14 @@ internal class AppActorHttpBackendClient(
                 country?.takeIf { it.isNotBlank() }?.let { "country" to it },
             ),
         )
+        val path = extractPath(url)
         val httpRequest = Request.Builder()
             .url(url)
             .post(ByteArray(0).toRequestBody(null))
             .header("Accept", "application/json")
             .build()
             .newBuilder()
-            .also { builder -> AppActorAuthHeaderProvider.apply(builder, configuration) }
+            .also { builder -> AppActorAuthHeaderProvider.apply(builder, configuration, path) }
             .build()
         return executeRetryable(httpRequest)
     }
@@ -185,6 +186,7 @@ internal class AppActorHttpBackendClient(
         body: T,
     ): Request {
         val jsonBody = AppActorBackendJson.instance.encodeToString(body)
+        val path = extractPath(url)
         val builder = Request.Builder()
             .url(url)
             .method(
@@ -194,7 +196,7 @@ internal class AppActorHttpBackendClient(
             .header("Accept", "application/json")
             .header("Content-Type", "application/json")
 
-        AppActorAuthHeaderProvider.apply(builder, configuration)
+        AppActorAuthHeaderProvider.apply(builder, configuration, path)
         return builder.build()
     }
 
@@ -202,6 +204,7 @@ internal class AppActorHttpBackendClient(
         url: String,
         eTag: String? = null,
     ): Request {
+        val path = extractPath(url)
         val builder = Request.Builder()
             .url(url)
             .get()
@@ -211,7 +214,7 @@ internal class AppActorHttpBackendClient(
             builder.header("If-None-Match", eTag)
         }
 
-        AppActorAuthHeaderProvider.apply(builder, configuration)
+        AppActorAuthHeaderProvider.apply(builder, configuration, path)
         return builder.build()
     }
 
@@ -378,9 +381,10 @@ internal class AppActorHttpBackendClient(
     ): Request {
         if (attempt == 0) return initialRequest
 
+        val path = initialRequest.url.encodedPath
         val builder = initialRequest.newBuilder()
             .removeHeader("If-None-Match")
-        AppActorAuthHeaderProvider.apply(builder, configuration)
+        AppActorAuthHeaderProvider.apply(builder, configuration, path)
         return builder.build()
     }
 
@@ -426,12 +430,15 @@ internal class AppActorHttpBackendClient(
                 val eTag = response.header("ETag")
                 val signatureHeaders = AppActorResponseSignatureHeaders.fromHeaders(response.headers)
                 val retryAfterHeader = response.header("Retry-After")
-                val sentNonce = request.header("X-AppActor-Nonce").orEmpty()
+                val sentNonce: String? = request.header("X-AppActor-Nonce")
+                val requestPath = request.url.encodedPath
                 val signatureVerified = verifyResponseSignature(
                     statusCode = statusCode,
                     signatureHeaders = signatureHeaders,
                     rawBody = rawBody.orEmpty(),
                     sentNonce = sentNonce,
+                    requestPath = requestPath,
+                    eTag = eTag,
                     requestId = requestId,
                 )
 
@@ -461,10 +468,12 @@ internal class AppActorHttpBackendClient(
         statusCode: Int,
         signatureHeaders: AppActorResponseSignatureHeaders?,
         rawBody: String,
-        sentNonce: String,
+        sentNonce: String?,
+        requestPath: String,
+        eTag: String?,
         requestId: String?,
     ): Boolean {
-        if (statusCode !in 200..299 || !configuration.options.verifyResponseSignatures || sentNonce.isBlank()) {
+        if (statusCode !in 200..299 || !configuration.options.verifyResponseSignatures) {
             return false
         }
 
@@ -473,11 +482,16 @@ internal class AppActorHttpBackendClient(
                 headers = signatureHeaders,
                 body = rawBody,
                 sentNonce = sentNonce,
+                apiKey = configuration.apiKey,
+                requestPath = requestPath,
+                eTag = eTag.orEmpty(),
             )
         ) {
             AppActorResponseSignatureVerifier.VerificationResult.Success -> true
             AppActorResponseSignatureVerifier.VerificationResult.SigningNotSupported -> {
-                if (configuration.options.requireResponseSignatures) {
+                // Salt-based (CDN) endpoints may not support signing during rollout.
+                // Only enforce requireResponseSignatures on nonce-based endpoints.
+                if (configuration.options.requireResponseSignatures && sentNonce != null) {
                     throw AppActorBackendException.Signature(
                         result = AppActorResponseSignatureVerifier.VerificationResult.SignatureMissing,
                         requestId = requestId,
@@ -492,6 +506,9 @@ internal class AppActorHttpBackendClient(
         }
     }
 }
+
+private fun extractPath(url: String): String =
+    requireNotNull(url.toHttpUrlOrNull()) { "Invalid URL: $url" }.encodedPath
 
 internal fun buildAppActorUrl(
     baseUrl: String,

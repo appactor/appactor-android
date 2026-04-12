@@ -13,6 +13,7 @@ import com.appactor.android.billing.AppActorStoreProduct
 import com.appactor.android.billing.AppActorStoreProductRequest
 import com.appactor.android.cache.AppActorOfferingsCacheStore
 import com.appactor.android.models.AppActorDiagnosticsDataSource
+import com.appactor.android.models.AppActorVerificationResult
 import com.appactor.android.models.AppActorMetadata
 import com.appactor.android.models.AppActorOffering
 import com.appactor.android.models.AppActorOfferings
@@ -168,7 +169,7 @@ internal class AppActorOfferingsManager(
                         val cachedValue = cacheStore.handleNotModified(response.eTag) ?: cacheStore.load()
                         val decoded = cachedValue?.let {
                             try {
-                                decodeAndEnrich(it.payload, it.cachedAtMillis, generation, AppActorDiagnosticsDataSource.Cache)
+                                decodeAndEnrich(it.payload, it.cachedAtMillis, generation, AppActorDiagnosticsDataSource.Cache, it.verification)
                             } catch (ce: kotlinx.coroutines.CancellationException) {
                                 throw ce
                             } catch (_: Exception) {
@@ -198,7 +199,8 @@ internal class AppActorOfferingsManager(
                         eTag = response.eTag,
                         verified = response.signatureVerified,
                     )
-                    decodeAndEnrich(payload, dateProviderMillis(), generation, AppActorDiagnosticsDataSource.Network)
+                    val verification = AppActorVerificationResult.from(response.signatureVerified)
+                    decodeAndEnrich(payload, dateProviderMillis(), generation, AppActorDiagnosticsDataSource.Network, verification)
                 }
             }
         } catch (throwable: Throwable) {
@@ -209,7 +211,7 @@ internal class AppActorOfferingsManager(
             val cachedValue = cacheStore.load()
             val diskOfferings = if (cachedValue != null) {
                 try {
-                    decodeAndEnrich(cachedValue.payload, cachedValue.cachedAtMillis, generation, AppActorDiagnosticsDataSource.Cache)
+                    decodeAndEnrich(cachedValue.payload, cachedValue.cachedAtMillis, generation, AppActorDiagnosticsDataSource.Cache, cachedValue.verification)
                 } catch (ce: kotlinx.coroutines.CancellationException) {
                     throw ce
                 } catch (_: Exception) {
@@ -263,9 +265,10 @@ internal class AppActorOfferingsManager(
         cachedAtMillis: Long,
         generation: Long,
         source: AppActorDiagnosticsDataSource,
+        verification: AppActorVerificationResult = AppActorVerificationResult.NotRequested,
     ): AppActorOfferings {
         val dto = AppActorBackendJson.instance.decodeFromString<AppActorOfferingsEnvelopeDTO>(payload)
-        return enrichAndCache(dto, cachedAtMillis, generation, source)
+        return enrichAndCache(dto, cachedAtMillis, generation, source, verification)
     }
 
     private suspend fun enrichAndCache(
@@ -273,8 +276,9 @@ internal class AppActorOfferingsManager(
         cachedAtMillis: Long,
         generation: Long,
         source: AppActorDiagnosticsDataSource,
+        verification: AppActorVerificationResult = AppActorVerificationResult.NotRequested,
     ): AppActorOfferings {
-        val offerings = enrich(dto)
+        val offerings = enrich(dto).copy(verification = verification)
         stateMutex.withLock {
             if (cacheGeneration == generation) {
                 cachedOfferings = offerings

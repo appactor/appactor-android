@@ -15,6 +15,7 @@ public data class AppActorCustomerInfo(
     val managementUrl: String? = null,
     val isComputedOffline: Boolean = false,
     val productEntitlements: Map<String, List<String>> = emptyMap(),
+    val verification: AppActorVerificationResult = AppActorVerificationResult.NotRequested,
 ) {
     public val activeEntitlements: Map<String, AppActorEntitlementInfo>
         get() = entitlements.filterValues { it.isActive }

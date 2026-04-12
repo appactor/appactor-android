@@ -21,6 +21,7 @@ internal data class CustomerInfoSurrogate(
     @SerialName("is_computed_offline") val isComputedOffline: Boolean = false,
     @SerialName("product_entitlements") val productEntitlements: Map<String, List<String>> = emptyMap(),
     @SerialName("active_entitlement_keys") val activeEntitlementKeys: Set<String> = emptySet(),
+    @SerialName("verification") val verification: String = "notRequested",
 ) {
     constructor(from: AppActorCustomerInfo) : this(
         entitlements = from.entitlements.mapValues { EntitlementInfoSurrogate(it.value) },
@@ -38,6 +39,7 @@ internal data class CustomerInfoSurrogate(
         isComputedOffline = from.isComputedOffline,
         productEntitlements = from.productEntitlements,
         activeEntitlementKeys = from.activeEntitlementKeys,
+        verification = from.verification.wireValue,
     )
 }
 
