@@ -209,7 +209,29 @@ public object AppActorBridge {
         onSuccess: AppActorSuccessCallback<AppActorCustomerInfo>? = null,
         onError: AppActorBridgeErrorCallback? = null,
     ): Unit = AppActor.launchAsync(
+        operation = { AppActor.drainReceiptQueueAndRefreshCustomer() },
+        onSuccess = onSuccess,
+        onError = onError.asSdkErrorCallback(),
+    )
+
+    @JvmStatic
+    @JvmOverloads
+    public fun quietSyncPurchases(
+        onSuccess: AppActorSuccessCallback<AppActorCustomerInfo>? = null,
+        onError: AppActorBridgeErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
         operation = { AppActor.syncPurchases() },
+        onSuccess = onSuccess,
+        onError = onError.asSdkErrorCallback(),
+    )
+
+    @JvmStatic
+    @JvmOverloads
+    public fun drainReceiptQueueAndRefreshCustomer(
+        onSuccess: AppActorSuccessCallback<AppActorCustomerInfo>? = null,
+        onError: AppActorBridgeErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.drainReceiptQueueAndRefreshCustomer() },
         onSuccess = onSuccess,
         onError = onError.asSdkErrorCallback(),
     )

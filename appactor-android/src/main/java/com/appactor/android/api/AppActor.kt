@@ -750,13 +750,31 @@ public object AppActor {
         }
     }
 
+    public suspend fun drainReceiptQueueAndRefreshCustomer(): AppActorCustomerInfo {
+        return executeGuardedRead(resolveAppUserId = true) { snapshot ->
+            val drained = snapshot.runtime.paymentProcessor.drainAll()
+            val info = snapshot.runtime.customerManager.getCustomerInfo(
+                appUserId = resolveFollowUpAppUserId(snapshot, drained),
+                persistIdentityState = false,
+            )
+            if (persistCustomerInfoIfCurrent(snapshot, info)) {
+                publishCustomerInfoIfCurrent(
+                    snapshot = snapshot,
+                    info = info,
+                    source = snapshot.runtime.customerManager.lastLoadSource(),
+                )
+            }
+            info
+        }
+    }
+
     public suspend fun syncPurchases(): AppActorCustomerInfo {
         return executeGuardedRead(resolveAppUserId = true) { snapshot ->
-            snapshot.runtime.paymentProcessor.syncCurrentPurchases(
+            val synced = snapshot.runtime.paymentProcessor.syncCurrentPurchases(
                 appUserIdOverride = snapshot.appUserId,
             )
             val info = snapshot.runtime.customerManager.getCustomerInfo(
-                appUserId = snapshot.appUserId,
+                appUserId = resolveFollowUpAppUserId(snapshot, synced),
                 persistIdentityState = false,
             )
             if (persistCustomerInfoIfCurrent(snapshot, info)) {
@@ -887,6 +905,16 @@ public object AppActor {
                 )
             }
         }
+    }
+
+    private fun resolveFollowUpAppUserId(
+        snapshot: AppActorOperationSnapshot,
+        latestCustomerInfo: AppActorCustomerInfo? = null,
+    ): String {
+        return latestCustomerInfo?.appUserId
+            ?.takeIf { it.isNotBlank() }
+            ?: snapshot.runtime.identityStore.currentAppUserId
+            ?: snapshot.appUserId
     }
 
     private fun publishCustomerInfoLocked(

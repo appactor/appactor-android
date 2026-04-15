@@ -50,6 +50,8 @@ public final class AppActorJavaApiSmokeTest {
         Supplier<Boolean> javaCanMakePurchasesWithCapabilities = () -> AppActorJava.canMakePurchases(Collections.singleton(AppActorStoreCapability.Purchases));
         Runnable javaRestore = () -> AppActorJava.restorePurchasesAsync(info -> { }, error -> { });
         Runnable javaSync = () -> AppActorJava.syncPurchasesAsync(info -> { }, error -> { });
+        Runnable javaQuietSync = () -> AppActorJava.quietSyncPurchasesAsync(info -> { }, error -> { });
+        Runnable javaDrain = () -> AppActorJava.drainReceiptQueueAndRefreshCustomerAsync(info -> { }, error -> { });
 
         Runnable bridgeCustomerListener = () -> AppActorBridge.setCustomerInfoListener(info -> { });
         Runnable bridgeReceiptListener = () -> AppActorBridge.setReceiptPipelineListener(event -> { });
@@ -80,6 +82,8 @@ public final class AppActorJavaApiSmokeTest {
         );
         Runnable bridgeRestore = () -> AppActorBridge.restorePurchases(info -> { }, error -> { });
         Runnable bridgeSync = () -> AppActorBridge.syncPurchases(info -> { }, error -> { });
+        Runnable bridgeQuietSync = () -> AppActorBridge.quietSyncPurchases(info -> { }, error -> { });
+        Runnable bridgeDrain = () -> AppActorBridge.drainReceiptQueueAndRefreshCustomer(info -> { }, error -> { });
         AppActorBridge.isConfigured();
         AppActorBridge.appUserId();
         AppActorBridge.isAnonymous();
@@ -95,12 +99,14 @@ public final class AppActorJavaApiSmokeTest {
             javaOfferings == null || javaCustomerInfo == null || javaRemoteConfigs == null ||
             javaExperiment == null || javaStorefront == null || javaStoreCapabilities == null ||
             javaCanMakePurchases == null || javaCanMakePurchasesWithCapabilities == null ||
-            javaRestore == null || javaSync == null || bridgeCustomerListener == null ||
+            javaRestore == null || javaSync == null || javaQuietSync == null ||
+            javaDrain == null || bridgeCustomerListener == null ||
             bridgeReceiptListener == null || bridgeConfigure == null || bridgeReset == null ||
             bridgeLogIn == null || bridgeLogOut == null || bridgeOfferings == null ||
             bridgeCustomerInfo == null || bridgeRemoteConfigs == null || bridgeExperiment == null ||
             bridgeStorefront == null || bridgeStoreCapabilities == null || bridgePurchase == null ||
-            bridgeRestore == null || bridgeSync == null || bridgeClearListeners == null) {
+            bridgeRestore == null || bridgeSync == null || bridgeQuietSync == null ||
+            bridgeDrain == null || bridgeClearListeners == null) {
             throw new AssertionError("unreachable");
         }
 

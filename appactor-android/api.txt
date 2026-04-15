@@ -5,6 +5,7 @@ package com.appactor.android.api {
     method public suspend Object? activeEntitlementKeysOffline(kotlin.coroutines.Continuation<? super java.util.Set<? extends java.lang.String>>);
     method public boolean canMakePurchases(optional java.util.Set<? extends com.appactor.android.models.AppActorStoreCapability> requiredCapabilities);
     method public suspend Object? configure(android.content.Context context, String apiKey, optional com.appactor.android.models.AppActorOptions options, kotlin.coroutines.Continuation<? super kotlin.Unit>);
+    method public suspend Object? drainReceiptQueueAndRefreshCustomer(kotlin.coroutines.Continuation<? super com.appactor.android.models.AppActorCustomerInfo>);
     method public void enableInstallReferrer();
     method public String? getAppUserId();
     method public com.appactor.android.models.AppActorOfferings? getCachedOfferings();
@@ -68,6 +69,9 @@ package com.appactor.android.api {
     method public static void configure(android.content.Context context, String apiKey, optional com.appactor.android.models.AppActorOptions options);
     method public static void configure(android.content.Context context, String apiKey, optional com.appactor.android.models.AppActorOptions options, optional com.appactor.android.models.AppActorCompletionCallback? onComplete);
     method public static void configure(android.content.Context context, String apiKey, optional com.appactor.android.models.AppActorOptions options, optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorBridgeErrorCallback? onError);
+    method public static void drainReceiptQueueAndRefreshCustomer();
+    method public static void drainReceiptQueueAndRefreshCustomer(optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorCustomerInfo>? onSuccess);
+    method public static void drainReceiptQueueAndRefreshCustomer(optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorCustomerInfo>? onSuccess, optional com.appactor.android.models.AppActorBridgeErrorCallback? onError);
     method public static com.appactor.android.models.AppActorOfferings? getCachedOfferings();
     method public static com.appactor.android.models.AppActorRemoteConfigs? getCachedRemoteConfigs();
     method public static com.appactor.android.models.AppActorCustomerInfo getCurrentCustomerInfo();
@@ -111,6 +115,9 @@ package com.appactor.android.api {
     method public static void purchase(android.app.Activity activity, com.appactor.android.models.AppActorPurchaseParams params);
     method public static void purchase(android.app.Activity activity, com.appactor.android.models.AppActorPurchaseParams params, optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorPurchaseResult>? onSuccess);
     method public static void purchase(android.app.Activity activity, com.appactor.android.models.AppActorPurchaseParams params, optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorPurchaseResult>? onSuccess, optional com.appactor.android.models.AppActorBridgeErrorCallback? onError);
+    method public static void quietSyncPurchases();
+    method public static void quietSyncPurchases(optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorCustomerInfo>? onSuccess);
+    method public static void quietSyncPurchases(optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorCustomerInfo>? onSuccess, optional com.appactor.android.models.AppActorBridgeErrorCallback? onError);
     method public static void reset();
     method public static void reset(optional com.appactor.android.models.AppActorCompletionCallback? onComplete);
     method public static void reset(optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorBridgeErrorCallback? onError);
@@ -133,6 +140,7 @@ package com.appactor.android.api {
     method public static boolean canMakePurchases();
     method public static boolean canMakePurchases(java.util.Set<? extends com.appactor.android.models.AppActorStoreCapability> requiredCapabilities);
     method public static void configureAsync(android.content.Context context, String apiKey, optional com.appactor.android.models.AppActorOptions options, optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorErrorCallback? onError);
+    method public static void drainReceiptQueueAndRefreshCustomerAsync(optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorCustomerInfo>? onSuccess, optional com.appactor.android.models.AppActorErrorCallback? onError);
     method public static void getCustomerInfoAsync(optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorCustomerInfo>? onSuccess, optional com.appactor.android.models.AppActorErrorCallback? onError);
     method public static void getExperimentAssignmentAsync(String experimentKey, optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorExperimentAssignment?>? onSuccess, optional com.appactor.android.models.AppActorErrorCallback? onError);
     method public static void getOfferingsAsync(optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorOfferings>? onSuccess, optional com.appactor.android.models.AppActorErrorCallback? onError);
@@ -142,6 +150,7 @@ package com.appactor.android.api {
     method public static void logInAsync(String appUserId, optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorCustomerInfo>? onSuccess, optional com.appactor.android.models.AppActorErrorCallback? onError);
     method public static void logOutAsync(optional com.appactor.android.models.AppActorSuccessCallback<java.lang.Boolean>? onSuccess, optional com.appactor.android.models.AppActorErrorCallback? onError);
     method public static void purchaseAsync(android.app.Activity activity, com.appactor.android.models.AppActorPackage appActorPackage, optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorPurchaseResult>? onSuccess, optional com.appactor.android.models.AppActorErrorCallback? onError);
+    method public static void quietSyncPurchasesAsync(optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorCustomerInfo>? onSuccess, optional com.appactor.android.models.AppActorErrorCallback? onError);
     method public static void restorePurchasesAsync(optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorCustomerInfo>? onSuccess, optional com.appactor.android.models.AppActorErrorCallback? onError);
     method public static void setOnCustomerInfoChangedListener(com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorCustomerInfo>? listener);
     method public static void setOnReceiptPipelineEventListener(com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorReceiptPipelineEvent>? listener);
@@ -1333,4 +1342,3 @@ package com.appactor.android.models {
   }
 
 }
-
