@@ -15,6 +15,8 @@ internal object PluginRequestRouter {
             PurchasePackageRequest,
             RestorePurchasesRequest,
             SyncPurchasesRequest,
+            QuietSyncPurchasesRequest,
+            DrainReceiptQueueAndRefreshCustomerRequest,
             GetCustomerInfoRequest,
             ActiveEntitlementsOfflineRequest,
             GetOfferingsRequest,

@@ -145,7 +145,27 @@ public object AppActorJava {
         onSuccess: AppActorSuccessCallback<AppActorCustomerInfo>? = null,
         onError: AppActorErrorCallback? = null,
     ): Unit = AppActor.launchAsync(
+        operation = { AppActor.drainReceiptQueueAndRefreshCustomer() },
+        onSuccess = onSuccess,
+        onError = onError,
+    )
+
+    @JvmStatic
+    public fun quietSyncPurchasesAsync(
+        onSuccess: AppActorSuccessCallback<AppActorCustomerInfo>? = null,
+        onError: AppActorErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
         operation = { AppActor.syncPurchases() },
+        onSuccess = onSuccess,
+        onError = onError,
+    )
+
+    @JvmStatic
+    public fun drainReceiptQueueAndRefreshCustomerAsync(
+        onSuccess: AppActorSuccessCallback<AppActorCustomerInfo>? = null,
+        onError: AppActorErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.drainReceiptQueueAndRefreshCustomer() },
         onSuccess = onSuccess,
         onError = onError,
     )

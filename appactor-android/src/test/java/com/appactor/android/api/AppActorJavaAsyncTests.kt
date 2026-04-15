@@ -16,6 +16,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicReference
 
@@ -335,6 +336,119 @@ class AppActorJavaAsyncTests {
             assertNull(restoreError.get())
             assertEquals("server_user_123", restoreUserId.get())
             assertEquals(true, restoreCallbackOnMain.get())
+        }
+    }
+
+    @Test
+    fun `sync purchases refreshes customer info with canonical app user id`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val activePurchase = com.appactor.android.billing.AppActorStorePurchase(
+            productId = "com.appactor.pro.monthly",
+            productType = com.appactor.android.models.AppActorProductType.Subscription,
+            purchaseToken = "token_java_sync_canonical",
+            orderId = "GPA.java.sync.canonical",
+            purchaseTimeMillis = 1_710_000_000_000,
+            purchaseState = com.appactor.android.billing.AppActorStorePurchaseState.Purchased,
+            basePlanId = "monthly001",
+            offerId = "intro7d",
+            isAcknowledged = false,
+            isAutoRenewing = true,
+            rawPurchaseData = "{\"purchaseToken\":\"token_java_sync_canonical\"}",
+            purchaseSignature = "signature_java_sync_canonical",
+        )
+        val fakeStoreAdapter = FakeStoreAdapter(activePurchases = listOf(activePurchase))
+        val syncRequestCount = AtomicInteger(0)
+        val oldCustomerRequestCount = AtomicInteger(0)
+        val canonicalCustomerRequestCount = AtomicInteger(0)
+        AppActor.storeAdapterFactory = { fakeStoreAdapter }
+
+        TestBackendServer { request ->
+            when (request.path?.substringBefore("?")) {
+                "/v1/payment/identify" -> jsonResponse(
+                    customerEnvelope(
+                        requestId = "req_identify_sync_canonical",
+                        appUserId = "server_user_123",
+                    ),
+                )
+
+                "/v1/payment/offerings" -> jsonResponse(
+                    """{"requestId":"req_off","data":{"offerings":[],"productEntitlements":{}}}""",
+                )
+
+                "/v1/payment/sync/google" -> {
+                    if (syncRequestCount.incrementAndGet() == 1) {
+                        jsonResponse(
+                            """
+                            {
+                              "customer": {
+                                "entitlements": {},
+                                "subscriptions": {},
+                                "nonSubscriptions": {}
+                              },
+                              "syncedCount": 1,
+                              "transferred": false,
+                              "requestId": "req_sync_startup"
+                            }
+                            """.trimIndent(),
+                        )
+                    } else {
+                        jsonResponse(
+                            """
+                            {
+                              "appUserId": "user_google_canonical",
+                              "customer": {
+                                "entitlements": {},
+                                "subscriptions": {},
+                                "nonSubscriptions": {}
+                              },
+                              "syncedCount": 1,
+                              "transferred": true,
+                              "requestId": "req_sync_explicit"
+                            }
+                            """.trimIndent(),
+                        )
+                    }
+                }
+
+                "/v1/customers/server_user_123" -> {
+                    oldCustomerRequestCount.incrementAndGet()
+                    jsonResponse(
+                        customerEnvelope(
+                            requestId = "req_customer_old_${oldCustomerRequestCount.get()}",
+                            appUserId = "server_user_123",
+                        ),
+                    )
+                }
+
+                "/v1/customers/user_google_canonical" -> {
+                    canonicalCustomerRequestCount.incrementAndGet()
+                    jsonResponse(
+                        customerEnvelope(
+                            requestId = "req_customer_canonical",
+                            appUserId = "user_google_canonical",
+                        ),
+                    )
+                }
+
+                else -> jsonResponse("{}", 404)
+            }
+        }.use { backend ->
+            AppActor.configure(
+                com.appactor.android.models.AppActorConfiguration(
+                    context = context,
+                    apiKey = "pk_test_sync_canonical",
+                    appUserId = "server_user_123",
+                    baseUrl = backend.baseUrl,
+                    options = testOptionsForLocalBackend(),
+                )
+            )
+
+            val info = AppActor.syncPurchases()
+
+            assertEquals("user_google_canonical", info.appUserId)
+            assertEquals(2, syncRequestCount.get())
+            assertEquals(1, oldCustomerRequestCount.get())
+            assertEquals(1, canonicalCustomerRequestCount.get())
         }
     }
 }
