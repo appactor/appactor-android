@@ -13,6 +13,7 @@ import com.appactor.android.billing.AppActorStoreProductRequest
 import com.appactor.android.cache.AppActorCacheDiskStore
 import com.appactor.android.cache.AppActorETagManager
 import com.appactor.android.cache.AppActorOfferingsCacheStore
+import com.appactor.android.models.AppActorError
 import com.appactor.android.models.AppActorProductType
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -60,7 +61,7 @@ class AppActorOfferingsManagerTests {
     }
 
     @Test
-    fun `get offerings drops packages missing play details`() = runBlocking {
+    fun `get offerings surfaces store products missing when all play packages fail to resolve`() = runBlocking {
         val dto = fixtureOfferings()
         val mockClient = mockk<AppActorBackendClient>(relaxed = true)
         coEvery { mockClient.getOfferings(any()) } returns freshOfferingsResponse(dto)
@@ -72,10 +73,79 @@ class AppActorOfferingsManagerTests {
             storeAdapter = mockStoreAdapter,
         )
 
+        val error = runCatching { manager.getOfferings() }.exceptionOrNull()
+
+        assertTrue(error is AppActorError.StoreProductsMissing)
+        assertTrue(error?.message?.contains("com.appactor.pro.monthly") == true)
+    }
+
+    @Test
+    fun `get offerings keeps partial success when at least one package resolves`() = runBlocking {
+        val dto = fixtureOfferings()
+        val mockClient = mockk<AppActorBackendClient>(relaxed = true)
+        coEvery { mockClient.getOfferings(any()) } returns freshOfferingsResponse(dto)
+        val mockStoreAdapter = mockk<AppActorStoreAdapter>(relaxed = true)
+        coEvery { mockStoreAdapter.queryProductDetails(any()) } answers {
+            val requests = firstArg<List<AppActorStoreProductRequest>>()
+            requests.mapNotNull { request ->
+                pricedProducts()[requestKey(request)]
+                    ?.takeIf { it.productId == "com.appactor.pro.monthly" }
+            }
+        }
+        val manager = AppActorOfferingsManager(
+            backendClient = mockClient,
+            cacheStore = offeringsCacheStore("offerings-partial-success"),
+            storeAdapter = mockStoreAdapter,
+        )
+
+        val offerings = manager.getOfferings()
+
+        assertNotNull(offerings.current)
+        assertEquals(1, offerings.current?.packages?.size)
+        assertEquals("com.appactor.pro.monthly", offerings.current?.packages?.single()?.productId)
+    }
+
+    @Test
+    fun `get offerings keeps empty success when backend has no play product references`() = runBlocking {
+        val fixture = fixtureOfferings()
+        val currentOffering = requireNotNull(fixture.data.currentOffering)
+        val dto = fixture.copy(
+            data = fixture.data.copy(
+                currentOffering = currentOffering.copy(
+                    packages = currentOffering.packages.map { packageDTO ->
+                        packageDTO.copy(
+                            products = packageDTO.products.map { product ->
+                                product.copy(store = "app_store")
+                            }
+                        )
+                    }
+                ),
+                offerings = fixture.data.offerings.map { offering ->
+                    offering.copy(
+                        packages = offering.packages.map { packageDTO ->
+                            packageDTO.copy(
+                                products = packageDTO.products.map { product ->
+                                    product.copy(store = "app_store")
+                                }
+                            )
+                        }
+                    )
+                }
+            )
+        )
+        val mockClient = mockk<AppActorBackendClient>(relaxed = true)
+        coEvery { mockClient.getOfferings(any()) } returns freshOfferingsResponse(dto)
+        val mockStoreAdapter = mockk<AppActorStoreAdapter>(relaxed = true)
+        val manager = AppActorOfferingsManager(
+            backendClient = mockClient,
+            cacheStore = offeringsCacheStore("offerings-no-play-products"),
+            storeAdapter = mockStoreAdapter,
+        )
+
         val offerings = manager.getOfferings()
 
         assertNull(offerings.current)
-        assertEquals(0, offerings.all.size)
+        assertTrue(offerings.all.isEmpty())
     }
 
     @Test

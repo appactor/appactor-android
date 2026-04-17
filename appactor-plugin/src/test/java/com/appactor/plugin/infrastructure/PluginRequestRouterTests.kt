@@ -1,5 +1,10 @@
 package com.appactor.plugin.infrastructure
 
+import com.appactor.android.api.AppActor
+import com.appactor.android.models.AppActorError
+import io.mockk.coEvery
+import io.mockk.mockkObject
+import io.mockk.unmockkObject
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -28,5 +33,21 @@ class PluginRequestRouterTests {
 
         assertEquals(PluginError.SDK_NOT_CONFIGURED, (quietResult as PluginResult.Error).error.code)
         assertEquals(PluginError.SDK_NOT_CONFIGURED, (drainResult as PluginResult.Error).error.code)
+    }
+
+    @Test
+    fun `get offerings returns 2008 when native sdk surfaces store products missing`() = runBlocking {
+        mockkObject(AppActor)
+        try {
+            coEvery { AppActor.offerings() } throws AppActorError.StoreProductsMissing(
+                "Failed to resolve Play product details for productId=com.appactor.pro.monthly"
+            )
+
+            val result = PluginRequestRouter.route("get_offerings", "{}")
+
+            assertEquals(PluginError.SDK_STORE_PRODUCTS_MISSING, (result as PluginResult.Error).error.code)
+        } finally {
+            unmockkObject(AppActor)
+        }
     }
 }

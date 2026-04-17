@@ -15,6 +15,7 @@ import com.android.billingclient.api.PurchasesUpdatedListener
 import com.android.billingclient.api.PendingPurchasesParams
 import com.android.billingclient.api.QueryProductDetailsParams
 import com.android.billingclient.api.QueryPurchasesParams
+import com.appactor.android.internal.logging.AppActorLogger
 import com.appactor.android.models.AppActorError
 import com.appactor.android.models.AppActorProductType
 import com.appactor.android.models.AppActorStore
@@ -165,6 +166,10 @@ internal class GooglePlayBillingClientBridge(
                     .build()
 
                 queryProductDetailsAsync(params) { billingResult, queryResult ->
+                    logProductDetailsQueryResult(
+                        products = products,
+                        billingResult = billingResult,
+                    )
                     if (billingResult.responseCode != BillingResponseCode.OK) {
                         continuation.resumeWith(
                             Result.failure(
@@ -172,6 +177,14 @@ internal class GooglePlayBillingClientBridge(
                             )
                         )
                         return@queryProductDetailsAsync
+                    }
+
+                    queryResult.unfetchedProductList.orEmpty().forEach { unfetchedProduct ->
+                        AppActorLogger.info(
+                            "[Billing] queryProductDetails unfetched productId=${unfetchedProduct.productId} " +
+                                "productType=${unfetchedProduct.productType} statusCode=${unfetchedProduct.statusCode} " +
+                                "serializedDocid=${unfetchedProduct.serializedDocid ?: "null"}"
+                        )
                     }
 
                     continuation.resume(
@@ -617,6 +630,20 @@ private fun createBillingClient(
                 .build()
         )
         .build()
+}
+
+private fun logProductDetailsQueryResult(
+    products: List<AppActorBillingQueryProduct>,
+    billingResult: BillingResult,
+) {
+    val requestedTypes = products.mapTo(linkedSetOf()) { it.productType.toBillingProductType() }
+    val requestedProductIds = products.map { it.productId }.distinct()
+    AppActorLogger.info(
+        "[Billing] queryProductDetails types=${requestedTypes.joinToString(",")} " +
+            "productIds=${requestedProductIds.joinToString(",")} " +
+            "responseCode=${billingResult.responseCode} " +
+            "debugMessage=${billingResult.debugMessage.ifBlank { "<empty>" }}"
+    )
 }
 
 private fun ProductDetails.toPayload(

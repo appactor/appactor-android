@@ -3,6 +3,7 @@ package com.appactor.android.billing
 import android.app.Activity
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import com.appactor.android.internal.logging.AppActorLogger
 import com.appactor.android.models.AppActorProductType
 import io.mockk.coEvery
 import io.mockk.every
@@ -41,13 +42,18 @@ class GooglePlayStoreAdapterTests {
         val offerTokenSlot = slot<String?>()
         val oldPurchaseTokenSlot = slot<String?>()
         val replacementModeSlot = slot<Int?>()
+        val queryProductsCalls = mutableListOf<List<AppActorBillingQueryProduct>>()
 
         val mock = mockk<AppActorGoogleBillingClient>(relaxed = true)
 
         coEvery { mock.queryProductDetails(any()) } coAnswers {
             val requestedProducts = firstArg<List<AppActorBillingQueryProduct>>()
+            queryProductsCalls += requestedProducts
             productDetails.filter { payload ->
-                requestedProducts.any { it.productId == payload.productId }
+                requestedProducts.any { requested ->
+                    requested.productId == payload.productId &&
+                        requested.matches(payload)
+                }
             }
         }
 
@@ -79,6 +85,7 @@ class GooglePlayStoreAdapterTests {
             offerTokenSlot = offerTokenSlot,
             oldPurchaseTokenSlot = oldPurchaseTokenSlot,
             replacementModeSlot = replacementModeSlot,
+            queryProductsCalls = queryProductsCalls,
         )
 
         return mock to captures
@@ -88,6 +95,7 @@ class GooglePlayStoreAdapterTests {
         val offerTokenSlot: io.mockk.CapturingSlot<String?>,
         val oldPurchaseTokenSlot: io.mockk.CapturingSlot<String?>,
         val replacementModeSlot: io.mockk.CapturingSlot<Int?>,
+        val queryProductsCalls: List<List<AppActorBillingQueryProduct>>,
     ) {
         val lastLaunchOfferToken: String?
             get() = if (offerTokenSlot.isCaptured) offerTokenSlot.captured else null
@@ -152,6 +160,109 @@ class GooglePlayStoreAdapterTests {
     }
 
     @Test
+    fun `query product details resolves subscriptions even when request type is unknown`() = kotlinx.coroutines.runBlocking {
+        val (billingClient, _) = createMockBillingClient(
+            productDetails = listOf(
+                AppActorBillingProductDetailsPayload(
+                    productId = "com.appactor.pro.monthly",
+                    productType = AppActorProductType.Subscription,
+                    subscriptionOffers = listOf(
+                        AppActorBillingSubscriptionOfferPayload(
+                            basePlanId = "monthly001",
+                            offerId = "intro7d",
+                            offerToken = "intro-token",
+                            pricing = AppActorStorePricing(formattedPrice = "$4.99"),
+                        )
+                    ),
+                )
+            )
+        )
+        val adapter = GooglePlayStoreAdapter(context, billingClient)
+
+        val products = adapter.queryProductDetails(
+            listOf(
+                AppActorStoreProductRequest(
+                    productId = "com.appactor.pro.monthly",
+                    productType = AppActorProductType.Unknown,
+                    basePlanId = "monthly001",
+                    offerId = "intro7d",
+                )
+            )
+        )
+
+        assertEquals(1, products.size)
+        assertEquals(AppActorProductType.Subscription, products.single().productType)
+        assertEquals("intro7d", products.single().offerId)
+    }
+
+    @Test
+    fun `query product details resolves ambiguous request when only one subscription offer exists`() = kotlinx.coroutines.runBlocking {
+        val (billingClient, captures) = createMockBillingClient(
+            productDetails = listOf(
+                AppActorBillingProductDetailsPayload(
+                    productId = "com.appactor.pro.monthly",
+                    productType = AppActorProductType.Subscription,
+                    subscriptionOffers = listOf(
+                        AppActorBillingSubscriptionOfferPayload(
+                            basePlanId = "monthly001",
+                            offerId = "intro7d",
+                            offerToken = "intro-token",
+                            pricing = AppActorStorePricing(formattedPrice = "$4.99"),
+                        )
+                    ),
+                )
+            )
+        )
+        val adapter = GooglePlayStoreAdapter(context, billingClient)
+
+        val products = adapter.queryProductDetails(
+            listOf(
+                AppActorStoreProductRequest(
+                    productId = "com.appactor.pro.monthly",
+                    productType = AppActorProductType.Unknown,
+                )
+            )
+        )
+
+        assertEquals(1, products.size)
+        assertEquals(AppActorProductType.Subscription, products.single().productType)
+        assertEquals("intro7d", products.single().offerId)
+        assertEquals(2, captures.queryProductsCalls.size)
+    }
+
+    @Test
+    fun `query product details resolves ambiguous request when only one inapp payload exists`() = kotlinx.coroutines.runBlocking {
+        val (billingClient, captures) = createMockBillingClient(
+            productDetails = listOf(
+                AppActorBillingProductDetailsPayload(
+                    productId = "com.appactor.coins.100",
+                    productType = AppActorProductType.Consumable,
+                    oneTimeOffer = AppActorStorePricing(
+                        formattedPrice = "$1.99",
+                        priceAmountMicros = 1_990_000,
+                        currencyCode = "USD",
+                    ),
+                )
+            )
+        )
+        val adapter = GooglePlayStoreAdapter(context, billingClient)
+
+        val products = adapter.queryProductDetails(
+            listOf(
+                AppActorStoreProductRequest(
+                    productId = "com.appactor.coins.100",
+                    productType = AppActorProductType.Unknown,
+                )
+            )
+        )
+
+        assertEquals(1, products.size)
+        assertEquals("com.appactor.coins.100", products.single().productId)
+        assertEquals("$1.99", products.single().localizedPrice)
+        assertEquals(2, captures.queryProductsCalls.size)
+    }
+
+    @Test
     fun `query product details maps one time products`() = kotlinx.coroutines.runBlocking {
         val (billingClient, _) = createMockBillingClient(
             productDetails = listOf(
@@ -182,6 +293,126 @@ class GooglePlayStoreAdapterTests {
 
         assertEquals("$1.99", products.first().localizedPrice)
         assertNull(products.first().offerId)
+    }
+
+    @Test
+    fun `query product details falls back from subs to inapp for one time products`() = kotlinx.coroutines.runBlocking {
+        val (billingClient, captures) = createMockBillingClient(
+            productDetails = listOf(
+                AppActorBillingProductDetailsPayload(
+                    productId = "com.appactor.coins.100",
+                    productType = AppActorProductType.Consumable,
+                    oneTimeOffer = AppActorStorePricing(
+                        formattedPrice = "$1.99",
+                        priceAmountMicros = 1_990_000,
+                        currencyCode = "USD",
+                    ),
+                )
+            )
+        )
+        val adapter = GooglePlayStoreAdapter(context, billingClient)
+
+        val products = adapter.queryProductDetails(
+            listOf(
+                AppActorStoreProductRequest(
+                    productId = "com.appactor.coins.100",
+                    productType = AppActorProductType.Consumable,
+                )
+            )
+        )
+
+        assertEquals(1, products.size)
+        assertEquals(AppActorProductType.Consumable, products.single().productType)
+        assertEquals(2, captures.queryProductsCalls.size)
+        assertEquals(AppActorProductType.Subscription, captures.queryProductsCalls[0].single().productType)
+        assertEquals(AppActorProductType.NonConsumable, captures.queryProductsCalls[1].single().productType)
+    }
+
+    @Test
+    fun `query product details logs unresolved product references`() = kotlinx.coroutines.runBlocking {
+        val previousHandler = AppActorLogger.logHandler
+        val messages = mutableListOf<String>()
+        AppActorLogger.logHandler = { _, message, _, _ -> messages += message }
+        try {
+            val (billingClient, _) = createMockBillingClient(
+                productDetails = listOf(
+                    AppActorBillingProductDetailsPayload(
+                        productId = "com.appactor.pro.monthly",
+                        productType = AppActorProductType.Subscription,
+                        subscriptionOffers = listOf(
+                            AppActorBillingSubscriptionOfferPayload(
+                                basePlanId = "monthly001",
+                                offerId = "intro7d",
+                                offerToken = "intro",
+                            )
+                        ),
+                    )
+                )
+            )
+            val adapter = GooglePlayStoreAdapter(context, billingClient)
+
+            val products = adapter.queryProductDetails(
+                listOf(
+                    AppActorStoreProductRequest(
+                        productId = "com.appactor.pro.monthly",
+                        productType = AppActorProductType.Subscription,
+                        basePlanId = "monthly001",
+                        offerId = "missing-offer",
+                    )
+                )
+            )
+
+            assertTrue(products.isEmpty())
+            assertTrue(messages.any { it.contains("No matching Play subscription offer") })
+            assertTrue(messages.any { it.contains("productId=com.appactor.pro.monthly") && it.contains("offerId=missing-offer") })
+        } finally {
+            AppActorLogger.logHandler = previousHandler
+        }
+    }
+
+    @Test
+    fun `query product details keeps mixed type ambiguous requests unresolved after querying both catalogs`() = kotlinx.coroutines.runBlocking {
+        val previousHandler = AppActorLogger.logHandler
+        val messages = mutableListOf<String>()
+        AppActorLogger.logHandler = { _, message, _, _ -> messages += message }
+        try {
+            val (billingClient, captures) = createMockBillingClient(
+                productDetails = listOf(
+                    AppActorBillingProductDetailsPayload(
+                        productId = "com.appactor.mixed",
+                        productType = AppActorProductType.Subscription,
+                        subscriptionOffers = listOf(
+                            AppActorBillingSubscriptionOfferPayload(
+                                basePlanId = "monthly001",
+                                offerId = "intro7d",
+                                offerToken = "intro",
+                            )
+                        ),
+                    ),
+                    AppActorBillingProductDetailsPayload(
+                        productId = "com.appactor.mixed",
+                        productType = AppActorProductType.Consumable,
+                        oneTimeOffer = AppActorStorePricing(formattedPrice = "$1.99"),
+                    ),
+                )
+            )
+            val adapter = GooglePlayStoreAdapter(context, billingClient)
+
+            val products = adapter.queryProductDetails(
+                listOf(
+                    AppActorStoreProductRequest(
+                        productId = "com.appactor.mixed",
+                        productType = AppActorProductType.Unknown,
+                    )
+                )
+            )
+
+            assertTrue(products.isEmpty())
+            assertEquals(2, captures.queryProductsCalls.size)
+            assertTrue(messages.any { it.contains("matched both SUBS and INAPP") && it.contains("com.appactor.mixed") })
+        } finally {
+            AppActorLogger.logHandler = previousHandler
+        }
     }
 
     @Test
@@ -564,5 +795,14 @@ class GooglePlayStoreAdapterTests {
         assertEquals(1, purchases.size)
         assertEquals(AppActorProductType.Unknown, purchases.single().productType)
         assertEquals("token_unknown_inapp", purchases.single().purchaseToken)
+    }
+}
+
+private fun AppActorBillingQueryProduct.matches(
+    payload: AppActorBillingProductDetailsPayload,
+): Boolean {
+    return when (productType) {
+        AppActorProductType.Subscription -> payload.productType == AppActorProductType.Subscription
+        else -> payload.productType != AppActorProductType.Subscription
     }
 }

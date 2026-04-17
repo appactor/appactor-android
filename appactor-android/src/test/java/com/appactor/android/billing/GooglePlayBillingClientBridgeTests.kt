@@ -26,7 +26,10 @@ import com.android.billingclient.api.LaunchExternalLinkResponseListener
 import com.android.billingclient.api.ProductDetailsResponseListener
 import com.android.billingclient.api.PurchasesResponseListener
 import com.android.billingclient.api.QueryProductDetailsParams
+import com.android.billingclient.api.QueryProductDetailsResult
 import com.android.billingclient.api.QueryPurchasesParams
+import com.android.billingclient.api.UnfetchedProduct
+import com.appactor.android.internal.logging.AppActorLogger
 import com.appactor.android.models.AppActorProductType
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
@@ -192,6 +195,77 @@ class GooglePlayBillingClientBridgeTests {
         assertEquals(2, fakeBillingClient.startConnectionCalls)
     }
 
+    @Test
+    fun `query product details logs billing debug message`() = runBlocking {
+        val previousHandler = AppActorLogger.logHandler
+        val messages = mutableListOf<String>()
+        AppActorLogger.logHandler = { _, message, _, _ -> messages += message }
+        try {
+            val fakeBillingClient = FakeBillingClient(
+                queryProductDetailsBillingResult = billingResult(
+                    BillingClient.BillingResponseCode.OK,
+                    debugMessage = "Play debug details",
+                ),
+            )
+            val bridge = GooglePlayBillingClientBridge(
+                context = context,
+                billingClientFactory = { _, _ -> fakeBillingClient },
+            )
+
+            bridge.queryProductDetails(
+                listOf(
+                    AppActorBillingQueryProduct(
+                        productId = "monthly",
+                        productType = AppActorProductType.Subscription,
+                    )
+                )
+            )
+
+            assertTrue(messages.any { it.contains("queryProductDetails") && it.contains("debugMessage=Play debug details") })
+        } finally {
+            AppActorLogger.logHandler = previousHandler
+        }
+    }
+
+    @Test
+    fun `query product details logs unfetched product entries`() = runBlocking {
+        val previousHandler = AppActorLogger.logHandler
+        val messages = mutableListOf<String>()
+        AppActorLogger.logHandler = { _, message, _, _ -> messages += message }
+        try {
+            val fakeBillingClient = FakeBillingClient(
+                queryProductDetailsResult = QueryProductDetailsResult.create(
+                    emptyList(),
+                    listOf(
+                        unfetchedProduct(
+                            productId = "missing.monthly",
+                            productType = BillingClient.ProductType.SUBS,
+                            statusCode = 7,
+                            serializedDocid = "doc-123",
+                        )
+                    ),
+                ),
+            )
+            val bridge = GooglePlayBillingClientBridge(
+                context = context,
+                billingClientFactory = { _, _ -> fakeBillingClient },
+            )
+
+            bridge.queryProductDetails(
+                listOf(
+                    AppActorBillingQueryProduct(
+                        productId = "missing.monthly",
+                        productType = AppActorProductType.Subscription,
+                    )
+                )
+            )
+
+            assertTrue(messages.any { it.contains("unfetched productId=missing.monthly") && it.contains("serializedDocid=doc-123") })
+        } finally {
+            AppActorLogger.logHandler = previousHandler
+        }
+    }
+
     private class FakeBillingClient(
         private val storefrontCountryCodes: ArrayDeque<String?> = ArrayDeque(),
         private val supportedFeatures: Set<String> = setOf(
@@ -199,6 +273,11 @@ class GooglePlayBillingClientBridgeTests {
             BillingClient.FeatureType.SUBSCRIPTIONS,
         ),
         private val connectResults: ArrayDeque<Int> = ArrayDeque(listOf(BillingClient.BillingResponseCode.OK)),
+        private val queryProductDetailsBillingResult: BillingResult = billingResult(BillingClient.BillingResponseCode.OK),
+        private val queryProductDetailsResult: QueryProductDetailsResult = QueryProductDetailsResult.create(
+            emptyList(),
+            emptyList(),
+        ),
         val connectRelease: CountDownLatch? = null,
         initialReady: Boolean = true,
     ) : BillingClient() {
@@ -300,11 +379,8 @@ class GooglePlayBillingClientBridgeTests {
         ) {
             queryProductDetailsCalls += 1
             listener.onProductDetailsResponse(
-                billingResult(BillingClient.BillingResponseCode.OK),
-                com.android.billingclient.api.QueryProductDetailsResult.create(
-                    emptyList(),
-                    emptyList(),
-                ),
+                queryProductDetailsBillingResult,
+                queryProductDetailsResult,
             )
         }
 
@@ -338,10 +414,10 @@ class GooglePlayBillingClientBridgeTests {
     }
 }
 
-private fun billingResult(responseCode: Int): BillingResult {
+private fun billingResult(responseCode: Int, debugMessage: String = "test"): BillingResult {
     return BillingResult.newBuilder()
         .setResponseCode(responseCode)
-        .setDebugMessage("test")
+        .setDebugMessage(debugMessage)
         .build()
 }
 
@@ -349,4 +425,25 @@ private fun billingConfigForCountryCode(countryCode: String): BillingConfig {
     val factory = BillingConfig::class.java.getDeclaredMethod("forCountryCode", String::class.java)
     factory.isAccessible = true
     return factory.invoke(null, countryCode) as BillingConfig
+}
+
+private fun unfetchedProduct(
+    productId: String,
+    productType: String,
+    statusCode: Int,
+    serializedDocid: String?,
+): UnfetchedProduct {
+    val json = buildString {
+        append("{")
+        append("\"productId\":\"").append(productId).append("\",")
+        append("\"type\":\"").append(productType).append("\",")
+        append("\"statusCode\":").append(statusCode)
+        if (serializedDocid != null) {
+            append(",\"serializedDocid\":\"").append(serializedDocid).append("\"")
+        }
+        append("}")
+    }
+    val factory = UnfetchedProduct::class.java.getDeclaredMethod("fromJson", String::class.java)
+    factory.isAccessible = true
+    return factory.invoke(null, json) as UnfetchedProduct
 }

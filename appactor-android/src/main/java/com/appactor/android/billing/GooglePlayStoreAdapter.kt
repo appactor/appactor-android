@@ -2,6 +2,7 @@ package com.appactor.android.billing
 
 import android.app.Activity
 import android.content.Context
+import com.appactor.android.internal.logging.AppActorLogger
 import com.appactor.android.models.AppActorError
 import com.appactor.android.models.AppActorProductType
 import com.appactor.android.models.AppActorStore
@@ -46,26 +47,15 @@ internal class GooglePlayStoreAdapter(
         if (requests.isEmpty()) return emptyList()
         connect()
 
-        val payloads = billingClient.queryProductDetails(
-            requests.map { request ->
-                AppActorBillingQueryProduct(
-                    productId = request.productId,
-                    productType = request.productType,
-                )
-            }
-        )
-        val payloadsByRequestKey = payloads.associateBy { payload ->
-            AppActorStoreProductRequest(
-                productId = payload.productId,
-                productType = payload.productType,
-            ).cacheKey()
-        }
+        val payloadsByProductId = queryProductDetailsPayloads(requests)
 
         return requests.mapNotNull { request ->
-            val payload = payloadsByRequestKey[request.cacheKey()]
-                ?: payloadsByRequestKey[request.fallbackRequestKey()]
-                ?: return@mapNotNull null
-            val resolved = resolveProduct(payload, request) ?: return@mapNotNull null
+            val payloads = payloadsByProductId[request.productId].orEmpty()
+            val resolved = resolveProduct(payloads, request)
+            if (resolved == null) {
+                logUnresolvedRequest(request, payloads)
+                return@mapNotNull null
+            }
             resolvedProductsByKey[request.cacheKey()] = resolved
             resolved.product
         }
@@ -185,7 +175,7 @@ internal class GooglePlayStoreAdapter(
                 offerId = offer.offerId,
                 obfuscatedAccountId = obfuscatedAccountId,
             )
-            val resolved = resolveProduct(subscriptionPayload, request)
+            val resolved = resolveSubscriptionPayload(subscriptionPayload, request)
                 ?: throw AppActorError.InvalidConfiguration("No Play subscription offer found for $productId.")
             resolvedProductsByKey[request.cacheKey()] = resolved
             return request
@@ -201,8 +191,7 @@ internal class GooglePlayStoreAdapter(
                 productType = oneTimeProductType,
                 obfuscatedAccountId = obfuscatedAccountId,
             )
-            val resolved = resolveProduct(inAppPayload, request)
-                ?: throw AppActorError.InvalidConfiguration("No Play one-time product found for $productId.")
+            val resolved = resolveOneTimePayload(inAppPayload, request)
             resolvedProductsByKey[request.cacheKey()] = resolved
             return request
         }
@@ -286,47 +275,163 @@ internal class GooglePlayStoreAdapter(
     }
 
     private fun resolveProduct(
+        payloads: List<AppActorBillingProductDetailsPayload>,
+        request: AppActorStoreProductRequest,
+    ): ResolvedProduct? {
+        val subscriptionPayload = payloads.firstOrNull { it.productType == AppActorProductType.Subscription }
+        val inAppPayload = payloads.firstOrNull { it.productType != AppActorProductType.Subscription }
+
+        return when (request.resolutionKind()) {
+            ProductResolutionKind.Subscription -> subscriptionPayload?.let { payload ->
+                resolveSubscriptionPayload(payload, request)
+            }
+
+            ProductResolutionKind.OneTime -> inAppPayload?.let { payload ->
+                resolveOneTimePayload(payload, request)
+            }
+
+            ProductResolutionKind.Ambiguous -> resolveAmbiguousPayload(
+                subscriptionPayload = subscriptionPayload,
+                inAppPayload = inAppPayload,
+                request = request,
+            )
+        }
+    }
+
+    private suspend fun queryProductDetailsPayloads(
+        requests: List<AppActorStoreProductRequest>,
+    ): Map<String, List<AppActorBillingProductDetailsPayload>> {
+        val requestsByProductId = requests.groupBy { it.productId }
+        val uniqueProductIds = requests.map { it.productId }.distinct()
+        val subscriptionPayloads = billingClient.queryProductDetails(
+            uniqueProductIds.map { productId ->
+                AppActorBillingQueryProduct(
+                    productId = productId,
+                    productType = AppActorProductType.Subscription,
+                )
+            }
+        )
+        val subscriptionProductIds = subscriptionPayloads.mapTo(linkedSetOf()) { it.productId }
+        val inAppQueryProductIds = uniqueProductIds.filter { productId ->
+            !subscriptionProductIds.contains(productId) ||
+                requestsByProductId[productId].orEmpty().any { request ->
+                    request.resolutionKind() != ProductResolutionKind.Subscription
+                }
+        }
+        val inAppPayloads = if (inAppQueryProductIds.isEmpty()) {
+            emptyList()
+        } else {
+            billingClient.queryProductDetails(
+                inAppQueryProductIds.map { productId ->
+                    AppActorBillingQueryProduct(
+                        productId = productId,
+                        productType = AppActorProductType.NonConsumable,
+                    )
+                }
+            )
+        }
+
+        return (subscriptionPayloads + inAppPayloads).groupBy { it.productId }
+    }
+
+    private fun resolveAmbiguousPayload(
+        subscriptionPayload: AppActorBillingProductDetailsPayload?,
+        inAppPayload: AppActorBillingProductDetailsPayload?,
+        request: AppActorStoreProductRequest,
+    ): ResolvedProduct? {
+        return when {
+            subscriptionPayload != null && inAppPayload != null -> {
+                AppActorLogger.warn(
+                    "[Billing] Ambiguous Play product request matched both SUBS and INAPP " +
+                        "for productId=${request.productId}; refusing to guess."
+                )
+                null
+            }
+
+            subscriptionPayload != null -> resolveSingleSubscriptionPayload(subscriptionPayload, request)
+            inAppPayload != null -> resolveOneTimePayload(inAppPayload, request)
+            else -> null
+        }
+    }
+
+    private fun resolveSubscriptionPayload(
         payload: AppActorBillingProductDetailsPayload,
         request: AppActorStoreProductRequest,
     ): ResolvedProduct? {
-        return when (request.productType) {
-            AppActorProductType.Subscription -> {
-                val resolvedOffer = resolveSubscriptionOffer(payload, request) ?: return null
-                ResolvedProduct(
-                    product = AppActorStoreProduct(
-                        productId = payload.productId,
-                        productType = request.productType,
-                        basePlanId = resolvedOffer.basePlanId,
-                        offerId = resolvedOffer.offerId,
-                        localizedPrice = resolvedOffer.pricing?.formattedPrice,
-                        priceAmountMicros = resolvedOffer.pricing?.priceAmountMicros,
-                        currencyCode = resolvedOffer.pricing?.currencyCode,
-                        title = payload.title,
-                        displayName = payload.displayName,
-                        description = payload.description,
-                    ),
-                    nativeProductDetails = payload.nativeProductDetails,
-                    offerToken = resolvedOffer.offerToken,
-                )
-            }
-
-            AppActorProductType.Consumable,
-            AppActorProductType.NonConsumable,
-            AppActorProductType.Unknown -> ResolvedProduct(
-                product = AppActorStoreProduct(
-                    productId = payload.productId,
-                    productType = request.productType,
-                    localizedPrice = payload.oneTimeOffer?.formattedPrice,
-                    priceAmountMicros = payload.oneTimeOffer?.priceAmountMicros,
-                    currencyCode = payload.oneTimeOffer?.currencyCode,
-                    title = payload.title,
-                    displayName = payload.displayName,
-                    description = payload.description,
-                ),
-                nativeProductDetails = payload.nativeProductDetails,
-                offerToken = null,
+        val resolvedOffer = resolveSubscriptionOffer(payload, request) ?: run {
+            AppActorLogger.warn(
+                "[Billing] No matching Play subscription offer for productId=${request.productId} " +
+                    "basePlanId=${request.basePlanId ?: "null"} offerId=${request.offerId ?: "null"}"
             )
+            return null
         }
+        return ResolvedProduct(
+            product = AppActorStoreProduct(
+                productId = payload.productId,
+                productType = AppActorProductType.Subscription,
+                basePlanId = resolvedOffer.basePlanId,
+                offerId = resolvedOffer.offerId,
+                localizedPrice = resolvedOffer.pricing?.formattedPrice,
+                priceAmountMicros = resolvedOffer.pricing?.priceAmountMicros,
+                currencyCode = resolvedOffer.pricing?.currencyCode,
+                title = payload.title,
+                displayName = payload.displayName,
+                description = payload.description,
+            ),
+            nativeProductDetails = payload.nativeProductDetails,
+            offerToken = resolvedOffer.offerToken,
+        )
+    }
+
+    private fun resolveSingleSubscriptionPayload(
+        payload: AppActorBillingProductDetailsPayload,
+        request: AppActorStoreProductRequest,
+    ): ResolvedProduct? {
+        val offers = payload.subscriptionOffers
+        if (offers.size != 1) {
+            AppActorLogger.warn(
+                "[Billing] Ambiguous Play subscription match for productId=${request.productId} " +
+                    "with no package hint; offers=${offers.size}."
+            )
+            return null
+        }
+        val resolvedOffer = offers.single()
+        return ResolvedProduct(
+            product = AppActorStoreProduct(
+                productId = payload.productId,
+                productType = AppActorProductType.Subscription,
+                basePlanId = resolvedOffer.basePlanId,
+                offerId = resolvedOffer.offerId,
+                localizedPrice = resolvedOffer.pricing?.formattedPrice,
+                priceAmountMicros = resolvedOffer.pricing?.priceAmountMicros,
+                currencyCode = resolvedOffer.pricing?.currencyCode,
+                title = payload.title,
+                displayName = payload.displayName,
+                description = payload.description,
+            ),
+            nativeProductDetails = payload.nativeProductDetails,
+            offerToken = resolvedOffer.offerToken,
+        )
+    }
+
+    private fun resolveOneTimePayload(
+        payload: AppActorBillingProductDetailsPayload,
+        request: AppActorStoreProductRequest,
+    ): ResolvedProduct {
+        return ResolvedProduct(
+            product = AppActorStoreProduct(
+                productId = payload.productId,
+                productType = request.productType,
+                localizedPrice = payload.oneTimeOffer?.formattedPrice,
+                priceAmountMicros = payload.oneTimeOffer?.priceAmountMicros,
+                currencyCode = payload.oneTimeOffer?.currencyCode,
+                title = payload.title,
+                displayName = payload.displayName,
+                description = payload.description,
+            ),
+            nativeProductDetails = payload.nativeProductDetails,
+            offerToken = null,
+        )
     }
 
     private fun resolveSubscriptionOffer(
@@ -401,6 +506,20 @@ internal class GooglePlayStoreAdapter(
         }
     }
 
+    private fun logUnresolvedRequest(
+        request: AppActorStoreProductRequest,
+        payloads: List<AppActorBillingProductDetailsPayload>,
+    ) {
+        val payloadTypes = payloads.mapTo(linkedSetOf()) { it.productType.name }
+        AppActorLogger.warn(
+            "[Billing] Unresolved Play product request productId=${request.productId} " +
+                "resolutionHint=${request.resolutionKind().name.lowercase()} " +
+                "productType=${request.productType.wireValue} " +
+                "basePlanId=${request.basePlanId ?: "null"} offerId=${request.offerId ?: "null"} " +
+                "returnedTypes=${payloadTypes.joinToString(",").ifBlank { "<none>" }}"
+        )
+    }
+
     private data class ResolvedProduct(
         val product: AppActorStoreProduct,
         val nativeProductDetails: com.android.billingclient.api.ProductDetails?,
@@ -415,6 +534,22 @@ internal class GooglePlayStoreAdapter(
                 obfuscatedAccountId = obfuscatedAccountId,
             )
         }
+    }
+}
+
+private enum class ProductResolutionKind {
+    Subscription,
+    OneTime,
+    Ambiguous,
+}
+
+private fun AppActorStoreProductRequest.resolutionKind(): ProductResolutionKind {
+    return when {
+        !basePlanId.isNullOrBlank() || !offerId.isNullOrBlank() -> ProductResolutionKind.Subscription
+        productType == AppActorProductType.Subscription -> ProductResolutionKind.Subscription
+        productType == AppActorProductType.Consumable || productType == AppActorProductType.NonConsumable ->
+            ProductResolutionKind.OneTime
+        else -> ProductResolutionKind.Ambiguous
     }
 }
 
