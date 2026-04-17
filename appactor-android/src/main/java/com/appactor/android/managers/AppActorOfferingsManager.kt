@@ -12,7 +12,9 @@ import com.appactor.android.billing.AppActorStoreAdapter
 import com.appactor.android.billing.AppActorStoreProduct
 import com.appactor.android.billing.AppActorStoreProductRequest
 import com.appactor.android.cache.AppActorOfferingsCacheStore
+import com.appactor.android.internal.logging.AppActorLogger
 import com.appactor.android.models.AppActorDiagnosticsDataSource
+import com.appactor.android.models.AppActorError
 import com.appactor.android.models.AppActorVerificationResult
 import com.appactor.android.models.AppActorMetadata
 import com.appactor.android.models.AppActorOffering
@@ -297,29 +299,40 @@ internal class AppActorOfferingsManager(
         }.values.toList()
 
         val productRequests = sourceOfferings
-            .flatMap { offering -> offering.packages }
-            .flatMap { packageDTO ->
-                packageDTO.products
-                    .filter { AppActorStore.fromWireValue(it.store) == AppActorStore.PlayStore }
-                    .map { product ->
-                        AppActorStoreProductRequest(
-                            productId = product.productId,
-                            productType = AppActorProductType.fromWireValue(product.productType),
-                            basePlanId = product.basePlanId,
-                            offerId = product.offerId,
-                        )
+            .flatMap { offering ->
+                offering.packages.flatMap { packageDTO ->
+                    packageDTO.playStoreProducts().map { product ->
+                        product.toStoreRequest(packageDTO.packageType)
                     }
+                }
             }
             .distinctBy { it.cacheKey() }
 
         val resolvedProducts = storeAdapter.queryProductDetails(productRequests)
             .associateBy { it.cacheKey() }
+        val droppedPackageRefs = linkedSetOf<String>()
 
         val offeringPairs = sourceOfferings.mapNotNull { offeringDTO ->
             val packages = offeringDTO.packages.mapNotNull { packageDTO ->
-                packageDTO.toEnrichedPackage(resolvedProducts, offeringId = offeringDTO.id)
+                packageDTO.toEnrichedPackage(resolvedProducts, offeringId = offeringDTO.id) ?: run {
+                    val playRefs = packageDTO.playStoreProducts()
+                    if (playRefs.isNotEmpty()) {
+                        val packageRefs = playRefs.map { product -> product.logDescriptor(packageDTO.packageType) }
+                        droppedPackageRefs += packageRefs
+                        AppActorLogger.warn(
+                            "[Offerings] Dropped package id=${packageDTO.id} offeringId=${offeringDTO.id} " +
+                                "because no Play product matched refs=${packageRefs.joinToString("; ")}"
+                        )
+                    }
+                    null
+                }
             }
             if (packages.isEmpty()) {
+                if (offeringDTO.packages.any { packageDTO -> packageDTO.playStoreProducts().isNotEmpty() }) {
+                    AppActorLogger.warn(
+                        "[Offerings] Dropped offering id=${offeringDTO.id} because all Play-backed packages were unresolved."
+                    )
+                }
                 null
             } else {
                 AppActorOffering(
@@ -339,6 +352,25 @@ internal class AppActorOfferingsManager(
         val currentOfferingId = dto.data.currentOffering?.id
         val currentOffering = currentOfferingId?.let(allOfferings::get)
             ?: allOfferings.values.firstOrNull { it.isCurrent }
+
+        if (allOfferings.isEmpty() && productRequests.isNotEmpty()) {
+            val unresolvedSummary = droppedPackageRefs.ifEmpty {
+                productRequests.map { request -> request.logDescriptor() }.toSet()
+            }.joinToString("; ")
+            AppActorLogger.error(
+                "[Offerings] All Play-backed offerings were dropped during enrichment. unresolved=$unresolvedSummary"
+            )
+            throw AppActorError.StoreProductsMissing(
+                "Failed to resolve Play product details for $unresolvedSummary"
+            )
+        }
+
+        if (currentOfferingId != null && currentOffering == null && allOfferings.isNotEmpty()) {
+            AppActorLogger.warn(
+                "[Offerings] Current offering id=$currentOfferingId was dropped during enrichment. " +
+                    "Remaining offerings=${allOfferings.keys.joinToString(",")}"
+            )
+        }
 
         return AppActorOfferings(
             current = currentOffering,
@@ -362,13 +394,7 @@ internal class AppActorOfferingsManager(
         val selected = products
             .filter { AppActorStore.fromWireValue(it.store) == AppActorStore.PlayStore }
             .mapNotNull { product ->
-                val productType = AppActorProductType.fromWireValue(product.productType)
-                val request = AppActorStoreProductRequest(
-                    productId = product.productId,
-                    productType = productType,
-                    basePlanId = product.basePlanId,
-                    offerId = product.offerId,
-                )
+                val request = product.toStoreRequest(packageType)
                 resolvedProducts[request.cacheKey()]?.let { resolved ->
                     product to resolved
                 }
@@ -414,8 +440,62 @@ internal class AppActorOfferingsManager(
     }
 
     private fun AppActorProductReferenceDTO.cacheKey(): String {
-        val resolvedType = AppActorProductType.fromWireValue(productType)
+        val resolvedType = resolvedProductType(packageType = null)
         return listOf(resolvedType.name, productId, basePlanId.orEmpty(), offerId.orEmpty()).joinToString("|")
+    }
+
+    private fun AppActorPackageDTO.playStoreProducts(): List<AppActorProductReferenceDTO> {
+        return products.filter { AppActorStore.fromWireValue(it.store) == AppActorStore.PlayStore }
+    }
+
+    private fun AppActorProductReferenceDTO.toStoreRequest(
+        packageType: String?,
+    ): AppActorStoreProductRequest {
+        return AppActorStoreProductRequest(
+            productId = productId,
+            productType = resolvedProductType(packageType),
+            basePlanId = basePlanId,
+            offerId = offerId,
+        )
+    }
+
+    private fun AppActorProductReferenceDTO.resolvedProductType(
+        packageType: String?,
+    ): AppActorProductType {
+        val packageKind = AppActorPackageType.fromServerValue(packageType)
+        return when {
+            !basePlanId.isNullOrBlank() || !offerId.isNullOrBlank() -> AppActorProductType.Subscription
+            packageKind == AppActorPackageType.Weekly ||
+                packageKind == AppActorPackageType.Monthly ||
+                packageKind == AppActorPackageType.TwoMonth ||
+                packageKind == AppActorPackageType.ThreeMonth ||
+                packageKind == AppActorPackageType.SixMonth ||
+                packageKind == AppActorPackageType.Annual -> AppActorProductType.Subscription
+            packageKind == AppActorPackageType.Lifetime -> AppActorProductType.NonConsumable
+            packageKind == AppActorPackageType.Consumable -> AppActorProductType.Consumable
+            else -> AppActorProductType.fromWireValue(productType)
+        }
+    }
+
+    private fun AppActorProductReferenceDTO.logDescriptor(
+        packageType: String?,
+    ): String {
+        return listOfNotNull(
+            "productId=$productId",
+            "productType=${resolvedProductType(packageType).wireValue}",
+            "basePlanId=${basePlanId ?: "null"}",
+            "offerId=${offerId ?: "null"}",
+            "packageType=${packageType ?: "null"}",
+        ).joinToString(",")
+    }
+
+    private fun AppActorStoreProductRequest.logDescriptor(): String {
+        return listOf(
+            "productId=$productId",
+            "productType=${productType.wireValue}",
+            "basePlanId=${basePlanId ?: "null"}",
+            "offerId=${offerId ?: "null"}",
+        ).joinToString(",")
     }
 
     private fun Map<String, JsonElement>.toMetadata(): AppActorMetadata {
