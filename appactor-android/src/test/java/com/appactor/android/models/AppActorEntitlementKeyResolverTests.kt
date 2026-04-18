@@ -16,6 +16,7 @@ class AppActorEntitlementKeyResolverTests {
             purchaseTimeMillis = 1_710_000_000_000,
             purchaseState = AppActorStorePurchaseState.Purchased,
             basePlanId = "monthly001",
+            offerId = "intro7d",
         )
 
         val keys = AppActorEntitlementKeyResolver.entitlementKeysForPurchase(
@@ -23,10 +24,11 @@ class AppActorEntitlementKeyResolverTests {
             productEntitlements = mapOf(
                 "android:com.appactor.pro.monthly" to listOf("flat"),
                 "android:com.appactor.pro.monthly:monthly001" to listOf("compound"),
+                "android:com.appactor.pro.monthly:monthly001:intro7d" to listOf("offer"),
             ),
         )
 
-        assertEquals(listOf("compound"), keys)
+        assertEquals(listOf("offer"), keys)
     }
 
     @Test
@@ -34,6 +36,7 @@ class AppActorEntitlementKeyResolverTests {
         val keys = AppActorEntitlementKeyResolver.entitlementKeysForProduct(
             productId = "coins_pack",
             basePlanId = null,
+            offerId = null,
             productEntitlements = mapOf(
                 "android:coins_pack" to listOf("coins"),
             ),
@@ -47,6 +50,7 @@ class AppActorEntitlementKeyResolverTests {
         val keys = AppActorEntitlementKeyResolver.entitlementKeysForProduct(
             productId = "com.appactor.pro.monthly",
             basePlanId = "monthly001",
+            offerId = "intro7d",
             productEntitlements = mapOf(
                 "ios:com.appactor.pro.monthly" to listOf("ios_premium"),
                 "com.appactor.pro.monthly" to listOf("legacy"),

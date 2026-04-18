@@ -19,6 +19,7 @@ import com.appactor.android.billing.AppActorStorePurchase
 import com.appactor.android.cache.AppActorCacheDiskStore
 import com.appactor.android.cache.AppActorCustomerCacheStore
 import com.appactor.android.cache.AppActorETagManager
+import com.appactor.android.cache.AppActorOfflineProductCatalogStore
 import com.appactor.android.cache.AppActorOfferingsCacheStore
 import com.appactor.android.internal.AppActorSDK
 import com.appactor.android.models.AppActorConfiguration
@@ -321,6 +322,15 @@ class AppActorCustomerManagerTests {
             }
         }
 
+        val offlineProductCatalogStore = AppActorOfflineProductCatalogStore(
+            AppActorETagManager(
+                diskStore = AppActorCacheDiskStore(
+                    context,
+                    File(context.cacheDir, "tests/offline-product-${UUID.randomUUID()}")
+                ),
+                responseVerificationEnabled = false,
+            )
+        )
         val offeringsManager = AppActorOfferingsManager(
             backendClient = backendClient,
             cacheStore = AppActorOfferingsCacheStore(
@@ -332,6 +342,7 @@ class AppActorCustomerManagerTests {
                     responseVerificationEnabled = false,
                 )
             ),
+            offlineProductCatalogStore = offlineProductCatalogStore,
             storeAdapter = storeAdapter,
         )
         runBlocking { offeringsManager.getOfferings() }
@@ -354,6 +365,7 @@ class AppActorCustomerManagerTests {
             ),
             identityStore = identityStore,
             offeringsManager = offeringsManager,
+            offlineProductCatalogStore = offlineProductCatalogStore,
             storeAdapter = storeAdapter,
             dateProviderMillis = dateProviderMillis,
         )

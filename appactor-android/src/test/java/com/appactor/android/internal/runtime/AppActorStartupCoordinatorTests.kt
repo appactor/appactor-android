@@ -217,6 +217,8 @@ class AppActorStartupCoordinatorTests {
         var bootstrapSnapshotAwaited: CountDownLatch? = null
         var releaseBootstrapSnapshot: CountDownLatch? = null
         var persistResult: Boolean = true
+        var startupIdentifyResult: Pair<((AppActorCustomerInfo) -> Unit)?, AppActorCustomerInfo>? = null
+        var returnNullStartupIdentifyResult: Boolean = false
 
         override suspend fun performStartupIdentify(
             runtimeState: AppActorRuntimeState,
@@ -224,7 +226,13 @@ class AppActorStartupCoordinatorTests {
             identifyCount.incrementAndGet()
             operationOrder += "identify"
             releaseIdentify?.await(5, TimeUnit.SECONDS)
-            return null
+            if (returnNullStartupIdentifyResult) {
+                return null
+            }
+            return startupIdentifyResult
+                ?: ({ _: AppActorCustomerInfo -> } to customerInfo(
+                    runtime.identityStore.currentAppUserId ?: runtime.identityStore.ensureAppUserId(),
+                ))
         }
 
         override fun confirmIdentity(runtimeState: AppActorRuntimeState) {

@@ -22,14 +22,16 @@ class AppActorModelTests {
     }
 
     @Test
-    fun `package identifier falls back to id when custom identifier is missing`() {
+    fun `package identifier uses semantic package key when custom identifier is missing`() {
         val defaultPackage = AppActorPackage(
-            id = "monthly",
+            id = "pkg_123e4567-e89b-12d3-a456-426614174000",
+            packageType = AppActorPackageType.Monthly,
             store = AppActorStore.PlayStore,
             productId = "premium_monthly",
         )
         val customPackage = AppActorPackage(
-            id = "custom",
+            id = "pkg_custom",
+            packageType = AppActorPackageType.Custom,
             customTypeIdentifier = "hero_offer",
             store = AppActorStore.PlayStore,
             productId = "premium_custom",

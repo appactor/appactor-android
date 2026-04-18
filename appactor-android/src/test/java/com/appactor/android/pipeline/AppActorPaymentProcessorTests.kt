@@ -29,6 +29,7 @@ import com.appactor.android.billing.AppActorStorePurchaseLaunchResult
 import com.appactor.android.cache.AppActorCacheDiskStore
 import com.appactor.android.cache.AppActorCustomerCacheStore
 import com.appactor.android.cache.AppActorETagManager
+import com.appactor.android.cache.AppActorOfflineProductCatalogStore
 import com.appactor.android.cache.AppActorOfferingsCacheStore
 import com.appactor.android.managers.AppActorCustomerManager
 import com.appactor.android.managers.AppActorOfferingsManager
@@ -41,11 +42,15 @@ import com.appactor.android.models.AppActorProductType
 import com.appactor.android.models.AppActorPurchaseResult
 import com.appactor.android.models.AppActorReceiptPipelineEvent
 import com.appactor.android.models.AppActorStore
+import com.appactor.android.models.AppActorPurchaseParams
+import com.appactor.android.models.AppActorSubscriptionReplacementMode
+import com.appactor.android.models.appActorGoogleObfuscatedAccountId
 import com.appactor.android.storage.AppActorAtomicJsonPostedLedgerStore
 import com.appactor.android.storage.AppActorAtomicJsonReceiptQueueStore
 import com.appactor.android.storage.AppActorIdentityStore
 import com.appactor.android.storage.AppActorReceiptQueueItem
 import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.Dispatchers
@@ -55,6 +60,7 @@ import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -180,7 +186,7 @@ class AppActorPaymentProcessorTests {
             offerId = "intro7d",
             isAcknowledged = false,
             isAutoRenewing = true,
-            obfuscatedAccountId = "user_android_123",
+            obfuscatedAccountId = appActorGoogleObfuscatedAccountId("user_android_123"),
             rawPurchaseData = "{\"purchaseToken\":\"token_gate_123\"}",
             purchaseSignature = "signature_gate_123",
         )
@@ -194,19 +200,18 @@ class AppActorPaymentProcessorTests {
             identityConfirmed = false,
         )
 
-        val deferred = async {
-            dependencies.processor.processPurchaseUpdates(listOf(purchase))
-        }
+        val info = dependencies.processor.processPurchaseUpdates(listOf(purchase))
 
-        delay(150)
-
+        assertNull(info)
         assertTrue(dependencies.postedReceipts.isEmpty())
-        assertEquals(1, dependencies.queueStore.pendingCount())
+        assertEquals(
+            com.appactor.android.storage.AppActorReceiptQueuePhase.WaitingForIdentity,
+            dependencies.queueStore.snapshot().single().phase,
+        )
 
-        dependencies.processor.confirmIdentity()
-
-        val info = deferred.await()
-        assertTrue(info?.hasActiveEntitlement("premium") == true)
+        dependencies.processor.confirmIdentity("user_android_123")
+        val drained = dependencies.processor.drainReadyQueue()
+        assertTrue(drained?.hasActiveEntitlement("premium") == true)
         assertEquals(1, dependencies.postedReceipts.size)
     }
 
@@ -529,7 +534,7 @@ class AppActorPaymentProcessorTests {
             offerId = "intro7d",
             isAcknowledged = false,
             isAutoRenewing = true,
-            obfuscatedAccountId = "user_original",
+            obfuscatedAccountId = appActorGoogleObfuscatedAccountId("user_original"),
             rawPurchaseData = "{\"purchaseToken\":\"token_obfuscated_user_123\"}",
             purchaseSignature = "signature_obfuscated_user_123",
         )
@@ -573,7 +578,7 @@ class AppActorPaymentProcessorTests {
     }
 
     @Test
-    fun `purchase by raw product id falls back to store level resolution`() = runBlocking {
+    fun `purchase with explicit direct params resolves store level target`() = runBlocking {
         val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
         val dependencies = createDependencies(
             receiptResponse = AppActorBackendHttpResponse(
@@ -590,7 +595,13 @@ class AppActorPaymentProcessorTests {
             ),
         )
 
-        val result = dependencies.processor.purchase(Activity(), "com.appactor.raw.product")
+        val result = dependencies.processor.purchase(
+            activity = Activity(),
+            params = AppActorPurchaseParams(
+                productId = "com.appactor.raw.product",
+                productType = AppActorProductType.NonConsumable,
+            ),
+        )
 
         val success = result as AppActorPurchaseResult.Success
         assertTrue(success.customerInfo.hasActiveEntitlement("premium"))
@@ -598,7 +609,7 @@ class AppActorPaymentProcessorTests {
     }
 
     @Test
-    fun `purchase by raw product id keeps explicit app user override when offerings package matches`() = runBlocking {
+    fun `purchase with explicit direct params keeps explicit app user override`() = runBlocking {
         val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
         val dependencies = createDependencies(
             receiptResponse = AppActorBackendHttpResponse(
@@ -610,9 +621,16 @@ class AppActorPaymentProcessorTests {
             identityStore = createMockIdentityStore(initialAppUserId = "user_live"),
         )
 
+        dependencies.processor.confirmIdentity("user_snapshot")
+
         dependencies.processor.purchase(
             activity = Activity(),
-            productId = "com.appactor.pro.monthly",
+            params = AppActorPurchaseParams(
+                productId = "com.appactor.pro.monthly",
+                productType = AppActorProductType.Subscription,
+                basePlanId = "monthly001",
+                offerId = "intro7d",
+            ),
             appUserIdOverride = "user_snapshot",
         )
 
@@ -620,7 +638,7 @@ class AppActorPaymentProcessorTests {
     }
 
     @Test
-    fun `purchase by raw product id fails fast on ambiguous store resolution`() = runBlocking {
+    fun `purchase with package reuses cached resolved request without direct store resolution`() = runBlocking {
         val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
         val dependencies = createDependencies(
             receiptResponse = AppActorBackendHttpResponse(
@@ -629,14 +647,67 @@ class AppActorPaymentProcessorTests {
                 requestId = receiptResponse.requestId,
                 signatureVerified = true,
             ),
-            directPurchaseResolutionError = AppActorError.InvalidConfiguration("Ambiguous direct purchase"),
+            directPurchaseResolutionError = IllegalStateException("package purchase should not re-resolve"),
+        )
+
+        val result = dependencies.processor.purchase(Activity(), monthlyPackage())
+
+        assertTrue(result is AppActorPurchaseResult.Success)
+        assertEquals("com.appactor.pro.monthly", dependencies.postedReceipts.single().productId)
+        coVerify(exactly = 0) {
+            dependencies.storeAdapter.resolveDirectPurchaseRequest(any())
+        }
+    }
+
+    @Test
+    fun `purchase with underspecified direct params fails fast`() = runBlocking {
+        val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
+        val dependencies = createDependencies(
+            receiptResponse = AppActorBackendHttpResponse(
+                body = receiptResponse,
+                statusCode = 200,
+                requestId = receiptResponse.requestId,
+                signatureVerified = true,
+            ),
         )
 
         val error = runCatching {
-            dependencies.processor.purchase(Activity(), "com.appactor.raw.product")
+            dependencies.processor.purchase(
+                activity = Activity(),
+                params = AppActorPurchaseParams(productId = "com.appactor.raw.product"),
+            )
         }.exceptionOrNull()
 
         assertTrue(error is AppActorError.InvalidConfiguration)
+        assertTrue(error?.message?.contains("Underspecified direct purchase") == true)
+    }
+
+    @Test
+    fun `purchase with invalid subscription replacement params fails fast`() = runBlocking {
+        val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
+        val dependencies = createDependencies(
+            receiptResponse = AppActorBackendHttpResponse(
+                body = receiptResponse,
+                statusCode = 200,
+                requestId = receiptResponse.requestId,
+                signatureVerified = true,
+            ),
+        )
+
+        val error = runCatching {
+            dependencies.processor.purchase(
+                activity = Activity(),
+                params = AppActorPurchaseParams(
+                    productId = "com.appactor.pro.monthly",
+                    productType = AppActorProductType.Subscription,
+                    basePlanId = "monthly001",
+                    replacementMode = AppActorSubscriptionReplacementMode.Deferred,
+                ),
+            )
+        }.exceptionOrNull()
+
+        assertTrue(error is AppActorError.InvalidConfiguration)
+        assertTrue(error?.message?.contains("Invalid subscription replacement params") == true)
     }
 
     @Test
@@ -702,11 +773,11 @@ class AppActorPaymentProcessorTests {
         dependencies.processor.drainReadyQueue()
 
         val item = dependencies.queueStore.snapshot().single()
-        assertEquals(com.appactor.android.storage.AppActorReceiptQueuePhase.DeadLettered, item.phase)
-        assertTrue(item.lastError?.contains("dead-lettered after 3 attempts") == true)
-        assertTrue(events.any { it is AppActorReceiptPipelineEvent.DeadLettered })
-        assertEquals(listOf("token_retry_dead"), dependencies.acknowledgedTokens)
-        assertTrue(dependencies.ledgerStore.isPosted(item.key))
+        assertEquals(com.appactor.android.storage.AppActorReceiptQueuePhase.NeedsPost, item.phase)
+        assertEquals(3, item.retryCount)
+        assertTrue(events.any { it is AppActorReceiptPipelineEvent.RetryScheduled })
+        assertTrue(dependencies.acknowledgedTokens.isEmpty())
+        assertFalse(dependencies.ledgerStore.isPosted(item.key))
     }
 
     @Test
@@ -737,6 +808,39 @@ class AppActorPaymentProcessorTests {
 
         assertEquals(1, dependencies.syncRequests.size)
         assertEquals("consumable", dependencies.syncRequests.single().purchases.single().productType)
+    }
+
+    @Test
+    fun `sync current purchases lazily hydrates offerings metadata when catalog starts empty`() = runBlocking {
+        val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
+        val activePurchase = AppActorStorePurchase(
+            productId = "com.appactor.coins.100",
+            productType = AppActorProductType.Unknown,
+            purchaseToken = "token_unknown_lazy_123",
+            orderId = "GPA.unknown.lazy.1234",
+            purchaseTimeMillis = 1_710_000_000_000,
+            purchaseState = com.appactor.android.billing.AppActorStorePurchaseState.Purchased,
+            isAcknowledged = false,
+            rawPurchaseData = "{\"purchaseToken\":\"token_unknown_lazy_123\"}",
+            purchaseSignature = "signature_unknown_lazy_123",
+        )
+        val dependencies = createDependencies(
+            receiptResponse = AppActorBackendHttpResponse(
+                body = receiptResponse,
+                statusCode = 200,
+                requestId = receiptResponse.requestId,
+                signatureVerified = true,
+            ),
+            activePurchases = listOf(activePurchase),
+        )
+
+        dependencies.offeringsManager.clearCache()
+
+        dependencies.processor.syncCurrentPurchases()
+
+        assertEquals(1, dependencies.syncRequests.size)
+        assertEquals("consumable", dependencies.syncRequests.single().purchases.single().productType)
+        coVerify(exactly = 2) { dependencies.backendClient.getOfferings(any()) }
     }
 
     @Test
@@ -874,6 +978,85 @@ class AppActorPaymentProcessorTests {
         assertEquals(1, secondBoot.syncRequests.size)
         assertEquals("consumable", secondBoot.syncRequests.single().purchases.single().productType)
         assertTrue(secondBoot.queueStore.snapshot().isEmpty())
+    }
+
+    @Test
+    fun `confirm identity preempts delayed retry wake for newly released receipts`() = runBlocking {
+        val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
+        val postStarted = CountDownLatch(1)
+        val dependencies = createDependencies(
+            receiptResponse = AppActorBackendHttpResponse(
+                body = receiptResponse,
+                statusCode = 200,
+                requestId = receiptResponse.requestId,
+                signatureVerified = true,
+            ),
+            postReceiptStarted = postStarted,
+        )
+        val now = System.currentTimeMillis()
+        val delayedKey = AppActorReceiptQueueItem.makeKey(
+            purchaseToken = "token_delayed_future_123",
+            productId = "com.appactor.pro.monthly",
+            basePlanId = "monthly001",
+        )
+        dependencies.queueStore.upsert(
+            AppActorReceiptQueueItem(
+                key = delayedKey,
+                appUserId = "user_android_123",
+                packageName = context.packageName,
+                environment = "production",
+                productId = "com.appactor.pro.monthly",
+                productType = AppActorProductType.Subscription.wireValue,
+                purchaseToken = "token_delayed_future_123",
+                purchaseTime = "1710000000000",
+                purchaseState = "PURCHASED",
+                orderId = "GPA.delayed.future",
+                basePlanId = "monthly001",
+                offerId = "intro7d",
+                idempotencyKey = "google:com.appactor.pro.monthly:monthly001:token_delayed_future_123",
+                createdAtMillis = now,
+                lastUpdatedAtMillis = now,
+                nextRetryAtMillis = now + 60_000L,
+                phase = com.appactor.android.storage.AppActorReceiptQueuePhase.NeedsPost,
+            )
+        )
+
+        dependencies.processor.drainReadyQueue()
+
+        dependencies.queueStore.upsert(
+            AppActorReceiptQueueItem(
+                key = AppActorReceiptQueueItem.makeKey(
+                    purchaseToken = "token_waiting_identity_123",
+                    productId = "com.appactor.pro.monthly",
+                    basePlanId = "monthly001",
+                ),
+                appUserId = "user_waiting",
+                packageName = context.packageName,
+                environment = "production",
+                productId = "com.appactor.pro.monthly",
+                productType = AppActorProductType.Subscription.wireValue,
+                purchaseToken = "token_waiting_identity_123",
+                purchaseTime = "1710000000000",
+                purchaseState = "PURCHASED",
+                orderId = "GPA.waiting.identity",
+                basePlanId = "monthly001",
+                offerId = "intro7d",
+                idempotencyKey = "google:com.appactor.pro.monthly:monthly001:token_waiting_identity_123",
+                createdAtMillis = now,
+                lastUpdatedAtMillis = now,
+                phase = com.appactor.android.storage.AppActorReceiptQueuePhase.WaitingForIdentity,
+            )
+        )
+
+        dependencies.processor.confirmIdentity("user_waiting")
+
+        assertTrue(postStarted.await(1, TimeUnit.SECONDS))
+        assertEquals(1, dependencies.postedReceipts.size)
+        assertEquals("token_waiting_identity_123", dependencies.postedReceipts.single().purchaseToken)
+
+        dependencies.queueStore.remove(delayedKey)
+        dependencies.processor.drainReadyQueue()
+        Unit
     }
 
     @Test
@@ -1572,21 +1755,34 @@ class AppActorPaymentProcessorTests {
 
         every { mock.purchaseUpdates() } returns emptyFlow()
 
-        coEvery { mock.resolveDirectPurchaseRequest(any(), any()) } coAnswers {
-            val productId: String = firstArg()
-            val obfuscatedAccountId: String? = secondArg()
+        coEvery { mock.resolveDirectPurchaseRequest(any()) } coAnswers {
+            val request: AppActorStoreProductRequest = firstArg()
             directPurchaseResolutionError?.let { throw it }
-            val direct = directPurchaseRequests[productId]
+            val direct = directPurchaseRequests[request.productId]
             if (direct != null) {
-                return@coAnswers direct.copy(obfuscatedAccountId = obfuscatedAccountId)
+                return@coAnswers direct.copy(obfuscatedAccountId = request.obfuscatedAccountId)
             }
-            val matched = activePurchases.firstOrNull { it.productId == productId }
-            AppActorStoreProductRequest(
-                productId = productId,
+            val matched = activePurchases.firstOrNull { it.productId == request.productId }
+            if (
+                request.productType != AppActorProductType.Unknown ||
+                !request.basePlanId.isNullOrBlank() ||
+                !request.offerId.isNullOrBlank()
+            ) {
+                return@coAnswers request.copy(
+                    productType = if (request.productType != AppActorProductType.Unknown) {
+                        request.productType
+                    } else {
+                        matched?.productType ?: request.productType
+                    },
+                    basePlanId = request.basePlanId ?: matched?.basePlanId,
+                    offerId = request.offerId ?: matched?.offerId,
+                )
+            }
+            request.copy(
+                productId = request.productId,
                 productType = matched?.productType ?: AppActorProductType.NonConsumable,
                 basePlanId = matched?.basePlanId,
                 offerId = matched?.offerId,
-                obfuscatedAccountId = obfuscatedAccountId,
             )
         }
 
@@ -1675,6 +1871,12 @@ class AppActorPaymentProcessorTests {
             acknowledgedTokens = acknowledgedTokens,
             consumedTokens = consumedTokens,
         )
+        val offlineProductCatalogStore = AppActorOfflineProductCatalogStore(
+            AppActorETagManager(
+                diskStore = AppActorCacheDiskStore(context, File(context.cacheDir, "tests/offline-product-${UUID.randomUUID()}")),
+                responseVerificationEnabled = false,
+            )
+        )
         val offeringsManager = AppActorOfferingsManager(
             backendClient = backendClient,
             cacheStore = AppActorOfferingsCacheStore(
@@ -1683,6 +1885,7 @@ class AppActorPaymentProcessorTests {
                     responseVerificationEnabled = false,
                 )
             ),
+            offlineProductCatalogStore = offlineProductCatalogStore,
             storeAdapter = storeAdapter,
         )
         runBlocking { offeringsManager.getOfferings() }
@@ -1703,6 +1906,7 @@ class AppActorPaymentProcessorTests {
             cacheStore = customerCacheStore,
             identityStore = identityStore,
             offeringsManager = offeringsManager,
+            offlineProductCatalogStore = offlineProductCatalogStore,
             storeAdapter = storeAdapter,
         )
         val queueStore = AppActorAtomicJsonReceiptQueueStore(context, actualDirectory)
@@ -1721,6 +1925,7 @@ class AppActorPaymentProcessorTests {
             customerManager = customerManager,
             identityStore = identityStore,
             offeringsManager = offeringsManager,
+            offlineProductCatalogStore = offlineProductCatalogStore,
             packageName = context.packageName,
             onPipelineEvent = { event -> pipelineEvents?.add(event) },
         )

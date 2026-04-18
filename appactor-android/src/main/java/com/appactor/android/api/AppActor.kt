@@ -35,6 +35,7 @@ import com.appactor.android.models.AppActorError
 import com.appactor.android.models.AppActorExperimentAssignment
 import com.appactor.android.models.AppActorErrorCallback
 import com.appactor.android.models.AppActorOfferings
+import com.appactor.android.models.AppActorOfferingsFetchPolicy
 import com.appactor.android.models.AppActorOptions
 import com.appactor.android.models.AppActorPackage
 import com.appactor.android.models.AppActorPlatformInfo
@@ -111,7 +112,8 @@ public object AppActor {
                 }
 
                 override fun confirmIdentity(runtimeState: AppActorRuntimeState) {
-                    runtimeState.paymentProcessor.confirmIdentity()
+                    runtimeState.identityStore.currentAppUserId
+                        ?.let(runtimeState.paymentProcessor::confirmIdentity)
                 }
 
                 override suspend fun captureOperationSnapshot(
@@ -127,9 +129,11 @@ public object AppActor {
                 override suspend fun syncCurrentPurchases(
                     snapshot: AppActorOperationSnapshot,
                 ): AppActorCustomerInfo? {
-                    return snapshot.runtime.paymentProcessor.syncCurrentPurchases(
+                    val info = snapshot.runtime.paymentProcessor.syncCurrentPurchases(
                         appUserIdOverride = snapshot.appUserId,
                     )
+                    confirmReceiptPipelineIdentityIfCurrent(snapshot, info?.appUserId ?: snapshot.appUserId)
+                    return info
                 }
 
                 override suspend fun retryDeadLetteredItems(
@@ -141,7 +145,9 @@ public object AppActor {
                 override suspend fun fetchOfferings(
                     runtimeState: AppActorRuntimeState,
                 ): AppActorDiagnosticsDataSource? {
-                    runtimeState.offeringsManager.getOfferings(forceRefresh = false)
+                    runtimeState.offeringsManager.getOfferings(
+                        fetchPolicy = AppActorOfferingsFetchPolicy.ReturnCachedThenRefresh,
+                    )
                     return runtimeState.offeringsManager.lastLoadSource()
                 }
 
@@ -152,6 +158,7 @@ public object AppActor {
                         appUserId = snapshot.appUserId,
                         persistIdentityState = false,
                     )
+                    confirmReceiptPipelineIdentityIfCurrent(snapshot, info.appUserId ?: snapshot.appUserId)
                     return info to snapshot.runtime.customerManager.lastLoadSource()
                 }
 
@@ -566,17 +573,35 @@ public object AppActor {
     }
 
     public suspend fun offerings(): AppActorOfferings {
-        return offerings(forceRefresh = false)
+        return offerings(fetchPolicy = AppActorOfferingsFetchPolicy.FreshIfStale)
     }
 
-    internal suspend fun offerings(forceRefresh: Boolean = false): AppActorOfferings {
+    public suspend fun offerings(
+        fetchPolicy: AppActorOfferingsFetchPolicy,
+    ): AppActorOfferings {
         val currentRuntime = requireConfiguredRuntime()
         awaitStartupIfNeeded(currentRuntime)
-        return currentRuntime.offeringsManager.getOfferings(forceRefresh = forceRefresh).also {
+        return currentRuntime.offeringsManager.getOfferings(fetchPolicy = fetchPolicy).also {
             persistOfferingsSource(
                 runtimeSessionId = currentRuntime.sessionId,
                 source = currentRuntime.offeringsManager.lastLoadSource(),
             )
+        }
+    }
+
+    internal suspend fun offerings(forceRefresh: Boolean = false): AppActorOfferings {
+        return if (forceRefresh) {
+            requireConfiguredRuntime().let { currentRuntime ->
+                awaitStartupIfNeeded(currentRuntime)
+                currentRuntime.offeringsManager.getOfferings(forceRefresh = true).also {
+                    persistOfferingsSource(
+                        runtimeSessionId = currentRuntime.sessionId,
+                        source = currentRuntime.offeringsManager.lastLoadSource(),
+                    )
+                }
+            }
+        } else {
+            offerings(fetchPolicy = AppActorOfferingsFetchPolicy.ReturnCachedThenRefresh)
         }
     }
 
@@ -635,10 +660,11 @@ public object AppActor {
                     managementUrl = baseCustomer.managementUrl,
                     isComputedOffline = true,
                     productEntitlements = baseCustomer.productEntitlements,
-                    verification = AppActorVerificationResult.NotRequested,
+                    verification = AppActorVerificationResult.VerifiedOnDevice,
                 ) to AppActorDiagnosticsDataSource.Offline
             }
 
+            confirmReceiptPipelineIdentityIfCurrent(snapshot, info.appUserId ?: snapshot.appUserId)
             if (persistCustomerInfoIfCurrent(snapshot, info)) {
                 publishCustomerInfoIfCurrent(snapshot, info, source)
             }
@@ -731,11 +757,22 @@ public object AppActor {
         return result
     }
 
+    @Deprecated(
+        message = "Prefer AppActor.purchase(activity, appActorPackage). " +
+            "AppActorPurchaseParams is only for explicit direct Play Store targets.",
+    )
     public suspend fun purchase(
         activity: Activity,
         params: AppActorPurchaseParams,
     ): AppActorPurchaseResult {
-        return purchase(activity, params.toAppActorPackage())
+        val snapshot = captureOperationSnapshot(resolveAppUserId = true)
+        val result = snapshot.runtime.paymentProcessor.purchase(
+            activity = activity,
+            params = params,
+            appUserIdOverride = snapshot.appUserId,
+        )
+        handlePurchaseResult(snapshot, result)
+        return result
     }
 
     public suspend fun restorePurchases(): AppActorCustomerInfo {
@@ -743,6 +780,7 @@ public object AppActor {
             val info = snapshot.runtime.paymentProcessor.restorePurchases(
                 appUserIdOverride = snapshot.appUserId,
             )
+            confirmReceiptPipelineIdentityIfCurrent(snapshot, info.appUserId ?: snapshot.appUserId)
             if (persistCustomerInfoIfCurrent(snapshot, info)) {
                 publishCustomerInfoIfCurrent(snapshot, info, AppActorDiagnosticsDataSource.Network)
             }
@@ -757,6 +795,7 @@ public object AppActor {
                 appUserId = resolveFollowUpAppUserId(snapshot, drained),
                 persistIdentityState = false,
             )
+            confirmReceiptPipelineIdentityIfCurrent(snapshot, info.appUserId ?: snapshot.appUserId)
             if (persistCustomerInfoIfCurrent(snapshot, info)) {
                 publishCustomerInfoIfCurrent(
                     snapshot = snapshot,
@@ -777,6 +816,7 @@ public object AppActor {
                 appUserId = resolveFollowUpAppUserId(snapshot, synced),
                 persistIdentityState = false,
             )
+            confirmReceiptPipelineIdentityIfCurrent(snapshot, info.appUserId ?: snapshot.appUserId)
             if (persistCustomerInfoIfCurrent(snapshot, info)) {
                 publishCustomerInfoIfCurrent(
                     snapshot = snapshot,
@@ -877,6 +917,7 @@ public object AppActor {
                 appUserId = snapshot.appUserId,
                 persistIdentityState = false,
             )
+            confirmReceiptPipelineIdentityIfCurrent(snapshot, info.appUserId ?: snapshot.appUserId)
             if (persistCustomerInfoIfCurrent(snapshot, info)) {
                 publishCustomerInfoIfCurrent(
                     snapshot = snapshot,
@@ -897,6 +938,12 @@ public object AppActor {
         result: AppActorPurchaseResult,
     ) {
         if (result is AppActorPurchaseResult.Success) {
+            if (!result.customerInfo.isComputedOffline) {
+                confirmReceiptPipelineIdentityIfCurrent(
+                    snapshot,
+                    result.customerInfo.appUserId ?: snapshot.appUserId,
+                )
+            }
             if (persistCustomerInfoIfCurrent(snapshot, result.customerInfo)) {
                 publishCustomerInfoIfCurrent(
                     snapshot = snapshot,
@@ -915,6 +962,17 @@ public object AppActor {
             ?.takeIf { it.isNotBlank() }
             ?: snapshot.runtime.identityStore.currentAppUserId
             ?: snapshot.appUserId
+    }
+
+    private fun confirmReceiptPipelineIdentityIfCurrent(
+        snapshot: AppActorOperationSnapshot,
+        appUserId: String,
+    ) {
+        val currentRuntime = currentRuntimeSnapshot() ?: return
+        if (currentRuntime.sessionId != snapshot.runtime.sessionId) {
+            return
+        }
+        currentRuntime.paymentProcessor.confirmIdentity(appUserId)
     }
 
     private fun publishCustomerInfoLocked(
@@ -1259,6 +1317,7 @@ private fun Throwable.toPublicAppActorError(
         is AppActorBackendException.CustomerNotFound -> AppActorError.CustomerNotFound(
             appUserId = appUserId,
             description = message ?: defaultMessage,
+            requestId = requestId,
         )
         is AppActorBackendException.Http -> {
             if (statusCode >= 500 || statusCode == 429) {

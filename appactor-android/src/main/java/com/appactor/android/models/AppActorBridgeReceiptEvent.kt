@@ -14,6 +14,7 @@ public data class AppActorBridgeReceiptEvent(
 ) {
     public companion object {
         public const val TYPE_POSTED_OK: String = "POSTED_OK"
+        public const val TYPE_DEFERRED_WAITING_FOR_IDENTITY: String = "DEFERRED_WAITING_FOR_IDENTITY"
         public const val TYPE_RETRY_SCHEDULED: String = "RETRY_SCHEDULED"
         public const val TYPE_PERMANENTLY_REJECTED: String = "PERMANENTLY_REJECTED"
         public const val TYPE_DEAD_LETTERED: String = "DEAD_LETTERED"
@@ -29,6 +30,13 @@ public fun AppActorReceiptPipelineEvent.toBridgeEvent(): AppActorBridgeReceiptEv
         is AppActorReceiptPipelineEvent.PostedOk -> AppActorBridgeReceiptEvent(
             type = AppActorBridgeReceiptEvent.TYPE_POSTED_OK,
             transactionId = orderId,
+            productId = productId,
+            appUserId = appUserId,
+        )
+
+        is AppActorReceiptPipelineEvent.DeferredWaitingForIdentity -> AppActorBridgeReceiptEvent(
+            type = AppActorBridgeReceiptEvent.TYPE_DEFERRED_WAITING_FOR_IDENTITY,
+            transactionId = transactionId ?: orderId,
             productId = productId,
             appUserId = appUserId,
         )

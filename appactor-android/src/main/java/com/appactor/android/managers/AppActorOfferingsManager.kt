@@ -11,10 +11,13 @@ import com.appactor.android.backend.dto.AppActorProductReferenceDTO
 import com.appactor.android.billing.AppActorStoreAdapter
 import com.appactor.android.billing.AppActorStoreProduct
 import com.appactor.android.billing.AppActorStoreProductRequest
+import com.appactor.android.cache.AppActorOfflineProductCatalog
+import com.appactor.android.cache.AppActorOfflineProductCatalogStore
 import com.appactor.android.cache.AppActorOfferingsCacheStore
 import com.appactor.android.internal.logging.AppActorLogger
 import com.appactor.android.models.AppActorDiagnosticsDataSource
 import com.appactor.android.models.AppActorError
+import com.appactor.android.models.AppActorOfferingsFetchPolicy
 import com.appactor.android.models.AppActorVerificationResult
 import com.appactor.android.models.AppActorMetadata
 import com.appactor.android.models.AppActorOffering
@@ -43,6 +46,7 @@ import java.util.Locale
 internal class AppActorOfferingsManager(
     private val backendClient: AppActorBackendClient,
     private val cacheStore: AppActorOfferingsCacheStore,
+    private val offlineProductCatalogStore: AppActorOfflineProductCatalogStore,
     private val storeAdapter: AppActorStoreAdapter,
     private val backgroundScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
     private val dateProviderMillis: () -> Long = { System.currentTimeMillis() },
@@ -62,26 +66,71 @@ internal class AppActorOfferingsManager(
     @Volatile
     private var fallbackDTO: AppActorOfferingsEnvelopeDTO? = null
 
-    suspend fun getOfferings(forceRefresh: Boolean = false): AppActorOfferings {
+    suspend fun getOfferings(
+        fetchPolicy: AppActorOfferingsFetchPolicy = AppActorOfferingsFetchPolicy.FreshIfStale,
+    ): AppActorOfferings {
         // Phase 1: Check state under lock, capture what to do, release lock immediately
         val action = stateMutex.withLock {
             // Fresh cache → return immediately
-            if (!forceRefresh && isMemoryCacheFreshLocked()) {
+            if (isMemoryCacheFreshLocked()) {
                 lastLoadSource = AppActorDiagnosticsDataSource.Cache
                 return requireNotNull(cachedOfferings)
             }
 
-            // SWR: stale cache exists → return it immediately, trigger background refresh
-            if (!forceRefresh) {
-                cachedOfferings?.let { stale ->
-                    lastLoadSource = AppActorDiagnosticsDataSource.Cache
-                    if (inFlight == null) {
-                        val request = CompletableDeferred<AppActorOfferings>()
-                        inFlight = request
-                        launchBackgroundRefresh(request, cacheGeneration)
+            when (fetchPolicy) {
+                AppActorOfferingsFetchPolicy.ReturnCachedThenRefresh -> {
+                    suitableInMemoryCacheLocked()?.let { stale ->
+                        lastLoadSource = AppActorDiagnosticsDataSource.Cache
+                        if (inFlight == null) {
+                            val request = CompletableDeferred<AppActorOfferings>()
+                            inFlight = request
+                            launchBackgroundRefresh(request, cacheGeneration)
+                        }
+                        return stale
                     }
-                    return stale
+
+                    loadCachedPayloadForImmediateReturnLocked()
+                        ?.let { cachedValue ->
+                            val refreshRequest = if (inFlight == null) {
+                                CompletableDeferred<AppActorOfferings>().also { request ->
+                                    inFlight = request
+                                }
+                            } else {
+                                null
+                            }
+                            return@withLock OfferingsAction.ReturnCachedPayload(
+                                payload = cachedValue.payload,
+                                cachedAtMillis = cachedValue.cachedAtMillis,
+                                verification = cachedValue.verification,
+                                generation = cacheGeneration,
+                                triggerBackgroundRefresh = true,
+                                refreshRequest = refreshRequest,
+                            )
+                        }
+                    }
+
+                AppActorOfferingsFetchPolicy.CacheOnly -> {
+                    suitableInMemoryCacheLocked()?.let { cached ->
+                        lastLoadSource = AppActorDiagnosticsDataSource.Cache
+                        return cached
+                    }
+
+                    loadCachedPayloadForImmediateReturnLocked()
+                        ?.let { cachedValue ->
+                            return@withLock OfferingsAction.ReturnCachedPayload(
+                                payload = cachedValue.payload,
+                                cachedAtMillis = cachedValue.cachedAtMillis,
+                                verification = cachedValue.verification,
+                                generation = cacheGeneration,
+                                triggerBackgroundRefresh = false,
+                                refreshRequest = null,
+                            )
+                        }
+
+                    throw AppActorError.InvalidConfiguration("Offerings cache miss.")
                 }
+
+                AppActorOfferingsFetchPolicy.FreshIfStale -> Unit
             }
 
             // Cold cache — decide action WITHOUT awaiting under lock
@@ -97,8 +146,56 @@ internal class AppActorOfferingsManager(
         // Phase 2: Execute action WITHOUT holding the lock
         return when (action) {
             is OfferingsAction.Await -> action.deferred.await()
-            is OfferingsAction.Execute -> executeFetch(action.request, action.generation, forceRefresh)
+            is OfferingsAction.Execute -> executeFetch(action.request, action.generation, forceRefresh = false)
+            is OfferingsAction.ReturnCachedPayload -> {
+                val offerings = decodeAndEnrich(
+                    payload = action.payload,
+                    cachedAtMillis = action.cachedAtMillis,
+                    generation = action.generation,
+                    source = AppActorDiagnosticsDataSource.Cache,
+                    verification = action.verification,
+                )
+                if (action.triggerBackgroundRefresh && action.refreshRequest != null) {
+                    launchBackgroundRefresh(action.refreshRequest, action.generation)
+                }
+                offerings
+            }
         }
+    }
+
+    suspend fun getOfferings(forceRefresh: Boolean): AppActorOfferings {
+        if (forceRefresh) {
+            return executeFetchOrAwait(forceRefresh = true)
+        }
+        return getOfferings(fetchPolicy = AppActorOfferingsFetchPolicy.ReturnCachedThenRefresh)
+    }
+
+    private suspend fun executeFetchOrAwait(forceRefresh: Boolean): AppActorOfferings {
+        val action = stateMutex.withLock {
+            inFlight?.let { existing ->
+                return@withLock OfferingsAction.Await(existing)
+            }
+            val request = CompletableDeferred<AppActorOfferings>()
+            inFlight = request
+            OfferingsAction.Execute(request, cacheGeneration)
+        }
+        return when (action) {
+            is OfferingsAction.Await -> action.deferred.await()
+            is OfferingsAction.Execute -> executeFetch(action.request, action.generation, forceRefresh)
+            is OfferingsAction.ReturnCachedPayload -> decodeAndEnrich(
+                payload = action.payload,
+                cachedAtMillis = action.cachedAtMillis,
+                generation = action.generation,
+                source = AppActorDiagnosticsDataSource.Cache,
+                verification = action.verification,
+            )
+        }
+    }
+
+    private fun loadCachedPayloadForImmediateReturnLocked(): com.appactor.android.cache.AppActorCachedValue? {
+        val cachedValue = cacheStore.loadLocaleCompatible(currentLocales()) ?: return null
+        if (cachedValue.cachedAtMillis <= 0L) return null
+        return cachedValue
     }
 
     fun cached(): AppActorOfferings? = cachedOfferings
@@ -120,6 +217,7 @@ internal class AppActorOfferingsManager(
             lastLoadSource = null
         }
         cacheStore.clear()
+        offlineProductCatalogStore.clear()
     }
 
     fun setFallbackOfferings(dto: AppActorOfferingsEnvelopeDTO) {
@@ -128,13 +226,39 @@ internal class AppActorOfferingsManager(
 
     fun currentProductEntitlements(): Map<String, List<String>> {
         cachedOfferings?.productEntitlements?.takeIf { it.isNotEmpty() }?.let { return it }
-        val payload = cacheStore.load()?.payload ?: return emptyMap()
+        cachedPayloadOfflineProductCatalog()
+            ?.productEntitlements
+            ?.takeIf { it.isNotEmpty() }
+            ?.let { return it }
+        offlineProductCatalogStore.load()
+            ?.productEntitlements
+            ?.takeIf { it.isNotEmpty() }
+            ?.let { return it }
+        return emptyMap()
+    }
+
+    fun currentOneTimeProductType(productId: String): AppActorProductType? {
+        if (productId.isBlank()) return null
+        cachedOfferings
+            ?.toOfflineProductCatalog()
+            ?.oneTimeProductType(productId)
+            ?.let { return it }
+        cachedPayloadOfflineProductCatalog()
+            ?.oneTimeProductType(productId)
+            ?.let { return it }
+        offlineProductCatalogStore.load()
+            ?.oneTimeProductType(productId)
+            ?.let { return it }
+        return null
+    }
+
+    private fun cachedPayloadOfflineProductCatalog(): AppActorOfflineProductCatalog? {
+        val payload = cacheStore.load()?.payload ?: return null
         return runCatching {
             AppActorBackendJson.instance
                 .decodeFromString<AppActorOfferingsEnvelopeDTO>(payload)
-                .data
-                .productEntitlements
-        }.getOrDefault(emptyMap())
+                .toOfflineProductCatalog()
+        }.getOrNull()
     }
 
     // MARK: - Internal
@@ -161,14 +285,18 @@ internal class AppActorOfferingsManager(
     }
 
     private suspend fun fetchOfferings(forceRefresh: Boolean, generation: Long): AppActorOfferings {
+        val requestLocales = currentLocales()
         return try {
             val response = backendClient.getOfferings(
-                eTag = cacheStore.eTag(forceRefresh = forceRefresh),
+                eTag = cacheStore.eTag(forceRefresh = forceRefresh, currentLocales = requestLocales),
             )
             when {
                 response.isNotModified -> {
                     cached()?.takeIf { !forceRefresh } ?: run {
-                        val cachedValue = cacheStore.handleNotModified(response.eTag) ?: cacheStore.load()
+                        val cachedValue = cacheStore.handleNotModified(
+                            rotatedETag = response.eTag,
+                            currentLocales = requestLocales,
+                        ) ?: cacheStore.loadLocaleCompatible(requestLocales)
                         val decoded = cachedValue?.let {
                             try {
                                 decodeAndEnrich(it.payload, it.cachedAtMillis, generation, AppActorDiagnosticsDataSource.Cache, it.verification)
@@ -200,6 +328,7 @@ internal class AppActorOfferingsManager(
                         payload = payload,
                         eTag = response.eTag,
                         verified = response.signatureVerified,
+                        preferredLocales = requestLocales,
                     )
                     val verification = AppActorVerificationResult.from(response.signatureVerified)
                     decodeAndEnrich(payload, dateProviderMillis(), generation, AppActorDiagnosticsDataSource.Network, verification)
@@ -210,7 +339,7 @@ internal class AppActorOfferingsManager(
                 throw throwable.toAppActorError("Failed to fetch offerings.")
             }
             // Fallback chain: disk cache → bundled fallback DTO → throw
-            val cachedValue = cacheStore.load()
+            val cachedValue = cacheStore.loadLocaleCompatible(requestLocales)
             val diskOfferings = if (cachedValue != null) {
                 try {
                     decodeAndEnrich(cachedValue.payload, cachedValue.cachedAtMillis, generation, AppActorDiagnosticsDataSource.Cache, cachedValue.verification)
@@ -239,6 +368,10 @@ internal class AppActorOfferingsManager(
         val ttl = if (isBackground) BACKGROUND_TTL_MILLIS else FOREGROUND_TTL_MILLIS
         if (dateProviderMillis() - cachedAt >= ttl) return false
         return cachedLocales == currentLocales()
+    }
+
+    private fun suitableInMemoryCacheLocked(): AppActorOfferings? {
+        return cachedOfferings?.takeIf { cachedLocales == currentLocales() }
     }
 
     private fun currentLocales(): List<String> =
@@ -283,6 +416,7 @@ internal class AppActorOfferingsManager(
         val offerings = enrich(dto).copy(verification = verification)
         stateMutex.withLock {
             if (cacheGeneration == generation) {
+                offlineProductCatalogStore.save(offerings.toOfflineProductCatalog())
                 cachedOfferings = offerings
                 this.cachedAtMillis = cachedAtMillis
                 cachedLocales = currentLocales()
@@ -414,7 +548,6 @@ internal class AppActorOfferingsManager(
             store = AppActorStore.PlayStore,
             productId = productRef.productId,
             storeProductId = productRef.storeProductId ?: productRef.productId,
-            serverId = productRef.id,
             productType = resolved.productType,
             basePlanId = resolved.basePlanId,
             offerId = resolved.offerId,
@@ -521,10 +654,91 @@ internal class AppActorOfferingsManager(
     private sealed interface OfferingsAction {
         data class Await(val deferred: CompletableDeferred<AppActorOfferings>) : OfferingsAction
         data class Execute(val request: CompletableDeferred<AppActorOfferings>, val generation: Long) : OfferingsAction
+        data class ReturnCachedPayload(
+            val payload: String,
+            val cachedAtMillis: Long,
+            val verification: AppActorVerificationResult,
+            val generation: Long,
+            val triggerBackgroundRefresh: Boolean,
+            val refreshRequest: CompletableDeferred<AppActorOfferings>?,
+        ) : OfferingsAction
     }
 
     private companion object {
         const val FOREGROUND_TTL_MILLIS: Long = 5 * 60 * 1_000
         const val BACKGROUND_TTL_MILLIS: Long = 24 * 60 * 60 * 1_000
     }
+}
+
+private fun AppActorOfferings.toOfflineProductCatalog(): AppActorOfflineProductCatalog {
+    val oneTimeProductKinds = all.values
+        .asSequence()
+        .flatMap { offering -> offering.packages.asSequence() }
+        .filter { appActorPackage ->
+            appActorPackage.store == AppActorStore.PlayStore &&
+                (appActorPackage.productType == AppActorProductType.Consumable ||
+                    appActorPackage.productType == AppActorProductType.NonConsumable)
+        }
+        .groupBy { appActorPackage -> AppActorOfflineProductCatalog.oneTimeKey(appActorPackage.productId) }
+        .mapNotNull { (key, packages) ->
+            packages.map { it.productType }.distinct().singleOrNull()?.wireValue?.let { key to it }
+        }
+        .toMap(linkedMapOf())
+
+    return AppActorOfflineProductCatalog(
+        productEntitlements = productEntitlements,
+        oneTimeProductKinds = oneTimeProductKinds,
+    )
+}
+
+private fun AppActorOfferingsEnvelopeDTO.toOfflineProductCatalog(): AppActorOfflineProductCatalog {
+    val sourceOfferings = linkedMapOf<String, AppActorOfferingDTO>().apply {
+        data.offerings.forEach { offering -> put(offering.id, offering) }
+        data.currentOffering?.let { offering -> put(offering.id, offering) }
+    }.values.toList()
+
+    val oneTimeProductKinds = sourceOfferings
+        .asSequence()
+        .flatMap { offering ->
+            offering.packages.asSequence().flatMap { packageDTO ->
+                packageDTO.products
+                    .asSequence()
+                    .filter { productRef -> AppActorStore.fromWireValue(productRef.store) == AppActorStore.PlayStore }
+                    .map { productRef -> productRef to packageDTO.packageType }
+            }
+        }
+        .mapNotNull { (productRef, packageType) ->
+            val packageKind = AppActorPackageType.fromServerValue(packageType)
+            val productType = when {
+                !productRef.basePlanId.isNullOrBlank() || !productRef.offerId.isNullOrBlank() -> {
+                    AppActorProductType.Subscription
+                }
+                packageKind == AppActorPackageType.Weekly ||
+                    packageKind == AppActorPackageType.Monthly ||
+                    packageKind == AppActorPackageType.TwoMonth ||
+                    packageKind == AppActorPackageType.ThreeMonth ||
+                    packageKind == AppActorPackageType.SixMonth ||
+                    packageKind == AppActorPackageType.Annual -> AppActorProductType.Subscription
+                packageKind == AppActorPackageType.Lifetime -> AppActorProductType.NonConsumable
+                packageKind == AppActorPackageType.Consumable -> AppActorProductType.Consumable
+                else -> AppActorProductType.fromWireValue(productRef.productType)
+            }
+            if (productType == AppActorProductType.Consumable ||
+                productType == AppActorProductType.NonConsumable
+            ) {
+                AppActorOfflineProductCatalog.oneTimeKey(productRef.productId) to productType.wireValue
+            } else {
+                null
+            }
+        }
+        .groupBy(keySelector = { it.first }, valueTransform = { it.second })
+        .mapNotNull { (key, types) ->
+            types.distinct().singleOrNull()?.let { key to it }
+        }
+        .toMap(linkedMapOf())
+
+    return AppActorOfflineProductCatalog(
+        productEntitlements = data.productEntitlements,
+        oneTimeProductKinds = oneTimeProductKinds,
+    )
 }

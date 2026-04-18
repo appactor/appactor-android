@@ -6,6 +6,7 @@ internal sealed class AppActorCacheResource(
     val cacheKey: String,
 ) {
     data object Offerings : AppActorCacheResource("offerings")
+    data object OfflineProductCatalog : AppActorCacheResource("offline_product_catalog")
     data class RemoteConfigs(
         val appUserId: String,
     ) : AppActorCacheResource("remote_configs_${hash(appUserId)}")

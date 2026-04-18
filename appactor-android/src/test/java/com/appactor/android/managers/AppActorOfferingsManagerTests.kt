@@ -10,14 +10,20 @@ import com.appactor.android.backend.dto.AppActorOfferingsPayloadDTO
 import com.appactor.android.billing.AppActorStoreAdapter
 import com.appactor.android.billing.AppActorStoreProduct
 import com.appactor.android.billing.AppActorStoreProductRequest
+import com.appactor.android.cache.AppActorCacheResource
 import com.appactor.android.cache.AppActorCacheDiskStore
 import com.appactor.android.cache.AppActorETagManager
+import com.appactor.android.cache.AppActorOfflineProductCatalog
 import com.appactor.android.cache.AppActorOfferingsCacheStore
 import com.appactor.android.models.AppActorError
+import com.appactor.android.models.AppActorOfferingsFetchPolicy
 import com.appactor.android.models.AppActorProductType
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -27,6 +33,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import java.io.File
+import java.util.Locale
 import java.util.UUID
 
 @RunWith(RobolectricTestRunner::class)
@@ -48,6 +55,7 @@ class AppActorOfferingsManagerTests {
         val manager = AppActorOfferingsManager(
             backendClient = mockClient,
             cacheStore = offeringsCacheStore("offerings-enrich"),
+            offlineProductCatalogStore = offlineProductCatalogStore("offerings-enrich"),
             storeAdapter = mockStoreAdapter,
         )
 
@@ -70,6 +78,7 @@ class AppActorOfferingsManagerTests {
         val manager = AppActorOfferingsManager(
             backendClient = mockClient,
             cacheStore = offeringsCacheStore("offerings-filter"),
+            offlineProductCatalogStore = offlineProductCatalogStore("offerings-filter"),
             storeAdapter = mockStoreAdapter,
         )
 
@@ -95,6 +104,7 @@ class AppActorOfferingsManagerTests {
         val manager = AppActorOfferingsManager(
             backendClient = mockClient,
             cacheStore = offeringsCacheStore("offerings-partial-success"),
+            offlineProductCatalogStore = offlineProductCatalogStore("offerings-partial-success"),
             storeAdapter = mockStoreAdapter,
         )
 
@@ -139,6 +149,7 @@ class AppActorOfferingsManagerTests {
         val manager = AppActorOfferingsManager(
             backendClient = mockClient,
             cacheStore = offeringsCacheStore("offerings-no-play-products"),
+            offlineProductCatalogStore = offlineProductCatalogStore("offerings-no-play-products"),
             storeAdapter = mockStoreAdapter,
         )
 
@@ -191,6 +202,7 @@ class AppActorOfferingsManagerTests {
         val manager = AppActorOfferingsManager(
             backendClient = mockClient,
             cacheStore = cacheStore,
+            offlineProductCatalogStore = offlineProductCatalogStore("offerings-304"),
             storeAdapter = mockStoreAdapter,
         )
 
@@ -240,6 +252,7 @@ class AppActorOfferingsManagerTests {
         val manager = AppActorOfferingsManager(
             backendClient = mockClient,
             cacheStore = offeringsCacheStore("offerings-current-only"),
+            offlineProductCatalogStore = offlineProductCatalogStore("offerings-current-only"),
             storeAdapter = mockStoreAdapter,
         )
 
@@ -294,6 +307,7 @@ class AppActorOfferingsManagerTests {
         val manager = AppActorOfferingsManager(
             backendClient = mockClient,
             cacheStore = offeringsCacheStore("offerings-mixed-store"),
+            offlineProductCatalogStore = offlineProductCatalogStore("offerings-mixed-store"),
             storeAdapter = mockStoreAdapter,
         )
 
@@ -318,6 +332,7 @@ class AppActorOfferingsManagerTests {
         val manager = AppActorOfferingsManager(
             backendClient = mockClient,
             cacheStore = offeringsCacheStore("offerings-background-ttl"),
+            offlineProductCatalogStore = offlineProductCatalogStore("offerings-background-ttl"),
             storeAdapter = mockStoreAdapter,
             dateProviderMillis = { now },
         )
@@ -349,12 +364,305 @@ class AppActorOfferingsManagerTests {
         val manager = AppActorOfferingsManager(
             backendClient = mockClient,
             cacheStore = cacheStore,
+            offlineProductCatalogStore = offlineProductCatalogStore("offerings-no-fallback"),
             storeAdapter = mockStoreAdapter,
         )
 
         val error = runCatching { manager.getOfferings() }.exceptionOrNull()
 
         assertTrue(error is com.appactor.android.models.AppActorError.Unknown)
+    }
+
+    @Test
+    fun `cache only rejects disk offerings cache when locale metadata mismatches current locale`() = runBlocking {
+        val originalLocale = Locale.getDefault()
+        try {
+            Locale.setDefault(Locale.forLanguageTag("en-US"))
+            val cacheStore = offeringsCacheStore("offerings-cache-only-locale-mismatch")
+            cacheStore.save(
+                payload = AppActorBackendJson.instance.encodeToString(fixtureOfferings()),
+                eTag = "\"etag_123\"",
+                verified = true,
+                preferredLocales = listOf("en-US"),
+            )
+            val mockClient = mockk<AppActorBackendClient>(relaxed = true)
+            val manager = AppActorOfferingsManager(
+                backendClient = mockClient,
+                cacheStore = cacheStore,
+                offlineProductCatalogStore = offlineProductCatalogStore("offerings-cache-only-locale-mismatch"),
+                storeAdapter = mockk(relaxed = true),
+            )
+
+            Locale.setDefault(Locale.forLanguageTag("tr-TR"))
+            val error = runCatching {
+                manager.getOfferings(fetchPolicy = AppActorOfferingsFetchPolicy.CacheOnly)
+            }.exceptionOrNull()
+
+            assertTrue(error is AppActorError.InvalidConfiguration)
+            assertEquals("Offerings cache miss.", error?.message)
+            coVerify(exactly = 0) { mockClient.getOfferings(any()) }
+        } finally {
+            Locale.setDefault(originalLocale)
+        }
+    }
+
+    @Test
+    fun `cache only serves legacy raw offerings cache during locale safe upgrade path`() = runBlocking {
+        val directory = File(context.cacheDir, "tests/offerings-cache-only-legacy-${UUID.randomUUID()}").apply {
+            mkdirs()
+        }
+        val diskStore = AppActorCacheDiskStore(context, directory)
+        val eTagManager = AppActorETagManager(diskStore = diskStore, responseVerificationEnabled = false)
+        eTagManager.storeFresh(
+            resource = AppActorCacheResource.Offerings,
+            payload = AppActorBackendJson.instance.encodeToString(fixtureOfferings()),
+            eTag = "\"etag_legacy\"",
+            verified = true,
+        )
+        val cacheStore = AppActorOfferingsCacheStore(eTagManager)
+        val mockClient = mockk<AppActorBackendClient>(relaxed = true)
+        val mockStoreAdapter = mockk<AppActorStoreAdapter>(relaxed = true)
+        coEvery { mockStoreAdapter.queryProductDetails(any()) } answers {
+            val requests = firstArg<List<AppActorStoreProductRequest>>()
+            requests.mapNotNull { request -> pricedProducts()[requestKey(request)] }
+        }
+        val manager = AppActorOfferingsManager(
+            backendClient = mockClient,
+            cacheStore = cacheStore,
+            offlineProductCatalogStore = offlineProductCatalogStore("offerings-cache-only-legacy"),
+            storeAdapter = mockStoreAdapter,
+        )
+
+        val offerings = manager.getOfferings(fetchPolicy = AppActorOfferingsFetchPolicy.CacheOnly)
+
+        assertNotNull(offerings.current)
+        assertEquals("off_main_android", offerings.current?.id)
+        coVerify(exactly = 0) { mockClient.getOfferings(any()) }
+    }
+
+    @Test
+    fun `cache only rejects locale mismatched warm memory cache`() = runBlocking {
+        val originalLocale = Locale.getDefault()
+        try {
+            Locale.setDefault(Locale.forLanguageTag("en-US"))
+            val dto = fixtureOfferings()
+            val mockClient = mockk<AppActorBackendClient>(relaxed = true)
+            coEvery { mockClient.getOfferings(any()) } returns freshOfferingsResponse(dto)
+            val mockStoreAdapter = mockk<AppActorStoreAdapter>(relaxed = true)
+            coEvery { mockStoreAdapter.queryProductDetails(any()) } answers {
+                val requests = firstArg<List<AppActorStoreProductRequest>>()
+                requests.mapNotNull { request -> pricedProducts()[requestKey(request)] }
+            }
+            val manager = AppActorOfferingsManager(
+                backendClient = mockClient,
+                cacheStore = offeringsCacheStore("offerings-memory-cache-only-locale-mismatch"),
+                offlineProductCatalogStore = offlineProductCatalogStore("offerings-memory-cache-only-locale-mismatch"),
+                storeAdapter = mockStoreAdapter,
+            )
+
+            manager.getOfferings()
+
+            Locale.setDefault(Locale.forLanguageTag("tr-TR"))
+            val error = runCatching {
+                manager.getOfferings(fetchPolicy = AppActorOfferingsFetchPolicy.CacheOnly)
+            }.exceptionOrNull()
+
+            assertTrue(error is AppActorError.InvalidConfiguration)
+            assertEquals("Offerings cache miss.", error?.message)
+            coVerify(exactly = 1) { mockClient.getOfferings(any()) }
+        } finally {
+            Locale.setDefault(originalLocale)
+        }
+    }
+
+    @Test
+    fun `locale mismatched disk cache does not participate in refresh etag flow`() = runBlocking {
+        val originalLocale = Locale.getDefault()
+        try {
+            Locale.setDefault(Locale.forLanguageTag("en-US"))
+            val dto = fixtureOfferings()
+            val cacheStore = offeringsCacheStore("offerings-refresh-locale-mismatch")
+            cacheStore.save(
+                payload = AppActorBackendJson.instance.encodeToString(dto),
+                eTag = "\"etag_123\"",
+                verified = true,
+                preferredLocales = listOf("en-US"),
+            )
+            val mockClient = mockk<AppActorBackendClient>(relaxed = true)
+            coEvery { mockClient.getOfferings(any()) } returns freshOfferingsResponse(dto)
+            val mockStoreAdapter = mockk<AppActorStoreAdapter>(relaxed = true)
+            coEvery { mockStoreAdapter.queryProductDetails(any()) } answers {
+                val requests = firstArg<List<AppActorStoreProductRequest>>()
+                requests.mapNotNull { request -> pricedProducts()[requestKey(request)] }
+            }
+            val manager = AppActorOfferingsManager(
+                backendClient = mockClient,
+                cacheStore = cacheStore,
+                offlineProductCatalogStore = offlineProductCatalogStore("offerings-refresh-locale-mismatch"),
+                storeAdapter = mockStoreAdapter,
+            )
+
+            Locale.setDefault(Locale.forLanguageTag("tr-TR"))
+            manager.getOfferings()
+
+            coVerify(exactly = 1) { mockClient.getOfferings(null) }
+        } finally {
+            Locale.setDefault(originalLocale)
+        }
+    }
+
+    @Test
+    fun `return cached then refresh does not reuse locale mismatched warm memory cache`() = runBlocking {
+        val originalLocale = Locale.getDefault()
+        try {
+            Locale.setDefault(Locale.forLanguageTag("en-US"))
+            val dto = fixtureOfferings()
+            val mockClient = mockk<AppActorBackendClient>(relaxed = true)
+            coEvery { mockClient.getOfferings(any()) } returns freshOfferingsResponse(dto)
+            val mockStoreAdapter = mockk<AppActorStoreAdapter>(relaxed = true)
+            coEvery { mockStoreAdapter.queryProductDetails(any()) } answers {
+                val requests = firstArg<List<AppActorStoreProductRequest>>()
+                requests.mapNotNull { request -> pricedProducts()[requestKey(request)] }
+            }
+            val manager = AppActorOfferingsManager(
+                backendClient = mockClient,
+                cacheStore = offeringsCacheStore("offerings-memory-refresh-locale-mismatch"),
+                offlineProductCatalogStore = offlineProductCatalogStore("offerings-memory-refresh-locale-mismatch"),
+                storeAdapter = mockStoreAdapter,
+            )
+
+            manager.getOfferings()
+
+            Locale.setDefault(Locale.forLanguageTag("tr-TR"))
+            manager.getOfferings(fetchPolicy = AppActorOfferingsFetchPolicy.ReturnCachedThenRefresh)
+
+            coVerify(exactly = 2) { mockClient.getOfferings(null) }
+        } finally {
+            Locale.setDefault(originalLocale)
+        }
+    }
+
+    @Test
+    fun `current product entitlements prefers cached offerings payload before stale offline catalog`() = runBlocking {
+        val cacheStore = offeringsCacheStore("offerings-entitlement-precedence")
+        val offlineCatalogStore = offlineProductCatalogStore("offerings-entitlement-precedence")
+        val dto = fixtureOfferings().copy(
+            data = fixtureOfferings().data.copy(
+                productEntitlements = mapOf(
+                    "android:com.appactor.pro.monthly:monthly001" to listOf("fresh_premium")
+                )
+            )
+        )
+        cacheStore.save(
+            payload = AppActorBackendJson.instance.encodeToString(dto),
+            eTag = "\"etag_123\"",
+            verified = true,
+        )
+        offlineCatalogStore.save(
+            AppActorOfflineProductCatalog(
+                productEntitlements = mapOf(
+                    "android:com.appactor.pro.monthly:monthly001" to listOf("stale_premium")
+                )
+            )
+        )
+        val manager = AppActorOfferingsManager(
+            backendClient = mockk(relaxed = true),
+            cacheStore = cacheStore,
+            offlineProductCatalogStore = offlineCatalogStore,
+            storeAdapter = mockk(relaxed = true),
+        )
+
+        val entitlements = manager.currentProductEntitlements()
+
+        assertEquals(
+            listOf("fresh_premium"),
+            entitlements["android:com.appactor.pro.monthly:monthly001"]
+        )
+    }
+
+    @Test
+    fun `current one time product type prefers cached offerings payload before stale offline catalog`() = runBlocking {
+        val cacheStore = offeringsCacheStore("offerings-one-time-type-precedence")
+        val offlineCatalogStore = offlineProductCatalogStore("offerings-one-time-type-precedence")
+        val dto = fixtureOfferings()
+        cacheStore.save(
+            payload = AppActorBackendJson.instance.encodeToString(dto),
+            eTag = "\"etag_123\"",
+            verified = true,
+        )
+        offlineCatalogStore.save(
+            AppActorOfflineProductCatalog(
+                oneTimeProductKinds = mapOf(
+                    AppActorOfflineProductCatalog.oneTimeKey("com.appactor.coins.100") to
+                        AppActorProductType.NonConsumable.wireValue
+                )
+            )
+        )
+        val manager = AppActorOfferingsManager(
+            backendClient = mockk(relaxed = true),
+            cacheStore = cacheStore,
+            offlineProductCatalogStore = offlineCatalogStore,
+            storeAdapter = mockk(relaxed = true),
+        )
+
+        val productType = manager.currentOneTimeProductType("com.appactor.coins.100")
+
+        assertEquals(AppActorProductType.Consumable, productType)
+    }
+
+    @Test
+    fun `current one time product type falls back to persisted offline catalog when offerings cache is unavailable`() = runBlocking {
+        val offlineCatalogStore = offlineProductCatalogStore("offerings-one-time-type-offline-fallback")
+        offlineCatalogStore.save(
+            AppActorOfflineProductCatalog(
+                oneTimeProductKinds = mapOf(
+                    AppActorOfflineProductCatalog.oneTimeKey("com.appactor.coins.100") to
+                        AppActorProductType.Consumable.wireValue
+                )
+            )
+        )
+        val manager = AppActorOfferingsManager(
+            backendClient = mockk(relaxed = true),
+            cacheStore = offeringsCacheStore("offerings-one-time-type-offline-fallback"),
+            offlineProductCatalogStore = offlineCatalogStore,
+            storeAdapter = mockk(relaxed = true),
+        )
+
+        val productType = manager.currentOneTimeProductType("com.appactor.coins.100")
+
+        assertEquals(AppActorProductType.Consumable, productType)
+    }
+
+    @Test
+    fun `clear cache prevents stale in flight enrich from repopulating offline product catalog`() = runBlocking {
+        val dto = fixtureOfferings()
+        val mockClient = mockk<AppActorBackendClient>(relaxed = true)
+        coEvery { mockClient.getOfferings(any()) } returns freshOfferingsResponse(dto)
+        val queryStarted = CompletableDeferred<Unit>()
+        val releaseQuery = CompletableDeferred<Unit>()
+        val mockStoreAdapter = mockk<AppActorStoreAdapter>(relaxed = true)
+        coEvery { mockStoreAdapter.queryProductDetails(any()) } coAnswers {
+            queryStarted.complete(Unit)
+            releaseQuery.await()
+            val requests = firstArg<List<AppActorStoreProductRequest>>()
+            requests.mapNotNull { request -> pricedProducts()[requestKey(request)] }
+        }
+        val offlineCatalogStore = offlineProductCatalogStore("offerings-clear-race")
+        val manager = AppActorOfferingsManager(
+            backendClient = mockClient,
+            cacheStore = offeringsCacheStore("offerings-clear-race"),
+            offlineProductCatalogStore = offlineCatalogStore,
+            storeAdapter = mockStoreAdapter,
+        )
+
+        val fetch = async(Dispatchers.Default) { manager.getOfferings() }
+        queryStarted.await()
+        manager.clearCache()
+        releaseQuery.complete(Unit)
+        fetch.await()
+
+        assertNull(offlineCatalogStore.load())
+        assertTrue(manager.currentProductEntitlements().isEmpty())
     }
 
     private fun freshOfferingsResponse(dto: AppActorOfferingsEnvelopeDTO): AppActorBackendHttpResponse<AppActorOfferingsEnvelopeDTO> {
@@ -380,6 +688,18 @@ class AppActorOfferingsManagerTests {
         directory.mkdirs()
         val diskStore = AppActorCacheDiskStore(context, directory)
         return AppActorOfferingsCacheStore(
+            AppActorETagManager(
+                diskStore = diskStore,
+                responseVerificationEnabled = false,
+            )
+        )
+    }
+
+    private fun offlineProductCatalogStore(name: String): com.appactor.android.cache.AppActorOfflineProductCatalogStore {
+        val directory = File(context.cacheDir, "tests/$name-offline-catalog-${UUID.randomUUID()}")
+        directory.mkdirs()
+        val diskStore = AppActorCacheDiskStore(context, directory)
+        return com.appactor.android.cache.AppActorOfflineProductCatalogStore(
             AppActorETagManager(
                 diskStore = diskStore,
                 responseVerificationEnabled = false,

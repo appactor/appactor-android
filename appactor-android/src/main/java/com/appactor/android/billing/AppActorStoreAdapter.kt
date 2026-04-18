@@ -26,8 +26,7 @@ internal interface AppActorStoreAdapter {
 
     fun purchaseUpdates(): Flow<List<AppActorStorePurchase>>
     suspend fun resolveDirectPurchaseRequest(
-        productId: String,
-        obfuscatedAccountId: String? = null,
+        request: AppActorStoreProductRequest,
     ): AppActorStoreProductRequest
     suspend fun queryActivePurchases(): List<AppActorStorePurchase>
     suspend fun queryPurchaseHistory(): List<AppActorStorePurchaseHistoryRecord>

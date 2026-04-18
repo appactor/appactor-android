@@ -7,6 +7,7 @@ import com.appactor.android.cache.AppActorCacheDiskStore
 import com.appactor.android.cache.AppActorCustomerCacheStore
 import com.appactor.android.cache.AppActorETagManager
 import com.appactor.android.cache.AppActorExperimentCacheStore
+import com.appactor.android.cache.AppActorOfflineProductCatalogStore
 import com.appactor.android.cache.AppActorOfferingsCacheStore
 import com.appactor.android.cache.AppActorRemoteConfigsCacheStore
 import com.appactor.android.managers.AppActorCustomerManager
@@ -56,6 +57,7 @@ internal class AppActorRuntimeFactory(
         val backendClient = AppActorHttpBackendClient(configuration)
         val storeAdapter = storeAdapterFactory(configuration.applicationContext)
         val offeringsCacheStore = AppActorOfferingsCacheStore(eTagManager)
+        val offlineProductCatalogStore = AppActorOfflineProductCatalogStore(eTagManager)
         val customerCacheStore = AppActorCustomerCacheStore(eTagManager)
         val remoteConfigsCacheStore = AppActorRemoteConfigsCacheStore(eTagManager)
         val experimentCacheStore = AppActorExperimentCacheStore(eTagManager)
@@ -63,6 +65,7 @@ internal class AppActorRuntimeFactory(
         val offeringsManager = AppActorOfferingsManager(
             backendClient = backendClient,
             cacheStore = offeringsCacheStore,
+            offlineProductCatalogStore = offlineProductCatalogStore,
             storeAdapter = storeAdapter,
             backgroundScope = scope,
         )
@@ -72,6 +75,7 @@ internal class AppActorRuntimeFactory(
             cacheStore = customerCacheStore,
             identityStore = identityStore,
             offeringsManager = offeringsManager,
+            offlineProductCatalogStore = offlineProductCatalogStore,
             storeAdapter = storeAdapter,
         )
         val remoteConfigManager = AppActorRemoteConfigManager(
@@ -100,6 +104,7 @@ internal class AppActorRuntimeFactory(
             backendClient = backendClient,
             storeAdapter = storeAdapter,
             offeringsCacheStore = offeringsCacheStore,
+            offlineProductCatalogStore = offlineProductCatalogStore,
             customerCacheStore = customerCacheStore,
             receiptQueueStore = receiptQueueStore,
             postedLedgerStore = postedLedgerStore,
@@ -114,8 +119,10 @@ internal class AppActorRuntimeFactory(
                 customerManager = customerManager,
                 identityStore = identityStore,
                 offeringsManager = offeringsManager,
+                offlineProductCatalogStore = offlineProductCatalogStore,
                 packageName = configuration.applicationContext.packageName,
                 onPipelineEvent = onPipelineEvent,
+                backgroundScope = scope,
             ),
             scope = scope,
             remoteConfigManager = remoteConfigManager,

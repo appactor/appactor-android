@@ -153,7 +153,9 @@ internal class AppActorStartupCoordinator(
             callback = host.performStartupIdentify(runtimeState)
         }
 
-        host.confirmIdentity(runtimeState)
+        if (callback != null) {
+            host.confirmIdentity(runtimeState)
+        }
 
         callback?.let { resolved ->
             host.deliverOnMain {

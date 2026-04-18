@@ -39,6 +39,12 @@ val offerings = AppActor.shared.offerings()
 // Make a purchase
 val result = AppActor.shared.purchase(activity, offerings.current?.monthly!!)
 
+// Direct store purchases are supported via AppActorPurchaseParams, but only
+// when the exact Play target is known:
+// productType is required
+// subscriptions require basePlanId
+// bare productId-only purchases are intentionally rejected
+
 // Check entitlements
 val info = AppActor.shared.getCustomerInfo()
 val isPremium = info.hasActiveEntitlement("premium")

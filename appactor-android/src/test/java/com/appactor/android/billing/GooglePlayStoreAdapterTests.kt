@@ -577,7 +577,7 @@ class GooglePlayStoreAdapterTests {
     }
 
     @Test
-    fun `resolve direct purchase request fails when subscription resolution is ambiguous`() = kotlinx.coroutines.runBlocking {
+    fun `resolve direct purchase request fails when underspecified subscription target is ambiguous`() = kotlinx.coroutines.runBlocking {
         val (billingClient, _) = createMockBillingClient(
             productDetails = listOf(
                 AppActorBillingProductDetailsPayload(
@@ -593,7 +593,12 @@ class GooglePlayStoreAdapterTests {
         val adapter = GooglePlayStoreAdapter(context, billingClient)
 
         val error = runCatching {
-            adapter.resolveDirectPurchaseRequest("com.appactor.pro.monthly")
+            adapter.resolveDirectPurchaseRequest(
+                AppActorStoreProductRequest(
+                    productId = "com.appactor.pro.monthly",
+                    productType = AppActorProductType.Unknown,
+                )
+            )
         }.exceptionOrNull()
 
         assertTrue(error is com.appactor.android.models.AppActorError.InvalidConfiguration)
@@ -613,10 +618,79 @@ class GooglePlayStoreAdapterTests {
         val adapter = GooglePlayStoreAdapter(context, billingClient)
 
         val error = runCatching {
-            adapter.resolveDirectPurchaseRequest("com.appactor.coins.100")
+            adapter.resolveDirectPurchaseRequest(
+                AppActorStoreProductRequest(
+                    productId = "com.appactor.coins.100",
+                    productType = AppActorProductType.Unknown,
+                )
+            )
         }.exceptionOrNull()
 
         assertTrue(error is com.appactor.android.models.AppActorError.InvalidConfiguration)
+    }
+
+    @Test
+    fun `resolve direct purchase request keeps explicit subscription target exact`() = kotlinx.coroutines.runBlocking {
+        val (billingClient, _) = createMockBillingClient(
+            productDetails = listOf(
+                AppActorBillingProductDetailsPayload(
+                    productId = "com.appactor.pro.monthly",
+                    productType = AppActorProductType.Subscription,
+                    subscriptionOffers = listOf(
+                        AppActorBillingSubscriptionOfferPayload(basePlanId = "monthly001", offerId = null, offerToken = "base"),
+                        AppActorBillingSubscriptionOfferPayload(basePlanId = "monthly001", offerId = "intro7d", offerToken = "intro"),
+                    ),
+                )
+            )
+        )
+        val adapter = GooglePlayStoreAdapter(context, billingClient)
+
+        val request = adapter.resolveDirectPurchaseRequest(
+            AppActorStoreProductRequest(
+                productId = "com.appactor.pro.monthly",
+                productType = AppActorProductType.Subscription,
+                basePlanId = "monthly001",
+                offerId = "intro7d",
+            )
+        )
+
+        assertEquals(AppActorProductType.Subscription, request.productType)
+        assertEquals("monthly001", request.basePlanId)
+        assertEquals("intro7d", request.offerId)
+    }
+
+    @Test
+    fun `resolve direct purchase request rejects explicit one time type that contradicts cached catalog metadata`() = kotlinx.coroutines.runBlocking {
+        val (billingClient, _) = createMockBillingClient(
+            productDetails = listOf(
+                AppActorBillingProductDetailsPayload(
+                    productId = "com.appactor.coins.100",
+                    productType = AppActorProductType.Consumable,
+                    oneTimeOffer = AppActorStorePricing(formattedPrice = "$1.99"),
+                )
+            )
+        )
+        val adapter = GooglePlayStoreAdapter(context, billingClient)
+        adapter.queryProductDetails(
+            listOf(
+                AppActorStoreProductRequest(
+                    productId = "com.appactor.coins.100",
+                    productType = AppActorProductType.Consumable,
+                )
+            )
+        )
+
+        val error = runCatching {
+            adapter.resolveDirectPurchaseRequest(
+                AppActorStoreProductRequest(
+                    productId = "com.appactor.coins.100",
+                    productType = AppActorProductType.NonConsumable,
+                )
+            )
+        }.exceptionOrNull()
+
+        assertTrue(error is com.appactor.android.models.AppActorError.InvalidConfiguration)
+        assertTrue(error?.message?.contains("Conflicting Play one-time target") == true)
     }
 
     @Test
@@ -689,6 +763,37 @@ class GooglePlayStoreAdapterTests {
                         products = listOf("com.appactor.unknown.inapp"),
                         productType = AppActorProductType.NonConsumable,
                         purchaseToken = "unknown_token",
+                        purchaseTimeMillis = 1_710_000_000_000,
+                        purchaseState = AppActorStorePurchaseState.Purchased,
+                        isAcknowledged = false,
+                    )
+                )
+            ),
+        )
+        val adapter = GooglePlayStoreAdapter(context, billingClient)
+
+        val purchases = adapter.queryActivePurchases()
+
+        assertEquals(1, purchases.size)
+        assertEquals(AppActorProductType.Unknown, purchases.single().productType)
+    }
+
+    @Test
+    fun `query active purchases keeps cold start inapp payloads unknown even when product details exist`() = kotlinx.coroutines.runBlocking {
+        val (billingClient, _) = createMockBillingClient(
+            productDetails = listOf(
+                AppActorBillingProductDetailsPayload(
+                    productId = "com.appactor.coins.100",
+                    productType = AppActorProductType.Consumable,
+                    oneTimeOffer = AppActorStorePricing(formattedPrice = "$1.99"),
+                )
+            ),
+            activePurchasesByType = mapOf(
+                AppActorProductType.NonConsumable to listOf(
+                    AppActorBillingPurchasePayload(
+                        products = listOf("com.appactor.coins.100"),
+                        productType = AppActorProductType.NonConsumable,
+                        purchaseToken = "coins_token",
                         purchaseTimeMillis = 1_710_000_000_000,
                         purchaseState = AppActorStorePurchaseState.Purchased,
                         isAcknowledged = false,

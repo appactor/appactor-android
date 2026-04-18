@@ -183,15 +183,10 @@ internal class FakeStoreAdapter(
     override fun purchaseUpdates(): Flow<List<AppActorStorePurchase>> = emptyFlow()
 
     override suspend fun resolveDirectPurchaseRequest(
-        productId: String,
-        obfuscatedAccountId: String?,
+        request: AppActorStoreProductRequest,
     ): AppActorStoreProductRequest {
         connect()
-        return AppActorStoreProductRequest(
-            productId = productId,
-            productType = com.appactor.android.models.AppActorProductType.Unknown,
-            obfuscatedAccountId = obfuscatedAccountId,
-        )
+        return request
     }
 
     override suspend fun queryActivePurchases(): List<AppActorStorePurchase> {
