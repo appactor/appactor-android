@@ -14,6 +14,7 @@ import com.appactor.android.billing.AppActorStorePurchase
 import com.appactor.android.cache.AppActorCacheDiskStore
 import com.appactor.android.cache.AppActorCustomerCacheStore
 import com.appactor.android.cache.AppActorETagManager
+import com.appactor.android.cache.AppActorOfflineProductCatalogStore
 import com.appactor.android.cache.AppActorOfferingsCacheStore
 import com.appactor.android.models.AppActorProductType
 import io.mockk.coEvery
@@ -49,6 +50,7 @@ class AppActorOfflineEntitlementManagerTests {
         val testStoreAdapter = createMockStoreAdapter(activePurchases = listOf(activePurchase))
         val manager = AppActorOfflineEntitlementManager(
             customerCacheStore = createCustomerCacheStore(),
+            offlineProductCatalogStore = createOfflineProductCatalogStore(),
             offeringsManager = offeringsManager,
             storeAdapter = testStoreAdapter,
         )
@@ -74,6 +76,7 @@ class AppActorOfflineEntitlementManagerTests {
         val mockStoreAdapter = createMockStoreAdapter()
         val manager = AppActorOfflineEntitlementManager(
             customerCacheStore = customerCacheStore,
+            offlineProductCatalogStore = createOfflineProductCatalogStore(),
             offeringsManager = offeringsManager,
             storeAdapter = mockStoreAdapter,
             dateProviderMillis = { now },
@@ -100,6 +103,7 @@ class AppActorOfflineEntitlementManagerTests {
         val mockStoreAdapter = createMockStoreAdapter()
         val manager = AppActorOfflineEntitlementManager(
             customerCacheStore = customerCacheStore,
+            offlineProductCatalogStore = createOfflineProductCatalogStore(),
             offeringsManager = offeringsManager,
             storeAdapter = mockStoreAdapter,
             dateProviderMillis = {
@@ -154,8 +158,21 @@ class AppActorOfflineEntitlementManagerTests {
                     responseVerificationEnabled = false,
                 )
             ),
+            offlineProductCatalogStore = createOfflineProductCatalogStore(),
             storeAdapter = storeAdapter,
         ).also { runBlocking { it.getOfferings(forceRefresh = true) } }
+    }
+
+    private fun createOfflineProductCatalogStore(): AppActorOfflineProductCatalogStore {
+        return AppActorOfflineProductCatalogStore(
+            AppActorETagManager(
+                diskStore = AppActorCacheDiskStore(
+                    context,
+                    File(context.cacheDir, "tests/offline-product-catalog-${UUID.randomUUID()}")
+                ),
+                responseVerificationEnabled = false,
+            )
+        )
     }
 
     private fun createCustomerCacheStore(): AppActorCustomerCacheStore {

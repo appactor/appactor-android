@@ -25,6 +25,7 @@ internal fun Throwable.toAppActorError(
         is AppActorBackendException.CustomerNotFound -> AppActorError.CustomerNotFound(
             appUserId = appUserId,
             description = message ?: defaultMessage,
+            requestId = requestId,
         )
         is AppActorBackendException.Http -> {
             if (statusCode >= 500 || statusCode == 429) {

@@ -82,7 +82,6 @@ internal fun AppActorPackageDTO.toModel(): AppActorPackage {
         store = AppActorStore.fromWireValue(selectedProduct.store),
         productId = selectedProduct.productId,
         storeProductId = selectedProduct.storeProductId ?: selectedProduct.productId,
-        serverId = selectedProduct.id,
         productType = AppActorProductType.fromWireValue(selectedProduct.productType),
         basePlanId = selectedProduct.basePlanId,
         offerId = selectedProduct.offerId,

@@ -13,6 +13,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import java.io.File
+import java.util.Locale
 import java.util.UUID
 
 @RunWith(RobolectricTestRunner::class)
@@ -38,6 +39,42 @@ class AppActorCacheStoreTests {
         assertNotNull(cached)
         assertEquals("""{"hello":"world"}""", cached?.payload)
         assertEquals("\"etag_123\"", cached?.eTag)
+    }
+
+    @Test
+    fun `offerings cache locale safe lookups reject mismatched locales`() {
+        val diskStore = AppActorCacheDiskStore(context, tempDirectory("cache-locale-safe"))
+        val manager = AppActorETagManager(diskStore = diskStore, responseVerificationEnabled = false)
+        val store = AppActorOfferingsCacheStore(manager)
+
+        store.save(
+            payload = """{"hello":"world"}""",
+            eTag = "\"etag_123\"",
+            verified = true,
+            preferredLocales = listOf("en-US"),
+        )
+
+        assertNotNull(store.loadLocaleCompatible(listOf("en-US")))
+        assertNotNull(store.eTag(currentLocales = listOf("en-US")))
+        assertNull(store.loadLocaleCompatible(listOf("tr-TR")))
+        assertNull(store.eTag(currentLocales = listOf("tr-TR")))
+    }
+
+    @Test
+    fun `legacy offerings cache payloads remain readable for locale safe lookups`() {
+        val diskStore = AppActorCacheDiskStore(context, tempDirectory("cache-locale-legacy"))
+        val manager = AppActorETagManager(diskStore = diskStore, responseVerificationEnabled = false)
+        val store = AppActorOfferingsCacheStore(manager)
+
+        manager.storeFresh(
+            resource = AppActorCacheResource.Offerings,
+            payload = """{"hello":"world"}""",
+            eTag = "\"etag_legacy\"",
+            verified = true,
+        )
+
+        assertNotNull(store.loadLocaleCompatible(listOf(Locale.getDefault().toLanguageTag())))
+        assertNotNull(store.eTag(currentLocales = listOf(Locale.getDefault().toLanguageTag())))
     }
 
     @Test

@@ -11,12 +11,12 @@ import com.appactor.android.backend.dto.AppActorGoogleRestorePurchaseDTO
 import com.appactor.android.backend.dto.AppActorGoogleRestoreRequestDTO
 import com.appactor.android.backend.dto.AppActorGoogleSyncRequestDTO
 import com.appactor.android.billing.AppActorStoreAdapter
-import com.appactor.android.billing.AppActorStoreProductRequest
 import com.appactor.android.billing.AppActorStorePurchase
 import com.appactor.android.billing.AppActorStorePurchaseLaunchResult
-import com.appactor.android.billing.toBillingReplacementMode
+import com.appactor.android.cache.AppActorOfflineProductCatalogStore
 import com.appactor.android.managers.AppActorCustomerManager
 import com.appactor.android.managers.AppActorOfferingsManager
+import com.appactor.android.models.AppActorResolvedPurchaseTarget
 import com.appactor.android.models.AppActorConfiguration
 import com.appactor.android.models.AppActorCustomerInfo
 import com.appactor.android.models.AppActorEntitlementInfo
@@ -30,9 +30,12 @@ import com.appactor.android.models.AppActorProductType
 import com.appactor.android.models.AppActorPurchaseInfo
 import com.appactor.android.models.AppActorPurchaseResult
 import com.appactor.android.models.AppActorReceiptPipelineEvent
+import com.appactor.android.models.appActorGoogleObfuscatedAccountId
 import com.appactor.android.models.AppActorSubscriptionReplacementMode
 import com.appactor.android.models.AppActorStore
 import com.appactor.android.models.AppActorSubscriptionStatus
+import com.appactor.android.models.AppActorVerificationResult
+import com.appactor.android.models.toResolvedPurchaseTarget
 import com.appactor.android.storage.AppActorIdentityStore
 import com.appactor.android.storage.AppActorAtomicJsonReceiptQueueStore
 import com.appactor.android.storage.AppActorPostedLedgerStore
@@ -40,10 +43,16 @@ import com.appactor.android.storage.AppActorReceiptQueueItem
 import com.appactor.android.storage.AppActorReceiptQueuePhase
 import com.appactor.android.storage.AppActorReceiptQueueStore
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import com.appactor.android.models.appActorPublicReceiptId
-import java.security.MessageDigest
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -58,16 +67,20 @@ internal class AppActorPaymentProcessor(
     private val customerManager: AppActorCustomerManager,
     private val identityStore: AppActorIdentityStore,
     private val offeringsManager: AppActorOfferingsManager,
+    private val offlineProductCatalogStore: AppActorOfflineProductCatalogStore,
     private val packageName: String,
     private val onPipelineEvent: (AppActorReceiptPipelineEvent) -> Unit = {},
     private val dateProviderMillis: () -> Long = { System.currentTimeMillis() },
+    private val backgroundScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
 ) {
 
     private val purchaseMutex = Mutex()
     // Keep receipt reconciliation single-flight so purchase updates, startup sync,
     // restore, and foreground drains can't race each other.
     private val pipelineMutex = Mutex()
-    private val identityGate = CompletableDeferred<Unit>()
+    private val confirmedAppUserIds = linkedSetOf<String>()
+    private var retryWakeJob: Job? = null
+    private var scheduledRetryAtMillis: Long? = null
     // Key: purchaseToken, Value: "productId|timestampMillis"
     private val pendingPurchaseTokens = java.util.concurrent.ConcurrentHashMap<String, String>()
     private val pendingPrefs = configuration.applicationContext.getSharedPreferences(
@@ -124,12 +137,22 @@ internal class AppActorPaymentProcessor(
             }
     }
 
-    fun confirmIdentity() {
-        identityGate.complete(Unit)
+    fun confirmIdentity(appUserId: String) {
+        if (appUserId.isBlank()) return
+        val inserted = confirmedAppUserIds.add(appUserId)
+        val released = queueStore.releaseWaitingForIdentity(appUserId)
+        if (inserted || released.isNotEmpty()) {
+            scheduleNextRetryWake()
+        }
     }
 
-    private suspend fun waitForIdentity() {
-        identityGate.await()
+    fun confirmIdentity() {
+        val appUserId = identityStore.currentAppUserId ?: identityStore.ensureAppUserId()
+        confirmIdentity(appUserId)
+    }
+
+    private fun isIdentityConfirmed(appUserId: String): Boolean {
+        return confirmedAppUserIds.contains(appUserId)
     }
 
     suspend fun purchase(
@@ -149,22 +172,10 @@ internal class AppActorPaymentProcessor(
                 ?.takeIf { it.isNotBlank() }
                 ?: identityStore.currentAppUserId
                 ?: identityStore.ensureAppUserId()
-            val request = AppActorStoreProductRequest(
-                productId = appActorPackage.productId,
-                productType = appActorPackage.productType,
-                basePlanId = appActorPackage.basePlanId,
-                offerId = appActorPackage.offerId,
-                obfuscatedAccountId = googleObfuscatedAccountId(appUserId),
-                oldPurchaseToken = appActorPackage.oldPurchaseToken,
-                replacementMode = appActorPackage.replacementMode?.toBillingReplacementMode(),
-            )
-            return purchaseWithRequest(
+            return purchaseWithTarget(
                 activity = activity,
-                request = request,
-                expectedPrimaryProductId = appActorPackage.productId,
+                target = appActorPackage.toResolvedPurchaseTarget(appUserId),
                 appUserIdOverride = appUserId,
-                offeringId = appActorPackage.offeringId,
-                packageId = appActorPackage.id,
             )
         } finally {
             purchaseMutex.unlock()
@@ -173,41 +184,24 @@ internal class AppActorPaymentProcessor(
 
     suspend fun purchase(
         activity: Activity,
-        productId: String,
+        params: com.appactor.android.models.AppActorPurchaseParams,
         appUserIdOverride: String? = null,
     ): AppActorPurchaseResult {
-        val appUserId = appUserIdOverride
-            ?.takeIf { it.isNotBlank() }
-            ?: identityStore.currentAppUserId
-            ?: identityStore.ensureAppUserId()
-        val offerings = runCatching {
-            offeringsManager.getOfferings(forceRefresh = false)
-        }.getOrNull()
-        val packageMatch = offerings?.all?.values
-            ?.asSequence()
-            ?.flatMap { it.packages.asSequence() }
-            ?.firstOrNull { it.productId == productId }
-
-        return if (packageMatch != null) {
-            purchase(activity, packageMatch, appUserId)
-        } else {
-            if (!purchaseMutex.tryLock()) {
-                throw AppActorError.InvalidConfiguration("Only one purchase can be in-flight at a time.")
-            }
-            try {
-                val request = storeAdapter.resolveDirectPurchaseRequest(
-                    productId = productId,
-                    obfuscatedAccountId = googleObfuscatedAccountId(appUserId),
-                )
-                purchaseWithRequest(
-                    activity = activity,
-                    request = request,
-                    expectedPrimaryProductId = productId,
-                    appUserIdOverride = appUserId,
-                )
-            } finally {
-                purchaseMutex.unlock()
-            }
+        if (!purchaseMutex.tryLock()) {
+            throw AppActorError.InvalidConfiguration("Only one purchase can be in-flight at a time.")
+        }
+        try {
+            val appUserId = appUserIdOverride
+                ?.takeIf { it.isNotBlank() }
+                ?: identityStore.currentAppUserId
+                ?: identityStore.ensureAppUserId()
+            return purchaseWithTarget(
+                activity = activity,
+                target = params.toResolvedPurchaseTarget(appUserId),
+                appUserIdOverride = appUserId,
+            )
+        } finally {
+            purchaseMutex.unlock()
         }
     }
 
@@ -237,7 +231,7 @@ internal class AppActorPaymentProcessor(
                 return processPurchaseUpdates(purchases = overflow, appUserIdOverride = identityStore.currentAppUserId ?: identityStore.ensureAppUserId())
             }
         }
-        return pipelineMutex.withLock {
+        val result = pipelineMutex.withLock {
             if (purchases.isEmpty()) return@withLock null
             val appUserId = appUserIdOverride
                 ?.takeIf { it.isNotBlank() }
@@ -261,21 +255,25 @@ internal class AppActorPaymentProcessor(
             }
             latestCustomer
         }
+        scheduleNextRetryWake()
+        return result
     }
 
-    private suspend fun purchaseWithRequest(
+    private suspend fun purchaseWithTarget(
         activity: Activity,
-        request: AppActorStoreProductRequest,
-        expectedPrimaryProductId: String,
+        target: AppActorResolvedPurchaseTarget,
         appUserIdOverride: String? = null,
-        offeringId: String? = null,
-        packageId: String? = null,
     ): AppActorPurchaseResult {
         val appUserId = appUserIdOverride
             ?.takeIf { it.isNotBlank() }
             ?: identityStore.currentAppUserId
             ?: identityStore.ensureAppUserId()
-        return when (val launchResult = storeAdapter.launchPurchase(activity, request)) {
+        val resolvedRequest = if (target.requiresStoreResolution) {
+            storeAdapter.resolveDirectPurchaseRequest(target.request)
+        } else {
+            target.request
+        }
+        return when (val launchResult = storeAdapter.launchPurchase(activity, resolvedRequest)) {
                 is AppActorStorePurchaseLaunchResult.Cancelled -> AppActorPurchaseResult.Cancelled
                 is AppActorStorePurchaseLaunchResult.Pending -> {
                     val now = dateProviderMillis()
@@ -294,10 +292,10 @@ internal class AppActorPaymentProcessor(
                 }
 
                 is AppActorStorePurchaseLaunchResult.Purchased -> {
-                    pipelineMutex.withLock {
+                    val purchaseResult = pipelineMutex.withLock {
                         val productEntitlements = ensureProductEntitlements()
                         val primaryPurchase = launchResult.purchases.firstOrNull { purchase ->
-                            purchase.productId == expectedPrimaryProductId
+                            target.matches(purchase)
                         } ?: launchResult.purchases.first()
                         var primaryOutcome: ProcessingOutcome? = null
                         launchResult.purchases.forEach { purchase ->
@@ -306,8 +304,8 @@ internal class AppActorPaymentProcessor(
                                 purchase = purchase,
                                 productEntitlements = productEntitlements,
                                 appUserIdOverride = appUserId,
-                                offeringId = if (isPrimary) offeringId else null,
-                                packageId = if (isPrimary) packageId else null,
+                                offeringId = if (isPrimary) target.offeringId else null,
+                                packageId = if (isPrimary) target.packageId else null,
                             )
                             if (purchase.purchaseToken == primaryPurchase.purchaseToken) {
                                 primaryOutcome = outcome
@@ -348,6 +346,8 @@ internal class AppActorPaymentProcessor(
                             )
                         }
                     }
+                    scheduleNextRetryWake()
+                    purchaseResult
                 }
             }
     }
@@ -356,9 +356,11 @@ internal class AppActorPaymentProcessor(
         limit: Int = 20,
         appUserIdOverride: String? = null,
     ): AppActorCustomerInfo? {
-        return pipelineMutex.withLock {
+        val result = pipelineMutex.withLock {
             syncCurrentPurchasesLocked(limit = limit, appUserIdOverride = appUserIdOverride)
         }
+        scheduleNextRetryWake(limit)
+        return result
     }
 
     private suspend fun syncCurrentPurchasesLocked(
@@ -399,7 +401,7 @@ internal class AppActorPaymentProcessor(
                 val response = backendClient.postGoogleSync(
                     AppActorGoogleSyncRequestDTO(
                         appUserId = appUserId,
-                        obfuscatedAccountId = googleObfuscatedAccountId(appUserId),
+                        obfuscatedAccountId = appActorGoogleObfuscatedAccountId(appUserId),
                         obfuscatedProfileId = null,
                         source = "foreground_sync",
                         observedAt = isoNow(),
@@ -465,9 +467,11 @@ internal class AppActorPaymentProcessor(
         maxPurchases: Int = 500,
         appUserIdOverride: String? = null,
     ): AppActorCustomerInfo {
-        return pipelineMutex.withLock {
+        val result = pipelineMutex.withLock {
             restorePurchasesLocked(maxPurchases = maxPurchases, appUserIdOverride = appUserIdOverride)
         }
+        scheduleNextRetryWake()
+        return result
     }
 
     private suspend fun restorePurchasesLocked(
@@ -521,7 +525,7 @@ internal class AppActorPaymentProcessor(
                 val response = backendClient.postGoogleRestore(
                     AppActorGoogleRestoreRequestDTO(
                         appUserId = currentAppUserId,
-                        obfuscatedAccountId = googleObfuscatedAccountId(currentAppUserId),
+                        obfuscatedAccountId = appActorGoogleObfuscatedAccountId(currentAppUserId),
                         obfuscatedProfileId = null,
                         source = "user_restore",
                         observedAt = isoNow(),
@@ -604,12 +608,29 @@ internal class AppActorPaymentProcessor(
     }
 
     suspend fun drainReadyQueue(limit: Int = 20): AppActorCustomerInfo? {
-        return pipelineMutex.withLock {
+        val result = pipelineMutex.withLock {
             drainReadyQueueLocked(limit)
         }
+        scheduleNextRetryWake(limit)
+        return result
     }
 
     private suspend fun drainReadyQueueLocked(limit: Int = 20): AppActorCustomerInfo? {
+        queueStore.deferReadyUntilIdentity(
+            confirmedAppUserIds = confirmedAppUserIds,
+            nowMillis = dateProviderMillis(),
+        ).forEach { item ->
+            onPipelineEvent(
+                AppActorReceiptPipelineEvent.DeferredWaitingForIdentity(
+                    key = appActorPublicReceiptId(item.key),
+                    productId = item.productId,
+                    transactionId = item.orderId,
+                    appUserId = item.appUserId,
+                    orderId = item.orderId,
+                )
+            )
+        }
+
         val claimed = queueStore.claimReady(limit = limit, nowMillis = dateProviderMillis())
         if (claimed.isEmpty()) return null
 
@@ -629,9 +650,11 @@ internal class AppActorPaymentProcessor(
     suspend fun drainAll(
         limit: Int = 20,
     ): AppActorCustomerInfo? {
-        return pipelineMutex.withLock {
+        val result = pipelineMutex.withLock {
             drainAllLocked(limit)
         }
+        scheduleNextRetryWake(limit)
+        return result
     }
 
     /**
@@ -668,6 +691,7 @@ internal class AppActorPaymentProcessor(
                 )
             )
         }
+        scheduleNextRetryWake()
     }
 
     private suspend fun drainAllLocked(
@@ -739,6 +763,21 @@ internal class AppActorPaymentProcessor(
             )
         }
         queueStore.upsert(item)
+        if (!isIdentityConfirmed(item.appUserId)) {
+            val waiting = item.copy(phase = AppActorReceiptQueuePhase.WaitingForIdentity)
+            queueStore.update(waiting)
+            onPipelineEvent(
+                AppActorReceiptPipelineEvent.DeferredWaitingForIdentity(
+                    key = appActorPublicReceiptId(waiting.key),
+                    productId = waiting.productId,
+                    transactionId = waiting.orderId,
+                    appUserId = waiting.appUserId,
+                    orderId = waiting.orderId,
+                )
+            )
+            scheduleNextRetryWake()
+            return ProcessingOutcome.Queued
+        }
         return processClaimedItem(item.copy(phase = AppActorReceiptQueuePhase.Posting), productEntitlements)
     }
 
@@ -992,7 +1031,25 @@ internal class AppActorPaymentProcessor(
         item: AppActorReceiptQueueItem,
         productEntitlements: Map<String, List<String>>,
     ): ProcessingOutcome {
-        waitForIdentity()
+        if (!isIdentityConfirmed(item.appUserId)) {
+            val waiting = item.copy(
+                phase = AppActorReceiptQueuePhase.WaitingForIdentity,
+                claimedAtMillis = null,
+                lastUpdatedAtMillis = dateProviderMillis(),
+            )
+            queueStore.update(waiting)
+            onPipelineEvent(
+                AppActorReceiptPipelineEvent.DeferredWaitingForIdentity(
+                    key = appActorPublicReceiptId(waiting.key),
+                    productId = waiting.productId,
+                    transactionId = waiting.orderId,
+                    appUserId = waiting.appUserId,
+                    orderId = waiting.orderId,
+                )
+            )
+            scheduleNextRetryWake()
+            return ProcessingOutcome.Queued
+        }
         val normalizedItem = normalizeQueueItemForPosting(item, productEntitlements)
         if (normalizedItem.productType == AppActorProductType.Unknown.wireValue) {
             return scheduleRetryOrDeadLetter(
@@ -1164,25 +1221,17 @@ internal class AppActorPaymentProcessor(
         val now = dateProviderMillis()
         val nextRetryCount = item.retryCount + 1
         val lastError = buildLastError(errorCode, errorMessage, nextRetryCount)
-        if (AppActorRetryPolicy.hasExhaustedRetries(nextRetryCount)) {
-            deadLetter(
-                item = item.copy(
-                    retryCount = nextRetryCount,
-                    lastUpdatedAtMillis = now,
-                    claimedAtMillis = null,
-                ),
-                code = null,
-                message = lastError,
-            )
-            return ProcessingOutcome.Queued
+        val nextRetryAt = AppActorRetryPolicy.nextRetryAtMillis(
+            nowMillis = now,
+            retryCount = nextRetryCount,
+            retryAfterSeconds = retryAfterSeconds,
+        )
+        if (errorCode == "RATE_LIMIT" || errorCode == "RATE_LIMIT_EXCEEDED") {
+            queueStore.setRateLimitCooldownMillis(nextRetryAt)
         }
         val updated = item.copy(
             retryCount = nextRetryCount,
-            nextRetryAtMillis = AppActorRetryPolicy.nextRetryAtMillis(
-                nowMillis = now,
-                retryCount = nextRetryCount,
-                retryAfterSeconds = retryAfterSeconds,
-            ),
+            nextRetryAtMillis = nextRetryAt,
             claimedAtMillis = null,
             phase = if (postedLedgerStore.isPosted(item.key)) {
                 AppActorReceiptQueuePhase.NeedsFinish
@@ -1204,6 +1253,7 @@ internal class AppActorPaymentProcessor(
                 orderId = updated.orderId,
             )
         )
+        scheduleNextRetryWake()
         return ProcessingOutcome.Queued
     }
 
@@ -1249,6 +1299,7 @@ internal class AppActorPaymentProcessor(
                 orderId = updated.orderId,
             )
         )
+        scheduleNextRetryWake()
     }
 
     private suspend fun finalizeDeadLetteredPurchase(item: AppActorReceiptQueueItem): Boolean {
@@ -1281,7 +1332,6 @@ internal class AppActorPaymentProcessor(
             .ifBlank { null }
         return when {
             resolved == null -> null
-            AppActorRetryPolicy.hasExhaustedRetries(retryCount) -> "$resolved (dead-lettered after $retryCount attempts)"
             else -> resolved
         }
     }
@@ -1329,7 +1379,10 @@ internal class AppActorPaymentProcessor(
 
     private suspend fun ensureProductEntitlements(): Map<String, List<String>> {
         val existing = offeringsManager.currentProductEntitlements()
-        if (existing.isNotEmpty()) return existing
+        if (existing.isNotEmpty()) {
+            return existing
+        }
+
         runCatching { offeringsManager.getOfferings(forceRefresh = false) }
         return offeringsManager.currentProductEntitlements()
     }
@@ -1374,13 +1427,7 @@ internal class AppActorPaymentProcessor(
         val resolvedType = resolveKnownOneTimeProductType(
             productId = purchase.productId,
             productEntitlements = productEntitlements,
-        ) ?: run {
-            runCatching { offeringsManager.getOfferings(forceRefresh = false) }
-            resolveKnownOneTimeProductType(
-                productId = purchase.productId,
-                productEntitlements = ensureProductEntitlements(),
-            )
-        } ?: return null
+        ) ?: return null
 
         return purchase.copy(productType = resolvedType)
     }
@@ -1389,38 +1436,23 @@ internal class AppActorPaymentProcessor(
         productId: String,
         productEntitlements: Map<String, List<String>>,
     ): AppActorProductType? {
-        val packageMatches = offeringsManager.cached()?.all
-            ?.values
-            ?.asSequence()
-            ?.flatMap { offering -> offering.packages.asSequence() }
-            ?.filter { appActorPackage ->
-                appActorPackage.store == AppActorStore.PlayStore &&
-                    appActorPackage.productId == productId &&
-                    (appActorPackage.productType == AppActorProductType.Consumable ||
-                        appActorPackage.productType == AppActorProductType.NonConsumable)
-            }
-            ?.map { it.productType }
-            ?.distinct()
-            ?.toList()
-            .orEmpty()
+        offeringsManager.currentOneTimeProductType(productId)
+            ?.let { return it }
 
-        if (packageMatches.size == 1) {
-            return packageMatches.single()
-        }
+        offlineProductCatalogStore.load()
+            ?.oneTimeProductType(productId)
+            ?.let { return it }
 
         val keyMatches = productEntitlements.keys
             .asSequence()
-            .mapNotNull { key ->
-                if (key == "android:$productId") {
-                    AppActorProductType.NonConsumable
-                } else {
-                    null
-                }
+            .filter { key -> key == "android:$productId" }
+            .mapNotNull { _ ->
+                AppActorProductType.NonConsumable
             }
             .distinct()
             .toList()
 
-        return if (packageMatches.isEmpty() && keyMatches.size == 1) {
+        return if (keyMatches.size == 1) {
             keyMatches.single()
         } else {
             null
@@ -1435,11 +1467,88 @@ internal class AppActorPaymentProcessor(
         val stalePostingThreshold = nowMillis - AppActorAtomicJsonReceiptQueueStore.STALE_CLAIM_THRESHOLD_MILLIS
         return queueStore.snapshot().any { item ->
             when (item.phase) {
+                AppActorReceiptQueuePhase.WaitingForIdentity -> false
                 AppActorReceiptQueuePhase.NeedsPost -> item.nextRetryAtMillis <= nowMillis
                 AppActorReceiptQueuePhase.Posting -> (item.claimedAtMillis ?: 0L) <= stalePostingThreshold
                 AppActorReceiptQueuePhase.NeedsFinish -> item.nextRetryAtMillis <= nowMillis
                 AppActorReceiptQueuePhase.DeadLettered -> false
             }
+        }
+    }
+
+    private fun nextReadyAtMillis(nowMillis: Long = dateProviderMillis()): Long? {
+        val stalePostingThreshold = nowMillis - AppActorAtomicJsonReceiptQueueStore.STALE_CLAIM_THRESHOLD_MILLIS
+        val itemNextReady = queueStore.snapshot()
+            .mapNotNull { item ->
+                when (item.phase) {
+                    AppActorReceiptQueuePhase.WaitingForIdentity,
+                    AppActorReceiptQueuePhase.DeadLettered -> null
+
+                    AppActorReceiptQueuePhase.NeedsPost,
+                    AppActorReceiptQueuePhase.NeedsFinish -> item.nextRetryAtMillis
+
+                    AppActorReceiptQueuePhase.Posting -> {
+                        val claimedAt = item.claimedAtMillis ?: return@mapNotNull nowMillis
+                        if (claimedAt <= stalePostingThreshold) {
+                            nowMillis
+                        } else {
+                            claimedAt + AppActorAtomicJsonReceiptQueueStore.STALE_CLAIM_THRESHOLD_MILLIS
+                        }
+                    }
+                }
+            }
+            .minOrNull()
+
+        val cooldown = queueStore.getRateLimitCooldownMillis()
+        return when {
+            itemNextReady == null -> cooldown
+            cooldown == null -> itemNextReady
+            cooldown > nowMillis && itemNextReady < cooldown -> cooldown
+            else -> minOf(itemNextReady, cooldown)
+        }
+    }
+
+    private fun scheduleNextRetryWake(limit: Int = 20) {
+        val now = dateProviderMillis()
+        val nextReadyAt = nextReadyAtMillis(now) ?: run {
+            retryWakeJob?.cancel()
+            retryWakeJob = null
+            scheduledRetryAtMillis = null
+            return
+        }
+
+        if (nextReadyAt <= now) {
+            val runningImmediateDrain = scheduledRetryAtMillis == null && retryWakeJob?.isActive == true
+            if (runningImmediateDrain) {
+                return
+            }
+            retryWakeJob?.cancel()
+            scheduledRetryAtMillis = null
+            retryWakeJob = backgroundScope.launch {
+                pipelineMutex.withLock {
+                    drainAllLocked(limit)
+                }
+                retryWakeJob = null
+                scheduleNextRetryWake(limit)
+            }
+            return
+        }
+
+        if (scheduledRetryAtMillis == nextReadyAt && retryWakeJob?.isActive == true) {
+            return
+        }
+
+        retryWakeJob?.cancel()
+        scheduledRetryAtMillis = nextReadyAt
+        val delayMillis = maxOf(nextReadyAt - now, 250L)
+        retryWakeJob = backgroundScope.launch {
+            delay(delayMillis)
+            pipelineMutex.withLock {
+                drainAllLocked(limit)
+            }
+            retryWakeJob = null
+            scheduledRetryAtMillis = null
+            scheduleNextRetryWake(limit)
         }
     }
 
@@ -1484,6 +1593,7 @@ internal class AppActorPaymentProcessor(
             requestDate = purchase.purchaseDateString(),
             isComputedOffline = true,
             productEntitlements = productEntitlements,
+            verification = AppActorVerificationResult.VerifiedOnDevice,
         )
     }
 
@@ -1505,7 +1615,6 @@ internal class AppActorPaymentProcessor(
     ): AppActorReceiptQueueItem {
         val appUserId = appUserIdOverride?.takeIf { it.isNotBlank() }
             ?: identityStore.currentAppUserId
-            ?: purchase.obfuscatedAccountId?.takeIf { it.isNotBlank() }
             ?: identityStore.ensureAppUserId()
         val now = dateProviderMillis()
         return AppActorReceiptQueueItem(
@@ -1687,12 +1796,6 @@ private fun AppActorStorePurchase.toRestorePurchaseDTO(): AppActorGoogleRestoreP
 
 private fun isoNow(): String = java.time.Instant.now().toString()
 
-private fun googleObfuscatedAccountId(appUserId: String): String {
-    val digest = MessageDigest.getInstance("SHA-256")
-        .digest(appUserId.toByteArray(Charsets.UTF_8))
-    return digest.joinToString("") { byte -> "%02x".format(byte) }
-}
-
 private fun com.appactor.android.billing.AppActorStorePurchaseHistoryRecord.toStorePurchase(): AppActorStorePurchase {
     return AppActorStorePurchase(
         productId = productId,
@@ -1756,4 +1859,3 @@ private fun successfulBatchPurchaseKeys(
 
     return purchases.asSequence().map(::batchPurchaseKey).toSet()
 }
-

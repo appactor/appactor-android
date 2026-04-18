@@ -58,6 +58,7 @@ public sealed class AppActorError(
     public data class CustomerNotFound(
         val appUserId: String,
         val description: String = "Customer not found: $appUserId",
+        val requestId: String? = null,
     ) : AppActorError(message = description)
 
     public data class ReceiptQueuedForRetry(

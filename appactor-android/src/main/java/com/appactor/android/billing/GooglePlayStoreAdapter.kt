@@ -77,19 +77,20 @@ internal class GooglePlayStoreAdapter(
         val launchResult = billingClient.launchPurchase(
             activity = activity,
             productDetails = resolved.nativeProductDetails,
-            productType = request.productType,
+            productType = resolved.product.productType,
             offerToken = resolved.offerToken,
             obfuscatedAccountId = request.obfuscatedAccountId,
             oldPurchaseToken = request.oldPurchaseToken,
             replacementMode = request.replacementMode,
         )
+        val resolvedRequest = resolved.toRequest(obfuscatedAccountId = request.obfuscatedAccountId)
         return when (launchResult) {
             is AppActorBillingLaunchResult.Purchased -> AppActorStorePurchaseLaunchResult.Purchased(
-                purchases = launchResult.purchases.map { it.toStorePurchase(request) }
+                purchases = launchResult.purchases.map { it.toStorePurchase(resolvedRequest) }
             )
 
             is AppActorBillingLaunchResult.Pending -> AppActorStorePurchaseLaunchResult.Pending(
-                purchases = launchResult.purchases.map { it.toStorePurchase(request) }
+                purchases = launchResult.purchases.map { it.toStorePurchase(resolvedRequest) }
             )
 
             AppActorBillingLaunchResult.Cancelled -> AppActorStorePurchaseLaunchResult.Cancelled
@@ -112,8 +113,11 @@ internal class GooglePlayStoreAdapter(
                     payload.products.map { productId ->
                         val resolvedRequest = runCatching {
                             resolveDirectPurchaseRequest(
-                                productId = productId,
-                                obfuscatedAccountId = payload.obfuscatedAccountId,
+                                AppActorStoreProductRequest(
+                                    productId = productId,
+                                    productType = payload.productType,
+                                    obfuscatedAccountId = payload.obfuscatedAccountId,
+                                )
                             )
                         }.getOrElse {
                             resolvedProductsByKey.entries
@@ -133,30 +137,53 @@ internal class GooglePlayStoreAdapter(
     }
 
     override suspend fun resolveDirectPurchaseRequest(
-        productId: String,
-        obfuscatedAccountId: String?,
+        request: AppActorStoreProductRequest,
     ): AppActorStoreProductRequest {
         connect()
+        val productId = request.productId
 
-        val payloads = billingClient.queryProductDetails(
-            listOf(
-                AppActorBillingQueryProduct(
-                    productId = productId,
-                    productType = AppActorProductType.Subscription,
-                ),
-                AppActorBillingQueryProduct(
-                    productId = productId,
-                    productType = AppActorProductType.NonConsumable,
-                ),
-            )
-        ).filter { it.productId == productId }
+        val payloads = queryProductDetailsPayloads(listOf(request))[productId].orEmpty()
 
         val subscriptionPayload = payloads.firstOrNull { it.productType == AppActorProductType.Subscription }
         val inAppPayload = payloads.firstOrNull { it.productType != AppActorProductType.Subscription }
 
+        when (request.resolutionKind()) {
+            ProductResolutionKind.Subscription -> {
+                val payload = subscriptionPayload
+                    ?: throw AppActorError.InvalidConfiguration(
+                        "No Play subscription target found for $productId."
+                    )
+                val resolved = resolveSubscriptionPayload(payload, request)
+                    ?: throw AppActorError.InvalidConfiguration(
+                        "No matching Play subscription offer found for $productId " +
+                            "(basePlanId=${request.basePlanId}, offerId=${request.offerId})."
+                    )
+                val resolvedRequest = request.copy(
+                    productType = AppActorProductType.Subscription,
+                    basePlanId = resolved.product.basePlanId,
+                    offerId = resolved.product.offerId,
+                )
+                cacheResolvedProduct(request, resolvedRequest, resolved)
+                return resolvedRequest
+            }
+
+            ProductResolutionKind.OneTime -> {
+                val payload = inAppPayload
+                    ?: throw AppActorError.InvalidConfiguration(
+                        "No matching Play one-time target found for $productId."
+                    )
+                validateExplicitOneTimeProductType(request)
+                val resolved = resolveOneTimePayload(payload, request)
+                cacheResolvedProduct(request, request, resolved)
+                return request
+            }
+
+            ProductResolutionKind.Ambiguous -> Unit
+        }
+
         if (subscriptionPayload != null && inAppPayload != null) {
             throw AppActorError.InvalidConfiguration(
-                "Ambiguous direct purchase for $productId. The product exists as both SUBS and INAPP."
+                "Ambiguous Play target for $productId. The product exists as both SUBS and INAPP."
             )
         }
 
@@ -164,21 +191,21 @@ internal class GooglePlayStoreAdapter(
             val offers = subscriptionPayload.subscriptionOffers
             if (offers.size != 1) {
                 throw AppActorError.InvalidConfiguration(
-                    "Ambiguous direct subscription purchase for $productId. A single base plan/offer is required."
+                    "Ambiguous Play target for $productId. " +
+                        "A single subscription base plan/offer is required."
                 )
             }
             val offer = offers.single()
-            val request = AppActorStoreProductRequest(
+            val resolvedRequest = request.copy(
                 productId = productId,
                 productType = AppActorProductType.Subscription,
                 basePlanId = offer.basePlanId,
                 offerId = offer.offerId,
-                obfuscatedAccountId = obfuscatedAccountId,
             )
-            val resolved = resolveSubscriptionPayload(subscriptionPayload, request)
+            val resolved = resolveSubscriptionPayload(subscriptionPayload, resolvedRequest)
                 ?: throw AppActorError.InvalidConfiguration("No Play subscription offer found for $productId.")
-            resolvedProductsByKey[request.cacheKey()] = resolved
-            return request
+            cacheResolvedProduct(request, resolvedRequest, resolved)
+            return resolvedRequest
         }
 
         if (inAppPayload != null) {
@@ -186,14 +213,13 @@ internal class GooglePlayStoreAdapter(
                 ?: throw AppActorError.InvalidConfiguration(
                     "Direct one-time purchase for $productId requires offerings metadata to determine whether it is consumable or non-consumable."
                 )
-            val request = AppActorStoreProductRequest(
+            val resolvedRequest = request.copy(
                 productId = productId,
                 productType = oneTimeProductType,
-                obfuscatedAccountId = obfuscatedAccountId,
             )
-            val resolved = resolveOneTimePayload(inAppPayload, request)
-            resolvedProductsByKey[request.cacheKey()] = resolved
-            return request
+            val resolved = resolveOneTimePayload(inAppPayload, resolvedRequest)
+            cacheResolvedProduct(request, resolvedRequest, resolved)
+            return resolvedRequest
         }
 
         throw AppActorError.InvalidConfiguration("No Play product details found for $productId.")
@@ -211,22 +237,19 @@ internal class GooglePlayStoreAdapter(
                 val inferredRequest = matchedRequest?.toRequest(obfuscatedAccountId = payload.obfuscatedAccountId)
                     ?: runCatching {
                         resolveDirectPurchaseRequest(
-                            productId = productId,
-                            obfuscatedAccountId = payload.obfuscatedAccountId,
+                            recoveryRequest(
+                                productId = productId,
+                                payloadProductType = payload.productType,
+                                obfuscatedAccountId = payload.obfuscatedAccountId,
+                            )
                         )
                     }.getOrNull()
-                val resolvedRequest = inferredRequest ?: when (payload.productType) {
-                    AppActorProductType.Subscription -> AppActorStoreProductRequest(
+                val resolvedRequest = inferredRequest
+                    ?: recoveryRequest(
                         productId = productId,
-                        productType = AppActorProductType.Subscription,
+                        payloadProductType = payload.productType,
                         obfuscatedAccountId = payload.obfuscatedAccountId,
                     )
-                    else -> AppActorStoreProductRequest(
-                        productId = productId,
-                        productType = AppActorProductType.Unknown,
-                        obfuscatedAccountId = payload.obfuscatedAccountId,
-                    )
-                }
                 payload.toStorePurchase(resolvedRequest)
             }
         }
@@ -242,23 +265,18 @@ internal class GooglePlayStoreAdapter(
                     .firstOrNull { (_, resolved) -> resolved.product.productId == productId }
                     ?.value
                 val inferredRequest = matchedRequest?.toRequest(obfuscatedAccountId = payload.obfuscatedAccountId)
-                    ?: when (payload.productType) {
-                        AppActorProductType.Subscription -> AppActorStoreProductRequest(
-                            productId = productId,
-                            productType = AppActorProductType.Subscription,
-                            obfuscatedAccountId = payload.obfuscatedAccountId,
-                        )
-
-                        else -> runCatching {
-                            resolveDirectPurchaseRequest(
+                    ?: runCatching {
+                        resolveDirectPurchaseRequest(
+                            recoveryRequest(
                                 productId = productId,
+                                payloadProductType = payload.productType,
                                 obfuscatedAccountId = payload.obfuscatedAccountId,
                             )
-                        }.getOrNull()
-                    }
-                    ?: AppActorStoreProductRequest(
+                        )
+                    }.getOrNull()
+                    ?: recoveryRequest(
                         productId = productId,
-                        productType = AppActorProductType.Unknown,
+                        payloadProductType = payload.productType,
                         obfuscatedAccountId = payload.obfuscatedAccountId,
                     )
                 payload.toHistoryRecord(inferredRequest)
@@ -506,6 +524,29 @@ internal class GooglePlayStoreAdapter(
         }
     }
 
+    private fun validateExplicitOneTimeProductType(
+        request: AppActorStoreProductRequest,
+    ) {
+        val knownType = resolveKnownOneTimeProductType(request.productId) ?: return
+        if (knownType != request.productType) {
+            throw AppActorError.InvalidConfiguration(
+                "Conflicting Play one-time target for ${request.productId}. " +
+                    "Expected $knownType but direct purchase requested ${request.productType}."
+            )
+        }
+    }
+
+    private fun cacheResolvedProduct(
+        originalRequest: AppActorStoreProductRequest,
+        resolvedRequest: AppActorStoreProductRequest,
+        resolvedProduct: ResolvedProduct,
+    ) {
+        resolvedProductsByKey[resolvedRequest.cacheKey()] = resolvedProduct
+        if (originalRequest.cacheKey() != resolvedRequest.cacheKey()) {
+            resolvedProductsByKey[originalRequest.cacheKey()] = resolvedProduct
+        }
+    }
+
     private fun logUnresolvedRequest(
         request: AppActorStoreProductRequest,
         payloads: List<AppActorBillingProductDetailsPayload>,
@@ -562,6 +603,22 @@ private fun AppActorStoreProductRequest.fallbackRequestKey(): String {
         productId = productId,
         productType = productType,
     ).cacheKey()
+}
+
+private fun recoveryRequest(
+    productId: String,
+    payloadProductType: AppActorProductType,
+    obfuscatedAccountId: String?,
+): AppActorStoreProductRequest {
+    return AppActorStoreProductRequest(
+        productId = productId,
+        productType = if (payloadProductType == AppActorProductType.Subscription) {
+            AppActorProductType.Subscription
+        } else {
+            AppActorProductType.Unknown
+        },
+        obfuscatedAccountId = obfuscatedAccountId,
+    )
 }
 
 private fun AppActorBillingPurchasePayload.toStorePurchase(

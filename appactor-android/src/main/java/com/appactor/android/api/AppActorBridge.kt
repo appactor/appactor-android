@@ -11,6 +11,7 @@ import com.appactor.android.models.AppActorCompletionCallback
 import com.appactor.android.models.AppActorCustomerInfo
 import com.appactor.android.models.AppActorExperimentAssignment
 import com.appactor.android.models.AppActorOfferings
+import com.appactor.android.models.AppActorOfferingsFetchPolicy
 import com.appactor.android.models.AppActorOptions
 import com.appactor.android.models.AppActorPackage
 import com.appactor.android.models.AppActorPurchaseParams
@@ -81,12 +82,23 @@ public object AppActorBridge {
     @JvmStatic
     @JvmOverloads
     public fun getOfferings(
+        fetchPolicy: AppActorOfferingsFetchPolicy = AppActorOfferingsFetchPolicy.FreshIfStale,
         onSuccess: AppActorSuccessCallback<AppActorOfferings>? = null,
         onError: AppActorBridgeErrorCallback? = null,
     ): Unit = AppActor.launchAsync(
-        operation = { AppActor.offerings() },
+        operation = { AppActor.offerings(fetchPolicy = fetchPolicy) },
         onSuccess = onSuccess,
         onError = onError.asSdkErrorCallback(),
+    )
+
+    @JvmStatic
+    public fun getOfferings(
+        onSuccess: AppActorSuccessCallback<AppActorOfferings>?,
+        onError: AppActorBridgeErrorCallback?,
+    ): Unit = getOfferings(
+        fetchPolicy = AppActorOfferingsFetchPolicy.FreshIfStale,
+        onSuccess = onSuccess,
+        onError = onError,
     )
 
     @JvmStatic
@@ -181,6 +193,10 @@ public object AppActorBridge {
 
     @JvmStatic
     @JvmOverloads
+    @Deprecated(
+        message = "Prefer AppActorBridge.purchase(activity, appActorPackage). " +
+            "AppActorPurchaseParams is only for explicit direct Play Store targets.",
+    )
     public fun purchase(
         activity: Activity,
         params: AppActorPurchaseParams,

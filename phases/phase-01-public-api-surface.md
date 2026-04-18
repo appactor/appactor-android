@@ -38,7 +38,7 @@ Public API sade, store-agnostic ve Flutter/bridge icin uygun olmali. iOS tarafiy
 - Option set veya config options modelini tanimla
 - Purchase method imzasi icin hangi girdi kullanilacak karar ver:
    - `purchase(activity, packageModel)`
-   - opsiyonel `purchase(activity, productId)`
+   - opsiyonel `purchase(activity, AppActorPurchaseParams)` ama sadece explicit direct Play target icin
 - `restore` ve `sync` farkini API seviyesinde netlestir
 
 ## Dikkat Edilecek Tasarim Kurallari
@@ -46,6 +46,8 @@ Public API sade, store-agnostic ve Flutter/bridge icin uygun olmali. iOS tarafiy
 - DTO veya raw network modelleri public package'a sizmasin
 - Public tipler Flutter bridge ve gelecekte baska wrapper'lar icin stabil olsun
 - `Activity` gerektiren methodlar sadece billing launch katmaninda bunu istesin
+- `purchase(activity, packageModel)` primary satin alma yolu olmali
+- direct purchase sadece typed target ile calismali; ciplak `productId` ile purchase desteklenmemeli
 
 ## Cikti
 - Public API taslagi

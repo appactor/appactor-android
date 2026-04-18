@@ -11,6 +11,7 @@ import com.appactor.android.models.AppActorConfiguration
 import com.appactor.android.models.AppActorProductType
 import com.appactor.android.models.AppActorStoreCapability
 import com.appactor.android.models.AppActorStorefront
+import com.appactor.android.models.appActorGoogleObfuscatedAccountId
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
@@ -98,19 +99,14 @@ internal fun createMockStoreAdapter(
 
     every { mock.purchaseUpdates() } returns purchaseUpdatesFlow
 
-    coEvery { mock.resolveDirectPurchaseRequest(any(), any()) } coAnswers {
-        val productId = firstArg<String>()
-        val obfuscatedAccountId = secondArg<String?>()
+    coEvery { mock.resolveDirectPurchaseRequest(any()) } coAnswers {
+        val request = firstArg<AppActorStoreProductRequest>()
         if (!connected) {
             connectStarted?.countDown()
             releaseConnect?.await(5, TimeUnit.SECONDS)
             connected = true
         }
-        AppActorStoreProductRequest(
-            productId = productId,
-            productType = AppActorProductType.Unknown,
-            obfuscatedAccountId = obfuscatedAccountId,
-        )
+        request
     }
 
     coEvery { mock.queryActivePurchases() } coAnswers {
@@ -160,7 +156,7 @@ internal fun createRuntimeState(
 internal fun runtimeTestPurchase(
     productId: String = "com.appactor.pro.monthly",
     purchaseToken: String = "token_runtime_123",
-    obfuscatedAccountId: String? = "user_runtime_123",
+    obfuscatedAccountId: String? = appActorGoogleObfuscatedAccountId("user_runtime_123"),
 ): AppActorStorePurchase {
     return AppActorStorePurchase(
         productId = productId,

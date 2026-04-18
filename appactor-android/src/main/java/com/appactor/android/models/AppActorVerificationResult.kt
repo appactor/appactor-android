@@ -16,12 +16,15 @@ public enum class AppActorVerificationResult(public val wireValue: String) {
     /** Response signature was successfully verified. */
     Verified("verified"),
 
+    /** Data was derived locally from a trusted on-device store state. */
+    VerifiedOnDevice("verifiedOnDevice"),
+
     /** Response signature verification failed — possible tampering. */
     Failed("failed"),
     ;
 
     /** True when the response has been cryptographically verified. */
-    public val isVerified: Boolean get() = this == Verified
+    public val isVerified: Boolean get() = this == Verified || this == VerifiedOnDevice
 
     public companion object {
         /**

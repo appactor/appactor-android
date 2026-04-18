@@ -6,6 +6,10 @@ public data class AppActorBridgeError(
     public val isTransient: Boolean,
     public val statusCode: Int? = null,
     public val debugMessage: String? = null,
+    public val backendCode: String? = null,
+    public val requestId: String? = null,
+    public val scope: String? = null,
+    public val retryAfterSeconds: Double? = null,
 ) {
     public companion object {
         public const val CODE_NOT_CONFIGURED: String = "NOT_CONFIGURED"
@@ -26,6 +30,10 @@ public data class AppActorBridgeError(
         public const val CODE_INVALID_OFFER: String = "INVALID_OFFER"
         public const val CODE_PURCHASE_INELIGIBLE: String = "PURCHASE_INELIGIBLE"
         public const val CODE_UNKNOWN: String = "UNKNOWN"
+
+        /** Public factory for sibling modules like `appactor-plugin` to reuse the canonical bridge mapping. */
+        @JvmStatic
+        public fun from(error: AppActorError): AppActorBridgeError = error.toBridgeError()
     }
 }
 
@@ -34,7 +42,18 @@ public fun interface AppActorBridgeErrorCallback {
 }
 
 internal fun AppActorError.toBridgeError(): AppActorBridgeError {
-    val debugMessage = cause?.message
+    val backendHttp = cause as? com.appactor.android.backend.client.AppActorBackendException.Http
+    val backendCode = backendHttp?.error?.code
+    val requestId = backendHttp?.requestId ?: (this as? AppActorError.CustomerNotFound)?.requestId
+    val scope = (this as? AppActorError.Server)?.scope
+    val retryAfterSeconds = (this as? AppActorError.Server)?.retryAfterSeconds
+    val debugMessage = buildDebugMessage(
+        original = cause?.message,
+        backendCode = backendCode,
+        requestId = requestId,
+        scope = scope,
+        retryAfterSeconds = retryAfterSeconds,
+    )
     return when (this) {
         AppActorError.NotConfigured -> AppActorBridgeError(
             code = AppActorBridgeError.CODE_NOT_CONFIGURED,
@@ -77,6 +96,10 @@ internal fun AppActorError.toBridgeError(): AppActorBridgeError {
             isTransient = isTransient,
             statusCode = statusCode,
             debugMessage = debugMessage,
+            backendCode = backendCode,
+            requestId = requestId,
+            scope = scope,
+            retryAfterSeconds = retryAfterSeconds,
         )
 
         is AppActorError.PurchaseFailed -> AppActorBridgeError(
@@ -105,6 +128,7 @@ internal fun AppActorError.toBridgeError(): AppActorBridgeError {
             message = message,
             isTransient = isTransient,
             debugMessage = debugMessage,
+            requestId = requestId,
         )
 
         is AppActorError.ReceiptPostFailed -> AppActorBridgeError(
@@ -178,9 +202,18 @@ internal fun AppActorBridgeError.toAppActorError(): AppActorError {
         AppActorBridgeError.CODE_NOT_AVAILABLE -> AppActorError.NotImplementedYet(message)
         AppActorBridgeError.CODE_NETWORK -> AppActorError.Network(message)
         AppActorBridgeError.CODE_DECODING -> AppActorError.Decoding(message)
-        AppActorBridgeError.CODE_SERVER -> AppActorError.Server(message, statusCode)
+        AppActorBridgeError.CODE_SERVER -> AppActorError.Server(
+            description = message,
+            statusCode = statusCode,
+            scope = scope,
+            retryAfterSeconds = retryAfterSeconds,
+        )
         AppActorBridgeError.CODE_STORE_PRODUCTS_MISSING -> AppActorError.StoreProductsMissing(message)
-        AppActorBridgeError.CODE_CUSTOMER_NOT_FOUND -> AppActorError.CustomerNotFound(appUserId = "", description = message)
+        AppActorBridgeError.CODE_CUSTOMER_NOT_FOUND -> AppActorError.CustomerNotFound(
+            appUserId = "",
+            description = message,
+            requestId = requestId,
+        )
         AppActorBridgeError.CODE_PURCHASE_FAILED -> AppActorError.PurchaseFailed(message)
         AppActorBridgeError.CODE_RECEIPT_POST_FAILED -> AppActorError.ReceiptPostFailed(message)
         AppActorBridgeError.CODE_RECEIPT_QUEUED_FOR_RETRY -> AppActorError.ReceiptQueuedForRetry(message)
@@ -191,4 +224,20 @@ internal fun AppActorBridgeError.toAppActorError(): AppActorError {
         AppActorBridgeError.CODE_SIGNATURE_VERIFICATION_FAILED -> AppActorError.SignatureVerificationFailed(message)
         else -> AppActorError.Unknown(message)
     }
+}
+
+private fun buildDebugMessage(
+    original: String?,
+    backendCode: String?,
+    requestId: String?,
+    scope: String?,
+    retryAfterSeconds: Double?,
+): String? {
+    val parts = mutableListOf<String>()
+    backendCode?.takeIf { it.isNotBlank() }?.let { parts += "code=$it" }
+    requestId?.takeIf { it.isNotBlank() }?.let { parts += "requestId=$it" }
+    scope?.takeIf { it.isNotBlank() }?.let { parts += "scope=$it" }
+    retryAfterSeconds?.let { parts += "retryAfter=$it" }
+    original?.takeIf { it.isNotBlank() }?.let { parts += it }
+    return parts.takeIf { it.isNotEmpty() }?.joinToString(", ")
 }

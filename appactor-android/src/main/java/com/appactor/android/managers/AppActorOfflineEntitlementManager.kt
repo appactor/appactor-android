@@ -4,19 +4,21 @@ import com.appactor.android.backend.client.AppActorBackendJson
 import com.appactor.android.backend.dto.AppActorCustomerEnvelopeDTO
 import com.appactor.android.backend.mappers.toModel
 import com.appactor.android.billing.AppActorStoreAdapter
+import com.appactor.android.cache.AppActorOfflineProductCatalogStore
 import com.appactor.android.cache.AppActorCustomerCacheStore
 import com.appactor.android.models.AppActorCustomerInfo
 import com.appactor.android.models.AppActorEntitlementKeyResolver
 
 internal class AppActorOfflineEntitlementManager(
     private val customerCacheStore: AppActorCustomerCacheStore,
+    private val offlineProductCatalogStore: AppActorOfflineProductCatalogStore,
     private val offeringsManager: AppActorOfferingsManager,
     private val storeAdapter: AppActorStoreAdapter,
     private val dateProviderMillis: () -> Long = { System.currentTimeMillis() },
 ) {
 
     suspend fun activeEntitlementKeysOffline(appUserId: String): Set<String> {
-        val productEntitlements = offeringsManager.currentProductEntitlements()
+        val productEntitlements = currentProductEntitlements()
         if (productEntitlements.isNotEmpty()) {
             val derivedKeys = runCatching { storeAdapter.queryActivePurchases() }
                 .getOrDefault(emptyList())
@@ -47,10 +49,14 @@ internal class AppActorOfflineEntitlementManager(
         payload: String,
     ): AppActorCustomerInfo {
         val envelope = AppActorBackendJson.instance.decodeFromString<AppActorCustomerEnvelopeDTO>(payload)
-        return envelope.toModel(productEntitlements = offeringsManager.currentProductEntitlements())
+        return envelope.toModel(productEntitlements = currentProductEntitlements())
             .copy(
                 appUserId = envelope.appUserId ?: appUserId,
             )
+    }
+
+    private fun currentProductEntitlements(): Map<String, List<String>> {
+        return offeringsManager.currentProductEntitlements()
     }
 
     private fun isFresh(cachedAtMillis: Long): Boolean {

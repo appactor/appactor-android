@@ -13,6 +13,7 @@ import com.appactor.android.backend.dto.AppActorLogoutRequestDTO
 import com.appactor.android.backend.mappers.toModel
 import com.appactor.android.billing.AppActorStoreAdapter
 import com.appactor.android.cache.AppActorCustomerCacheStore
+import com.appactor.android.cache.AppActorOfflineProductCatalogStore
 import com.appactor.android.internal.AppActorSDK
 import com.appactor.android.models.AppActorConfiguration
 import com.appactor.android.models.AppActorCustomerInfo
@@ -30,6 +31,7 @@ internal class AppActorCustomerManager(
     private val cacheStore: AppActorCustomerCacheStore,
     private val identityStore: com.appactor.android.storage.AppActorIdentityStore,
     private val offeringsManager: AppActorOfferingsManager,
+    private val offlineProductCatalogStore: AppActorOfflineProductCatalogStore,
     private val storeAdapter: AppActorStoreAdapter,
     private val dateProviderMillis: () -> Long = { System.currentTimeMillis() },
 ) {
@@ -40,6 +42,7 @@ internal class AppActorCustomerManager(
     private var lastLoadSource: AppActorDiagnosticsDataSource? = null
     private val offlineEntitlementManager = AppActorOfflineEntitlementManager(
         customerCacheStore = cacheStore,
+        offlineProductCatalogStore = offlineProductCatalogStore,
         offeringsManager = offeringsManager,
         storeAdapter = storeAdapter,
         dateProviderMillis = dateProviderMillis,

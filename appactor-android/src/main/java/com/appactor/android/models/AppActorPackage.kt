@@ -7,7 +7,6 @@ public data class AppActorPackage(
     val store: AppActorStore,
     val productId: String,
     val storeProductId: String? = null,
-    val serverId: String? = null,
     val productType: AppActorProductType = AppActorProductType.Unknown,
     val basePlanId: String? = null,
     val offerId: String? = null,
@@ -24,6 +23,13 @@ public data class AppActorPackage(
     val replacementMode: AppActorSubscriptionReplacementMode? = null,
     val offeringId: String? = null,
 ) {
+    /**
+     * Semantic identifier for package selection.
+     *
+     * Standard packages keep their package type value even when [id] is a backend UUID.
+     */
     public val identifier: String
-        get() = customTypeIdentifier ?: id
+        get() = customTypeIdentifier
+            ?: packageType.takeUnless { it == AppActorPackageType.Custom }?.wireValue
+            ?: id
 }

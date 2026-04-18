@@ -1,6 +1,7 @@
 package com.appactor.plugin.infrastructure
 
 import com.appactor.android.models.AppActorError
+import com.appactor.android.models.AppActorBridgeError
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
@@ -53,6 +54,7 @@ internal data class PluginError(
 }
 
 internal fun AppActorError.toPluginError(): PluginError {
+    val bridgeError = AppActorBridgeError.from(this)
     val code = when (this) {
         is AppActorError.NotConfigured -> PluginError.SDK_NOT_CONFIGURED
         is AppActorError.AlreadyConfigured -> PluginError.SDK_ALREADY_CONFIGURED
@@ -79,11 +81,18 @@ internal fun AppActorError.toPluginError(): PluginError {
         is AppActorError.Unknown -> PluginError.SDK_UNKNOWN
     }
     val detailParts = buildList {
-        cause?.message?.let { add(it) }
+        bridgeError.debugMessage?.takeIf { it.isNotBlank() }?.let { add(it) }
         if (this@toPluginError is AppActorError.Server) {
             (this@toPluginError as AppActorError.Server).statusCode?.let { add("httpStatus=$it") }
         }
         if (isTransient) add("transient=true")
     }
-    return PluginError(code = code, message = message, detail = detailParts.joinToString(", "))
+    return PluginError(
+        code = code,
+        message = message,
+        detail = detailParts.joinToString(", "),
+        requestId = bridgeError.requestId,
+        scope = bridgeError.scope,
+        retryAfterSeconds = bridgeError.retryAfterSeconds,
+    )
 }

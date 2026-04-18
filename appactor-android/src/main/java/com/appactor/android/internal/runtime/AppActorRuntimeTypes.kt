@@ -6,6 +6,7 @@ import com.appactor.android.billing.AppActorStoreAdapter
 import com.appactor.android.cache.AppActorCustomerCacheStore
 import com.appactor.android.cache.AppActorETagManager
 import com.appactor.android.cache.AppActorExperimentCacheStore
+import com.appactor.android.cache.AppActorOfflineProductCatalogStore
 import com.appactor.android.cache.AppActorOfferingsCacheStore
 import com.appactor.android.cache.AppActorRemoteConfigsCacheStore
 import com.appactor.android.managers.AppActorCustomerManager
@@ -32,6 +33,7 @@ internal data class AppActorRuntimeState(
     val backendClient: AppActorHttpBackendClient,
     val storeAdapter: AppActorStoreAdapter,
     val offeringsCacheStore: AppActorOfferingsCacheStore,
+    val offlineProductCatalogStore: AppActorOfflineProductCatalogStore,
     val customerCacheStore: AppActorCustomerCacheStore,
     val receiptQueueStore: AppActorReceiptQueueStore,
     val postedLedgerStore: AppActorPostedLedgerStore,

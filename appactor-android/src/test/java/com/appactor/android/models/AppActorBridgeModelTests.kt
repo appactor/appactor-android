@@ -1,5 +1,8 @@
 package com.appactor.android.models
 
+import com.appactor.android.backend.client.AppActorBackendException
+import com.appactor.android.backend.client.toAppActorError
+import com.appactor.android.backend.dto.AppActorBackendErrorDTO
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
@@ -80,6 +83,31 @@ class AppActorBridgeModelTests {
     }
 
     @Test
+    fun `resolved direct purchase target requires explicit product type`() {
+        val error = runCatching {
+            AppActorPurchaseParams(productId = "com.appactor.coins.100")
+                .toResolvedPurchaseTarget("user_android_123")
+        }.exceptionOrNull()
+
+        assertTrue(error is AppActorError.InvalidConfiguration)
+        assertTrue(error?.message?.contains("Underspecified direct purchase") == true)
+    }
+
+    @Test
+    fun `resolved direct purchase target rejects one time params with subscription fields`() {
+        val error = runCatching {
+            AppActorPurchaseParams(
+                productId = "com.appactor.coins.100",
+                productType = AppActorProductType.Consumable,
+                basePlanId = "monthly001",
+            ).toResolvedPurchaseTarget("user_android_123")
+        }.exceptionOrNull()
+
+        assertTrue(error is AppActorError.InvalidConfiguration)
+        assertTrue(error?.message?.contains("Invalid direct one-time purchase params") == true)
+    }
+
+    @Test
     fun `bridge errors flatten legacy errors and preserve compatibility mapping`() {
         val bridgeError = AppActorError.Server(
             description = "temporary outage",
@@ -101,10 +129,68 @@ class AppActorBridgeModelTests {
     }
 
     @Test
+    fun `bridge errors expose structured diagnostics fields`() {
+        val bridgeError = AppActorError.Server(
+            description = "too many requests",
+            statusCode = 429,
+            scope = "app",
+            retryAfterSeconds = 12.5,
+            throwable = AppActorBackendException.Http(
+                statusCode = 429,
+                requestId = "req_123",
+                error = AppActorBackendErrorDTO(
+                    code = "RATE_LIMIT_EXCEEDED",
+                    message = "slow down",
+                    details = "app scope",
+                    scope = "app",
+                ),
+                retryAfterSeconds = 12.5,
+            ),
+        ).toBridgeError()
+
+        assertEquals(AppActorBridgeError.CODE_SERVER, bridgeError.code)
+        assertEquals("RATE_LIMIT_EXCEEDED", bridgeError.backendCode)
+        assertEquals("req_123", bridgeError.requestId)
+        assertEquals("app", bridgeError.scope)
+        assertEquals(12.5, bridgeError.retryAfterSeconds)
+        assertTrue(bridgeError.debugMessage?.contains("code=RATE_LIMIT_EXCEEDED") == true)
+        assertTrue(bridgeError.debugMessage?.contains("requestId=req_123") == true)
+
+        val roundTrip = bridgeError.toAppActorError()
+        assertTrue(roundTrip is AppActorError.Server)
+        roundTrip as AppActorError.Server
+        assertEquals(429, roundTrip.statusCode)
+        assertEquals("app", roundTrip.scope)
+        assertEquals(12.5, roundTrip.retryAfterSeconds)
+    }
+
+    @Test
+    fun `customer not found preserves request id through mapper and bridge`() {
+        val mapped = AppActorBackendException.CustomerNotFound(
+            appUserId = "user_123",
+            requestId = "req_404",
+        ).toAppActorError()
+
+        assertTrue(mapped is AppActorError.CustomerNotFound)
+        mapped as AppActorError.CustomerNotFound
+        assertEquals("req_404", mapped.requestId)
+
+        val bridgeError = mapped.toBridgeError()
+        assertEquals(AppActorBridgeError.CODE_CUSTOMER_NOT_FOUND, bridgeError.code)
+        assertEquals("req_404", bridgeError.requestId)
+
+        val roundTrip = bridgeError.toAppActorError()
+        assertTrue(roundTrip is AppActorError.CustomerNotFound)
+        roundTrip as AppActorError.CustomerNotFound
+        assertEquals("req_404", roundTrip.requestId)
+    }
+
+    @Test
     fun `bridge receipt events flatten all pipeline variants with sanitized receipt ids`() {
         val testUserId = "test_user_42"
         val testOrderId = "GPA.1234-5678-9012"
         val postedKey = appActorPublicReceiptId("raw_posted_key")
+        val deferredKey = appActorPublicReceiptId("raw_waiting_key")
         val retryKey = appActorPublicReceiptId("raw_retry_key")
         val rejectKey = appActorPublicReceiptId("raw_reject_key")
         val deadKey = appActorPublicReceiptId("raw_dead_key")
@@ -114,6 +200,13 @@ class AppActorBridgeModelTests {
                 key = postedKey,
                 productId = "monthly",
                 requestId = "req_123",
+                appUserId = testUserId,
+                orderId = testOrderId,
+            ),
+            AppActorReceiptPipelineEvent.DeferredWaitingForIdentity(
+                key = deferredKey,
+                productId = "monthly",
+                transactionId = "tx_waiting",
                 appUserId = testUserId,
                 orderId = testOrderId,
             ),
@@ -156,24 +249,27 @@ class AppActorBridgeModelTests {
         assertEquals(testUserId, mapped[0].appUserId)
         assertEquals(testOrderId, mapped[0].transactionId)
         assertNull(mapped[0].key)
-        assertEquals(AppActorBridgeReceiptEvent.TYPE_RETRY_SCHEDULED, mapped[1].type)
-        assertEquals(testOrderId, mapped[1].transactionId)
-        assertEquals(3, mapped[1].retryCount)
-        assertTrue(mapped[1].nextAttemptAt != null)
-        assertEquals("RATE_LIMITED", mapped[1].errorCode)
+        assertEquals(AppActorBridgeReceiptEvent.TYPE_DEFERRED_WAITING_FOR_IDENTITY, mapped[1].type)
+        assertEquals("tx_waiting", mapped[1].transactionId)
         assertNull(mapped[1].key)
-        assertEquals(AppActorBridgeReceiptEvent.TYPE_PERMANENTLY_REJECTED, mapped[2].type)
+        assertNull(mapped[1].retryCount)
+        assertEquals(AppActorBridgeReceiptEvent.TYPE_RETRY_SCHEDULED, mapped[2].type)
         assertEquals(testOrderId, mapped[2].transactionId)
-        assertEquals("INVALID_RECEIPT", mapped[2].errorCode)
-        assertNull(mapped[2].key)
-        assertEquals(AppActorBridgeReceiptEvent.TYPE_DEAD_LETTERED, mapped[3].type)
+        assertEquals(3, mapped[2].retryCount)
+        assertTrue(mapped[2].nextAttemptAt != null)
+        assertEquals("RATE_LIMITED", mapped[2].errorCode)
+        assertEquals(AppActorBridgeReceiptEvent.TYPE_PERMANENTLY_REJECTED, mapped[3].type)
         assertEquals(testOrderId, mapped[3].transactionId)
-        assertEquals(4, mapped[3].retryCount)
-        assertEquals("network timeout", mapped[3].errorCode)
+        assertEquals("INVALID_RECEIPT", mapped[3].errorCode)
         assertNull(mapped[3].key)
+        assertEquals(AppActorBridgeReceiptEvent.TYPE_DEAD_LETTERED, mapped[4].type)
+        assertEquals(testOrderId, mapped[4].transactionId)
+        assertEquals(4, mapped[4].retryCount)
+        assertEquals("network timeout", mapped[4].errorCode)
+        assertNull(mapped[4].key)
         // DuplicateSkipped: transactionId = null, key = queueKey (matches iOS)
-        assertEquals(AppActorBridgeReceiptEvent.TYPE_DUPLICATE_SKIPPED, mapped[4].type)
-        assertNull(mapped[4].transactionId)
-        assertEquals(dupKey, mapped[4].key)
+        assertEquals(AppActorBridgeReceiptEvent.TYPE_DUPLICATE_SKIPPED, mapped[5].type)
+        assertNull(mapped[5].transactionId)
+        assertEquals(dupKey, mapped[5].key)
     }
 }

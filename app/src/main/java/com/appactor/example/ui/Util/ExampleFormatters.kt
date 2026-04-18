@@ -26,6 +26,9 @@ fun receiptEventCopy(event: AppActorReceiptPipelineEvent): String {
         is AppActorReceiptPipelineEvent.PostedOk ->
             "receipt posted -> ${event.productId} (${event.requestId ?: "no-request-id"})"
 
+        is AppActorReceiptPipelineEvent.DeferredWaitingForIdentity ->
+            "receipt waiting for identity -> ${event.productId}"
+
         is AppActorReceiptPipelineEvent.RetryScheduled ->
             "receipt retry -> ${event.productId} (#${event.retryCount})"
 
@@ -43,6 +46,7 @@ fun receiptEventCopy(event: AppActorReceiptPipelineEvent): String {
 fun receiptEventTone(event: AppActorReceiptPipelineEvent): ExampleLogTone {
     return when (event) {
         is AppActorReceiptPipelineEvent.PostedOk -> ExampleLogTone.Success
+        is AppActorReceiptPipelineEvent.DeferredWaitingForIdentity -> ExampleLogTone.Warn
         is AppActorReceiptPipelineEvent.RetryScheduled -> ExampleLogTone.Warn
         is AppActorReceiptPipelineEvent.PermanentlyRejected -> ExampleLogTone.Error
         is AppActorReceiptPipelineEvent.DeadLettered -> ExampleLogTone.Error
