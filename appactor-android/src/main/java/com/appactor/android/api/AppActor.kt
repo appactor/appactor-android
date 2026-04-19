@@ -50,6 +50,7 @@ import com.appactor.android.models.toLegacyOptions
 import com.appactor.android.models.toAppActorPackage
 import com.appactor.android.models.AppActorStoreCapability
 import com.appactor.android.models.AppActorStorefront
+import com.appactor.android.models.AppActorValidation
 import com.appactor.android.storage.AppActorAtomicJsonPostedLedgerStore
 import com.appactor.android.storage.AppActorAtomicJsonReceiptQueueStore
 import kotlinx.coroutines.CoroutineScope
@@ -105,17 +106,6 @@ public object AppActor {
     private val startupCoordinator: AppActorStartupCoordinator by lazy {
         AppActorStartupCoordinator(
             host = object : AppActorStartupCoordinatorHost {
-                override suspend fun performStartupIdentify(
-                    runtimeState: AppActorRuntimeState,
-                ): Pair<((AppActorCustomerInfo) -> Unit)?, AppActorCustomerInfo>? {
-                    return performStartupIdentifyTransition(runtimeState)
-                }
-
-                override fun confirmIdentity(runtimeState: AppActorRuntimeState) {
-                    runtimeState.identityStore.currentAppUserId
-                        ?.let(runtimeState.paymentProcessor::confirmIdentity)
-                }
-
                 override suspend fun captureOperationSnapshot(
                     resolveAppUserId: Boolean,
                     awaitBootstrapCompletion: Boolean,
@@ -129,26 +119,22 @@ public object AppActor {
                 override suspend fun syncCurrentPurchases(
                     snapshot: AppActorOperationSnapshot,
                 ): AppActorCustomerInfo? {
-                    val info = snapshot.runtime.paymentProcessor.syncCurrentPurchases(
+                    return snapshot.runtime.paymentProcessor.syncCurrentPurchases(
                         appUserIdOverride = snapshot.appUserId,
+                        refreshEntitlementsIfMissing = false,
                     )
-                    confirmReceiptPipelineIdentityIfCurrent(snapshot, info?.appUserId ?: snapshot.appUserId)
-                    return info
                 }
 
                 override suspend fun retryDeadLetteredItems(
-                    runtimeState: AppActorRuntimeState,
-                ) {
-                    runtimeState.paymentProcessor.retryDeadLetteredItems()
+                    snapshot: AppActorOperationSnapshot,
+                ): AppActorCustomerInfo? {
+                    return snapshot.runtime.paymentProcessor.retryDeadLetteredItems()
                 }
 
-                override suspend fun fetchOfferings(
+                override suspend fun prefetchOfferings(
                     runtimeState: AppActorRuntimeState,
                 ): AppActorDiagnosticsDataSource? {
-                    runtimeState.offeringsManager.getOfferings(
-                        fetchPolicy = AppActorOfferingsFetchPolicy.ReturnCachedThenRefresh,
-                    )
-                    return runtimeState.offeringsManager.lastLoadSource()
+                    return runtimeState.offeringsManager.prefetchForBootstrap()
                 }
 
                 override suspend fun fetchCustomerInfo(
@@ -158,7 +144,6 @@ public object AppActor {
                         appUserId = snapshot.appUserId,
                         persistIdentityState = false,
                     )
-                    confirmReceiptPipelineIdentityIfCurrent(snapshot, info.appUserId ?: snapshot.appUserId)
                     return info to snapshot.runtime.customerManager.lastLoadSource()
                 }
 
@@ -264,14 +249,11 @@ public object AppActor {
         )
     }
 
-    public val isConfigured: Boolean
-        get() = currentRuntimeSnapshot() != null
-
     public val appUserId: String?
         get() = currentRuntimeSnapshot()?.identityStore?.currentAppUserId
 
     public val isAnonymous: Boolean
-        get() = appUserId?.startsWith(ANONYMOUS_USER_PREFIX) == true
+        get() = appUserId?.startsWith(ANONYMOUS_USER_PREFIX) ?: true
 
     public val customerInfo: AppActorCustomerInfo
         get() = currentRuntimeSnapshot()?.lastCustomerInfo ?: AppActorCustomerInfo.empty
@@ -392,6 +374,7 @@ public object AppActor {
     public suspend fun configure(
         context: Context,
         apiKey: String,
+        appUserId: String? = null,
         options: AppActorOptions = AppActorOptions(),
     ) {
         val startupRuntime = transitionMutex.withLock {
@@ -403,6 +386,7 @@ public object AppActor {
                 configuration = AppActorConfiguration(
                     context = context,
                     apiKey = apiKey,
+                    appUserId = appUserId,
                     options = options.toLegacyOptions(),
                 ),
             )
@@ -486,9 +470,7 @@ public object AppActor {
         val (info, callback) = transitionMutex.withLock {
             bumpIdentityEpochLocked()
             val currentRuntime = requireConfiguredRuntime()
-            if (newAppUserId.isBlank()) {
-                throw AppActorError.InvalidConfiguration("login appUserId must not be blank.")
-            }
+            AppActorValidation.validateAppUserId(newAppUserId)
             val currentAppUserId = currentRuntime.identityStore.currentAppUserId
                 ?: currentRuntime.identityStore.ensureAppUserId()
             currentRuntime.paymentProcessor.beginIdentityTransition()
@@ -499,14 +481,10 @@ public object AppActor {
                 }
                 currentRuntime.remoteConfigManager.clearCache(currentAppUserId)
                 currentRuntime.experimentManager.clearCache(currentAppUserId)
-                val info = if (currentAppUserId == newAppUserId) {
-                    currentRuntime.customerManager.identify()
-                } else {
-                    currentRuntime.customerManager.logIn(
-                        currentAppUserId = currentAppUserId,
-                        newAppUserId = newAppUserId,
-                    )
-                }
+                val info = currentRuntime.customerManager.logIn(
+                    currentAppUserId = currentAppUserId,
+                    newAppUserId = newAppUserId,
+                )
                 persistCustomerInfoLocked(currentRuntime, info)
                 info to publishCustomerInfoLocked(
                     currentRuntime = currentRuntime,
@@ -525,7 +503,7 @@ public object AppActor {
 
     public suspend fun logOut(): Boolean {
         awaitStartupBeforeTransition()
-        val (acknowledged, callbacks) = transitionMutex.withLock {
+        val callbacks = transitionMutex.withLock {
             bumpIdentityEpochLocked()
             val currentRuntime = requireConfiguredRuntime()
             val currentAppUserId = currentRuntime.identityStore.currentAppUserId
@@ -543,23 +521,15 @@ public object AppActor {
                 currentRuntime.remoteConfigManager.clearCache(currentAppUserId)
                 currentRuntime.experimentManager.clearCache(currentAppUserId)
                 val callbacks = mutableListOf<Pair<((AppActorCustomerInfo) -> Unit)?, AppActorCustomerInfo>>()
-                val acknowledged = runCatching { currentRuntime.customerManager.logOut(currentAppUserId) }
-                    .getOrDefault(false)
-                currentRuntime.identityStore.setServerUserId(null)
                 currentRuntime.identityStore.setAppUserId(null)
+                currentRuntime.identityStore.ensureAppUserId()
+                currentRuntime.identityStore.clearLegacyIdentityState()
                 callbacks += publishCustomerInfoLocked(
                     currentRuntime,
                     AppActorCustomerInfo.empty,
                     AppActorDiagnosticsDataSource.Unknown,
                 ) to AppActorCustomerInfo.empty
-                val info = currentRuntime.customerManager.identify()
-                persistCustomerInfoLocked(currentRuntime, info)
-                callbacks += publishCustomerInfoLocked(
-                    currentRuntime = currentRuntime,
-                    info = info,
-                    source = currentRuntime.customerManager.lastLoadSource(),
-                ) to info
-                acknowledged to callbacks
+                callbacks
             } finally {
                 currentRuntime.paymentProcessor.endIdentityTransition()
             }
@@ -569,7 +539,7 @@ public object AppActor {
                 callback?.invoke(info)
             }
         }
-        return acknowledged
+        return true
     }
 
     public suspend fun offerings(): AppActorOfferings {
@@ -664,7 +634,6 @@ public object AppActor {
                 ) to AppActorDiagnosticsDataSource.Offline
             }
 
-            confirmReceiptPipelineIdentityIfCurrent(snapshot, info.appUserId ?: snapshot.appUserId)
             if (persistCustomerInfoIfCurrent(snapshot, info)) {
                 publishCustomerInfoIfCurrent(snapshot, info, source)
             }
@@ -780,7 +749,6 @@ public object AppActor {
             val info = snapshot.runtime.paymentProcessor.restorePurchases(
                 appUserIdOverride = snapshot.appUserId,
             )
-            confirmReceiptPipelineIdentityIfCurrent(snapshot, info.appUserId ?: snapshot.appUserId)
             if (persistCustomerInfoIfCurrent(snapshot, info)) {
                 publishCustomerInfoIfCurrent(snapshot, info, AppActorDiagnosticsDataSource.Network)
             }
@@ -795,7 +763,6 @@ public object AppActor {
                 appUserId = resolveFollowUpAppUserId(snapshot, drained),
                 persistIdentityState = false,
             )
-            confirmReceiptPipelineIdentityIfCurrent(snapshot, info.appUserId ?: snapshot.appUserId)
             if (persistCustomerInfoIfCurrent(snapshot, info)) {
                 publishCustomerInfoIfCurrent(
                     snapshot = snapshot,
@@ -816,7 +783,6 @@ public object AppActor {
                 appUserId = resolveFollowUpAppUserId(snapshot, synced),
                 persistIdentityState = false,
             )
-            confirmReceiptPipelineIdentityIfCurrent(snapshot, info.appUserId ?: snapshot.appUserId)
             if (persistCustomerInfoIfCurrent(snapshot, info)) {
                 publishCustomerInfoIfCurrent(
                     snapshot = snapshot,
@@ -879,30 +845,10 @@ public object AppActor {
 
         val startupHandles = startupCoordinator.start(newRuntime)
         newRuntime = newRuntime.copy(
-            identityReadyJob = startupHandles.identityReadyJob,
             bootstrapCompletionJob = startupHandles.bootstrapCompletionJob,
             purchaseUpdatesJob = startupHandles.purchaseUpdatesJob,
         )
         runtime = newRuntime
-    }
-
-    private suspend fun performStartupIdentifyTransition(
-        runtimeState: AppActorRuntimeState,
-    ): Pair<((AppActorCustomerInfo) -> Unit)?, AppActorCustomerInfo>? {
-        return transitionMutex.withLock {
-            bumpIdentityEpochLocked()
-            val runtimeForTransition = requireConfiguredRuntime()
-            if (runtimeForTransition.sessionId != runtimeState.sessionId) {
-                return@withLock null
-            }
-            val info = runtimeForTransition.customerManager.identify()
-            persistCustomerInfoLocked(runtimeForTransition, info)
-            publishCustomerInfoLocked(
-                currentRuntime = runtimeForTransition,
-                info = info,
-                source = runtimeForTransition.customerManager.lastLoadSource(),
-            ) to info
-        }
     }
 
     private suspend fun refreshCustomerInfoOnForeground(runtimeState: AppActorRuntimeState) {
@@ -917,7 +863,6 @@ public object AppActor {
                 appUserId = snapshot.appUserId,
                 persistIdentityState = false,
             )
-            confirmReceiptPipelineIdentityIfCurrent(snapshot, info.appUserId ?: snapshot.appUserId)
             if (persistCustomerInfoIfCurrent(snapshot, info)) {
                 publishCustomerInfoIfCurrent(
                     snapshot = snapshot,
@@ -938,12 +883,6 @@ public object AppActor {
         result: AppActorPurchaseResult,
     ) {
         if (result is AppActorPurchaseResult.Success) {
-            if (!result.customerInfo.isComputedOffline) {
-                confirmReceiptPipelineIdentityIfCurrent(
-                    snapshot,
-                    result.customerInfo.appUserId ?: snapshot.appUserId,
-                )
-            }
             if (persistCustomerInfoIfCurrent(snapshot, result.customerInfo)) {
                 publishCustomerInfoIfCurrent(
                     snapshot = snapshot,
@@ -962,17 +901,6 @@ public object AppActor {
             ?.takeIf { it.isNotBlank() }
             ?: snapshot.runtime.identityStore.currentAppUserId
             ?: snapshot.appUserId
-    }
-
-    private fun confirmReceiptPipelineIdentityIfCurrent(
-        snapshot: AppActorOperationSnapshot,
-        appUserId: String,
-    ) {
-        val currentRuntime = currentRuntimeSnapshot() ?: return
-        if (currentRuntime.sessionId != snapshot.runtime.sessionId) {
-            return
-        }
-        currentRuntime.paymentProcessor.confirmIdentity(appUserId)
     }
 
     private fun publishCustomerInfoLocked(
@@ -1115,7 +1043,6 @@ public object AppActor {
         val resolvedAppUserId = info.appUserId?.takeIf { it.isNotBlank() }
         if (resolvedAppUserId != null) {
             currentRuntime.identityStore.setAppUserId(resolvedAppUserId)
-            currentRuntime.identityStore.setServerUserId(resolvedAppUserId)
         }
         currentRuntime.identityStore.setLastRequestId(info.requestId)
     }

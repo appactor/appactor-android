@@ -69,6 +69,12 @@ class AppActorConfigureTests {
     }
 
     @Test
+    fun `is anonymous defaults true before configure`() {
+        assertTrue(AppActor.isAnonymous)
+        assertNull(AppActor.appUserId)
+    }
+
+    @Test
     fun `offerings lookup key helper finds offering`() {
         val mainOffering = AppActorOffering(
             id = "off_main_android",
@@ -128,7 +134,6 @@ class AppActorConfigureTests {
                 )
             )
 
-            assertTrue(AppActor.shared.isConfigured)
             assertTrue(AppActor.shared.isAnonymous)
             assertTrue(AppActor.shared.appUserId?.startsWith("appactor-anon-") == true)
         }
@@ -165,6 +170,29 @@ class AppActorConfigureTests {
 
             assertEquals("user_android_123", preferences.getString("appactor_billing_app_user_id", null))
             assertNotNull(preferences.getString("appactor_billing_install_id", null))
+        }
+    }
+
+    @Test
+    fun `configure preserves explicit non empty app user id formatting`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val preferences = context.getSharedPreferences("appactor_identity", Context.MODE_PRIVATE)
+        val explicitAppUserId = " user_android_123 "
+        preferences.edit().clear().commit()
+
+        stubBackend().use { backend ->
+            AppActor.configure(
+                AppActorConfiguration(
+                    context = context,
+                    apiKey = "pk_test_123",
+                    appUserId = explicitAppUserId,
+                    baseUrl = backend.baseUrl,
+                    options = testOptionsForLocalBackend(),
+                )
+            )
+
+            assertEquals(explicitAppUserId, AppActor.appUserId)
+            assertEquals(explicitAppUserId, preferences.getString("appactor_billing_app_user_id", null))
         }
     }
 
@@ -242,6 +270,29 @@ class AppActorConfigureTests {
         assertTrue(AppActorAtomicJsonReceiptQueueStore(context).snapshot().isEmpty())
         assertTrue(AppActorAtomicJsonPostedLedgerStore(context).snapshot().isEmpty())
         assertFalse(File(context.cacheDir, "appactor/http-cache").exists())
+    }
+
+    @Test
+    fun `configure clears legacy server user id state`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val preferences = context.getSharedPreferences("appactor_identity", Context.MODE_PRIVATE)
+        preferences.edit()
+            .putString("appactor_billing_server_user_id", "legacy_server_user_123")
+            .commit()
+
+        stubBackend().use { backend ->
+            AppActor.configure(
+                AppActorConfiguration(
+                    context = context,
+                    apiKey = "pk_test_123",
+                    appUserId = "user_android_123",
+                    baseUrl = backend.baseUrl,
+                    options = testOptionsForLocalBackend(),
+                )
+            )
+        }
+
+        assertNull(preferences.getString("appactor_billing_server_user_id", null))
     }
 
 }

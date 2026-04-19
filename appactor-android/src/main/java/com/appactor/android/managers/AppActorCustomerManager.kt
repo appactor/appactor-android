@@ -9,7 +9,6 @@ import com.appactor.android.backend.dto.AppActorCustomerEnvelopeDTO
 import com.appactor.android.backend.dto.AppActorIdentifyRequestDTO
 import com.appactor.android.backend.dto.AppActorLoginRequestDTO
 import com.appactor.android.backend.dto.AppActorLoginResponseDTO
-import com.appactor.android.backend.dto.AppActorLogoutRequestDTO
 import com.appactor.android.backend.mappers.toModel
 import com.appactor.android.billing.AppActorStoreAdapter
 import com.appactor.android.cache.AppActorCustomerCacheStore
@@ -67,7 +66,6 @@ internal class AppActorCustomerManager(
         val mapped = body.toModel(productEntitlements = offeringsManager.currentProductEntitlements())
         val finalAppUserId = body.appUserId ?: resolvedAppUserId
         identityStore.setAppUserId(finalAppUserId)
-        identityStore.setServerUserId(finalAppUserId)
         identityStore.setLastRequestId(response.requestId)
         saveEnvelope(
             appUserId = finalAppUserId,
@@ -98,7 +96,6 @@ internal class AppActorCustomerManager(
             productEntitlements = offeringsManager.currentProductEntitlements(),
         )
         identityStore.setAppUserId(finalAppUserId)
-        identityStore.setServerUserId(body.serverUserId ?: finalAppUserId)
         identityStore.setLastRequestId(response.requestId ?: body.requestId)
         saveEnvelope(
             appUserId = finalAppUserId,
@@ -112,15 +109,6 @@ internal class AppActorCustomerManager(
             requestId = response.requestId ?: mapped.requestId,
             verification = AppActorVerificationResult.from(response.signatureVerified),
         )
-    }
-
-    suspend fun logOut(currentAppUserId: String): Boolean {
-        val response = backendClient.logout(
-            AppActorLogoutRequestDTO(appUserId = currentAppUserId)
-        )
-        identityStore.setLastRequestId(response.requestId ?: response.body?.requestId)
-        lastLoadSource = AppActorDiagnosticsDataSource.Network
-        return response.body?.success ?: true
     }
 
     suspend fun getCustomerInfo(
@@ -180,7 +168,6 @@ internal class AppActorCustomerManager(
 
             if (persistIdentityState) {
                 identityStore.setAppUserId(result.appUserId ?: appUserId)
-                identityStore.setServerUserId(result.appUserId ?: appUserId)
                 identityStore.setLastRequestId(response.requestId ?: result.requestId)
             }
             if (!forceRefresh) {

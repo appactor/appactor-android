@@ -22,7 +22,6 @@ import com.appactor.android.storage.AppActorIdentityStore
 import com.appactor.android.storage.AppActorPostedLedgerStore
 import com.appactor.android.storage.AppActorReceiptQueueStore
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 
 internal data class AppActorRuntimeState(
@@ -41,9 +40,8 @@ internal data class AppActorRuntimeState(
     val customerManager: AppActorCustomerManager,
     val paymentProcessor: AppActorPaymentProcessor,
     val scope: CoroutineScope,
-    val identityReadyJob: Job? = null,
-    val bootstrapCompletionJob: Job? = null,
-    val purchaseUpdatesJob: Job? = null,
+    val bootstrapCompletionJob: kotlinx.coroutines.Job? = null,
+    val purchaseUpdatesJob: kotlinx.coroutines.Job? = null,
     val lifecycleCallbacks: AppActorLifecycleCallbacks? = null,
     val remoteConfigManager: AppActorRemoteConfigManager,
     val experimentManager: AppActorExperimentManager,
@@ -70,9 +68,8 @@ internal data class AppActorCallbackState(
 )
 
 internal data class AppActorStartupHandles(
-    val identityReadyJob: Job? = null,
-    val bootstrapCompletionJob: Job? = null,
-    val purchaseUpdatesJob: Job? = null,
+    val bootstrapCompletionJob: kotlinx.coroutines.Job? = null,
+    val purchaseUpdatesJob: kotlinx.coroutines.Job? = null,
 )
 
 internal fun throwIfCancellation(throwable: Throwable) {

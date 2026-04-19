@@ -9,8 +9,6 @@ import com.appactor.android.backend.dto.AppActorCustomerEnvelopeDTO
 import com.appactor.android.backend.dto.AppActorIdentifyRequestDTO
 import com.appactor.android.backend.dto.AppActorLoginRequestDTO
 import com.appactor.android.backend.dto.AppActorLoginResponseDTO
-import com.appactor.android.backend.dto.AppActorLogoutRequestDTO
-import com.appactor.android.backend.dto.AppActorLogoutResponseDTO
 import com.appactor.android.backend.dto.AppActorOfferingsEnvelopeDTO
 import com.appactor.android.billing.AppActorStoreAdapter
 import com.appactor.android.billing.AppActorStoreProduct
@@ -219,7 +217,6 @@ class AppActorCustomerManagerTests {
             body = AppActorLoginResponseDTO(
                 requestId = "req_login_001",
                 appUserId = "user_android_456",
-                serverUserId = "server_user_456",
                 customer = fixtureCustomer("fixtures/backend/customer_android_active.json").customer,
             ),
             statusCode = 200,
@@ -241,28 +238,33 @@ class AppActorCustomerManagerTests {
     }
 
     @Test
-    fun `logout posts dedicated backend request and returns success flag`() = runBlocking {
-        val logoutRequestSlot = slot<AppActorLogoutRequestDTO>()
+    fun `login with same user id still uses backend login endpoint`() = runBlocking {
+        val loginRequestSlot = slot<AppActorLoginRequestDTO>()
         val mockClient = mockk<AppActorBackendClient>(relaxed = true)
         coEvery { mockClient.getOfferings(any()) } returns freshOfferingsResponse(fixtureOfferings())
-        coEvery { mockClient.identify(any()) } returns freshCustomerResponse(
-            fixtureCustomer("fixtures/backend/customer_android_active.json")
-        )
-        coEvery { mockClient.logout(capture(logoutRequestSlot)) } returns AppActorBackendHttpResponse(
-            body = AppActorLogoutResponseDTO(
-                requestId = "req_logout_001",
-                success = true,
+        coEvery { mockClient.login(capture(loginRequestSlot)) } returns AppActorBackendHttpResponse(
+            body = AppActorLoginResponseDTO(
+                requestId = "req_login_same_user",
+                appUserId = "user_android_123",
+                customer = fixtureCustomer("fixtures/backend/customer_android_active.json").customer,
             ),
             statusCode = 200,
-            requestId = "req_logout_001",
+            requestId = "req_login_same_user",
+            eTag = "\"etag_login_same_user\"",
             signatureVerified = true,
         )
         val manager = createCustomerManager(mockClient)
 
-        val acknowledged = manager.logOut("user_android_123")
+        val info = manager.logIn(
+            currentAppUserId = "user_android_123",
+            newAppUserId = "user_android_123",
+        )
 
-        assertTrue(acknowledged)
-        assertEquals("user_android_123", logoutRequestSlot.captured.appUserId)
+        assertEquals("user_android_123", loginRequestSlot.captured.currentAppUserId)
+        assertEquals("user_android_123", loginRequestSlot.captured.newAppUserId)
+        assertEquals("user_android_123", info.appUserId)
+        coVerify(exactly = 1) { mockClient.login(any()) }
+        coVerify(exactly = 0) { mockClient.identify(any()) }
     }
 
     @Test
@@ -300,24 +302,20 @@ class AppActorCustomerManagerTests {
     ): AppActorCustomerManager {
         val identityStore = mockk<AppActorIdentityStore>().also { store ->
             var storedAppUserId: String? = "user_android_123"
-            var storedServerUserId: String? = null
             var storedLastRequestId: String? = null
 
             every { store.currentAppUserId } answers { storedAppUserId }
             every { store.installId } returns "install_123"
-            every { store.serverUserId } answers { storedServerUserId }
             every { store.lastRequestId } answers { storedLastRequestId }
             every { store.installReferrer } returns null
             every { store.ensureAppUserId() } answers {
                 storedAppUserId ?: "user_android_123".also { storedAppUserId = it }
             }
             every { store.setAppUserId(any()) } answers { storedAppUserId = firstArg() }
-            every { store.setServerUserId(any()) } answers { storedServerUserId = firstArg() }
             every { store.setLastRequestId(any()) } answers { storedLastRequestId = firstArg() }
             every { store.setInstallReferrer(any()) } answers { }
             every { store.clearIdentity() } answers {
                 storedAppUserId = null
-                storedServerUserId = null
                 storedLastRequestId = null
             }
         }

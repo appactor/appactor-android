@@ -151,6 +151,7 @@ class AppActorJavaAsyncTests {
         val logoutAcknowledged = AtomicReference<Boolean?>()
         val loginError = AtomicReference<AppActorError?>()
         val logoutError = AtomicReference<AppActorError?>()
+        val logoutCalls = AtomicInteger(0)
 
         TestBackendServer { request ->
             when (request.path?.substringBefore("?")) {
@@ -162,7 +163,9 @@ class AppActorJavaAsyncTests {
                 )
 
                 "/v1/payment/logout" -> jsonResponse(
-                    logoutEnvelope(requestId = "req_logout_java_async"),
+                    logoutEnvelope(requestId = "req_logout_java_async").also {
+                        logoutCalls.incrementAndGet()
+                    },
                 )
 
                 "/v1/payment/identify" -> jsonResponse(
@@ -221,6 +224,7 @@ class AppActorJavaAsyncTests {
             assertNull(logoutError.get())
             assertEquals(true, logoutAcknowledged.get())
             assertEquals(true, logoutCallbackOnMain.get())
+            assertEquals(0, logoutCalls.get())
         }
     }
 

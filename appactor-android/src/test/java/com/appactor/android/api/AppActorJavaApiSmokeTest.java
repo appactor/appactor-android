@@ -36,8 +36,8 @@ public final class AppActorJavaApiSmokeTest {
 
         Runnable javaCustomerListener = () -> AppActorJava.setOnCustomerInfoChangedListener(info -> { });
         Runnable javaReceiptListener = () -> AppActorJava.setOnReceiptPipelineEventListener(event -> { });
-        Runnable javaConfigure = () -> AppActorJava.configureAsync(context, "pk_test_java", options, () -> { }, error -> { });
-        Runnable javaCompatibilityConfigure = () -> AppActorJava.configureAsync(context, "pk_test_java", compatibilityOptions, () -> { }, error -> { });
+        Runnable javaConfigure = () -> AppActorJava.configureAsync(context, "pk_test_java", null, options, () -> { }, error -> { });
+        Runnable javaCompatibilityConfigure = () -> AppActorJava.configureAsync(context, "pk_test_java", null, compatibilityOptions, () -> { }, error -> { });
         Runnable javaLogIn = () -> AppActorJava.logInAsync("user_b", info -> { }, error -> { });
         Runnable javaLogOut = () -> AppActorJava.logOutAsync(success -> { }, error -> { });
         Runnable javaOfferings = () -> AppActorJava.getOfferingsAsync(offerings -> { }, error -> { });
@@ -55,7 +55,7 @@ public final class AppActorJavaApiSmokeTest {
 
         Runnable bridgeCustomerListener = () -> AppActorBridge.setCustomerInfoListener(info -> { });
         Runnable bridgeReceiptListener = () -> AppActorBridge.setReceiptPipelineListener(event -> { });
-        Runnable bridgeConfigure = () -> AppActorBridge.configure(context, "pk_test_java", bridgeOptions, () -> { }, error -> { });
+        Runnable bridgeConfigure = () -> AppActorBridge.configure(context, "pk_test_java", null, bridgeOptions, () -> { }, error -> { });
         Runnable bridgeReset = () -> AppActorBridge.reset(() -> { }, error -> { });
         Runnable bridgeLogIn = () -> AppActorBridge.logIn("user_bridge", info -> { }, error -> { });
         Runnable bridgeLogOut = () -> AppActorBridge.logOut(success -> { }, error -> { });
@@ -84,7 +84,6 @@ public final class AppActorJavaApiSmokeTest {
         Runnable bridgeSync = () -> AppActorBridge.syncPurchases(info -> { }, error -> { });
         Runnable bridgeQuietSync = () -> AppActorBridge.quietSyncPurchases(info -> { }, error -> { });
         Runnable bridgeDrain = () -> AppActorBridge.drainReceiptQueueAndRefreshCustomer(info -> { }, error -> { });
-        AppActorBridge.isConfigured();
         AppActorBridge.appUserId();
         AppActorBridge.isAnonymous();
         AppActorBridge.getCachedOfferings();

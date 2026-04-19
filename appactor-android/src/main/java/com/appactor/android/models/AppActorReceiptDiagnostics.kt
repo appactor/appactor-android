@@ -39,14 +39,6 @@ public sealed interface AppActorReceiptPipelineEvent {
         val orderId: String? = null,
     ) : AppActorReceiptPipelineEvent
 
-    public data class DeferredWaitingForIdentity(
-        val key: String,
-        val productId: String,
-        val transactionId: String?,
-        override val appUserId: String,
-        val orderId: String? = null,
-    ) : AppActorReceiptPipelineEvent
-
     public data class RetryScheduled(
         val key: String,
         val productId: String,

@@ -12,6 +12,7 @@ import kotlinx.serialization.json.jsonObject
 
 internal class ConfigureRequest private constructor(
     private val apiKey: String,
+    private val appUserId: String?,
     private val options: OptionsPayload?,
     private val logLevel: String?,
     private val platformFlavor: String?,
@@ -29,7 +30,7 @@ internal class ConfigureRequest private constructor(
             logLevel = parsedLogLevel,
             platformInfo = resolvedPlatformInfo,
         )
-        AppActor.configure(context, apiKey, options)
+        AppActor.configure(context, apiKey, appUserId, options)
         return PluginResult.successVoid
     }
 
@@ -60,6 +61,7 @@ internal class ConfigureRequest private constructor(
             val legacyPlatformInfo = parsePlatformInfo(payload.objectOrNull("platform_info", "platformInfo"))
             return ConfigureRequest(
                 apiKey = payload.requiredString("api_key", "apiKey"),
+                appUserId = payload.stringOrNull("app_user_id", "appUserId"),
                 options = OptionsPayload(
                     logLevel = optionsObject?.stringOrNull("log_level", "logLevel"),
                     platformInfo = nestedPlatformInfo,

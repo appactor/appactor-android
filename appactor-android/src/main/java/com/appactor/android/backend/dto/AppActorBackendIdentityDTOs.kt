@@ -36,18 +36,12 @@ internal data class AppActorLoginRequestDTO(
     val newAppUserId: String,
 )
 
-@Serializable
-internal data class AppActorLogoutRequestDTO(
-    val appUserId: String,
-)
-
 @Serializable(with = AppActorLoginResponseDTOSerializer::class)
 internal data class AppActorLoginResponseDTO(
     val requestDate: String? = null,
     val requestDateMs: Long? = null,
     override val requestId: String? = null,
     val appUserId: String,
-    val serverUserId: String? = null,
     val customer: AppActorCustomerDTO,
 ) : AppActorRequestIdCarrier
 
@@ -72,7 +66,6 @@ internal object AppActorLoginResponseDTOSerializer : KSerializer<AppActorLoginRe
                 requestDateMs = requestDateMs,
                 requestId = requestId,
                 appUserId = flatAppUserId,
-                serverUserId = objectValue["serverUserId"]?.jsonPrimitive?.contentOrNull,
                 customer = jsonDecoder.json.decodeFromJsonElement(AppActorCustomerDTO.serializer(), flatCustomer),
             )
         }
@@ -88,7 +81,6 @@ internal object AppActorLoginResponseDTOSerializer : KSerializer<AppActorLoginRe
                 requestDateMs = requestDateMs ?: dataValue["requestDateMs"]?.jsonPrimitive?.longOrNull,
                 requestId = requestId ?: dataValue["requestId"]?.jsonPrimitive?.contentOrNull,
                 appUserId = dataAppUserId,
-                serverUserId = dataValue["serverUserId"]?.jsonPrimitive?.contentOrNull,
                 customer = jsonDecoder.json.decodeFromJsonElement(AppActorCustomerDTO.serializer(), dataCustomer),
             )
         }
@@ -102,7 +94,6 @@ internal object AppActorLoginResponseDTOSerializer : KSerializer<AppActorLoginRe
             requestDateMs = requestDateMs ?: dataValue["requestDateMs"]?.jsonPrimitive?.longOrNull,
             requestId = requestId ?: dataValue["requestId"]?.jsonPrimitive?.contentOrNull,
             appUserId = userAppUserId,
-            serverUserId = dataValue["serverUserId"]?.jsonPrimitive?.contentOrNull,
             customer = AppActorCustomerDTO(
                 managementUrl = userObject["managementUrl"]?.jsonPrimitive?.contentOrNull,
                 tokenBalance = userObject["tokenBalance"]?.let {
@@ -148,58 +139,7 @@ internal object AppActorLoginResponseDTOSerializer : KSerializer<AppActorLoginRe
             value.requestDateMs?.let { put("requestDateMs", jsonEncoder.json.encodeToJsonElement(it)) }
             value.requestId?.let { put("requestId", jsonEncoder.json.encodeToJsonElement(it)) }
             put("appUserId", jsonEncoder.json.encodeToJsonElement(value.appUserId))
-            value.serverUserId?.let { put("serverUserId", jsonEncoder.json.encodeToJsonElement(it)) }
             put("customer", jsonEncoder.json.encodeToJsonElement(value.customer))
-        }
-        jsonEncoder.encodeJsonElement(JsonObject(content))
-    }
-}
-
-@Serializable(with = AppActorLogoutResponseDTOSerializer::class)
-internal data class AppActorLogoutResponseDTO(
-    override val requestId: String? = null,
-    val success: Boolean = true,
-) : AppActorRequestIdCarrier
-
-internal object AppActorLogoutResponseDTOSerializer : KSerializer<AppActorLogoutResponseDTO> {
-
-    override val descriptor: SerialDescriptor = buildClassSerialDescriptor("AppActorLogoutResponseDTO")
-
-    override fun deserialize(decoder: Decoder): AppActorLogoutResponseDTO {
-        val jsonDecoder = decoder as? JsonDecoder
-            ?: throw SerializationException("AppActorLogoutResponseDTO only supports JSON decoding.")
-        val objectValue = jsonDecoder.decodeJsonElement().jsonObject
-        val requestId = objectValue["requestId"]?.jsonPrimitive?.contentOrNull
-
-        val flatSuccess = objectValue["success"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull()
-            ?: objectValue["value"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull()
-        if (flatSuccess != null) {
-            return AppActorLogoutResponseDTO(
-                requestId = requestId,
-                success = flatSuccess,
-            )
-        }
-
-        val dataValue = objectValue["data"]?.jsonObject
-            ?: return AppActorLogoutResponseDTO(requestId = requestId, success = true)
-        val nestedSuccess = dataValue["success"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull()
-            ?: dataValue["value"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull()
-            ?: true
-        return AppActorLogoutResponseDTO(
-            requestId = requestId ?: dataValue["requestId"]?.jsonPrimitive?.contentOrNull,
-            success = nestedSuccess,
-        )
-    }
-
-    override fun serialize(
-        encoder: Encoder,
-        value: AppActorLogoutResponseDTO,
-    ) {
-        val jsonEncoder = encoder as? JsonEncoder
-            ?: throw SerializationException("AppActorLogoutResponseDTO only supports JSON encoding.")
-        val content = buildMap<String, kotlinx.serialization.json.JsonElement> {
-            value.requestId?.let { put("requestId", jsonEncoder.json.encodeToJsonElement(it)) }
-            put("success", jsonEncoder.json.encodeToJsonElement(value.success))
         }
         jsonEncoder.encodeJsonElement(JsonObject(content))
     }

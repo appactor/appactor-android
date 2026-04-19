@@ -52,8 +52,8 @@ class ExampleAppState(
     var experimentKeyInput by mutableStateOf("")
     var remoteConfigLookupKey by mutableStateOf("")
 
-    var configured by mutableStateOf(AppActor.shared.isConfigured)
-    var isConfiguring by mutableStateOf(!AppActor.shared.isConfigured)
+    var configured by mutableStateOf(AppActor.shared.appUserId != null)
+    var isConfiguring by mutableStateOf(AppActor.shared.appUserId == null)
     var busyAction by mutableStateOf<String?>(null)
     var statusText by mutableStateOf("SDK initializing...")
     var customerInfo by mutableStateOf(AppActor.shared.customerInfo)
@@ -90,7 +90,7 @@ class ExampleAppState(
         )
 
     fun syncLocalState() {
-        configured = AppActor.shared.isConfigured
+        configured = AppActor.shared.appUserId != null
         customerInfo = AppActor.shared.customerInfo
         offerings = AppActor.shared.cachedOfferings
         remoteConfigs = AppActor.shared.cachedRemoteConfigs
@@ -125,7 +125,7 @@ class ExampleAppState(
 
     fun clearSdkCallbacks() {
         stopStoreStatusPolling()
-        if (AppActor.shared.isConfigured) {
+        if (AppActor.shared.appUserId != null) {
             AppActor.shared.onCustomerInfoChanged = null
             AppActor.shared.onReceiptPipelineEvent = null
         }
@@ -173,7 +173,7 @@ class ExampleAppState(
             startStoreStatusPolling()
             refreshStoreStatus()
             statusText = "SDK ready."
-            log("configure(context, apiKey, options) completed", ExampleLogTone.Success)
+            log("configure(context, apiKey, appUserId, options) completed", ExampleLogTone.Success)
         } finally {
             isConfiguring = false
         }

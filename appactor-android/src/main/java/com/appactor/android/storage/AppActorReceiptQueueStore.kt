@@ -10,7 +10,6 @@ import kotlin.concurrent.withLock
 
 @Serializable
 internal enum class AppActorReceiptQueuePhase {
-    WaitingForIdentity,
     NeedsPost,
     Posting,
     NeedsFinish,
@@ -65,11 +64,6 @@ internal interface AppActorReceiptQueueStore {
     fun upsert(item: AppActorReceiptQueueItem)
     fun upsertAll(items: List<AppActorReceiptQueueItem>)
     fun get(key: String): AppActorReceiptQueueItem?
-    fun deferReadyUntilIdentity(
-        confirmedAppUserIds: Set<String>,
-        nowMillis: Long = System.currentTimeMillis(),
-    ): List<AppActorReceiptQueueItem>
-    fun releaseWaitingForIdentity(appUserId: String): List<AppActorReceiptQueueItem>
     fun claimReady(limit: Int, nowMillis: Long = System.currentTimeMillis()): List<AppActorReceiptQueueItem>
     fun update(item: AppActorReceiptQueueItem)
     fun remove(key: String)
@@ -141,11 +135,7 @@ internal class AppActorAtomicJsonReceiptQueueStore(
                     nextRetryAtMillis = existing.nextRetryAtMillis,
                     createdAtMillis = existing.createdAtMillis,
                     claimedAtMillis = if (existing.appUserId != item.appUserId) null else existing.claimedAtMillis,
-                    phase = when {
-                        existing.phase == AppActorReceiptQueuePhase.WaitingForIdentity &&
-                            existing.appUserId != item.appUserId -> AppActorReceiptQueuePhase.NeedsPost
-                        else -> existing.phase
-                    },
+                    phase = existing.phase,
                     lastError = existing.lastError,
                 )
             }
@@ -174,69 +164,6 @@ internal class AppActorAtomicJsonReceiptQueueStore(
         loadState()[key]
     }
 
-    override fun deferReadyUntilIdentity(
-        confirmedAppUserIds: Set<String>,
-        nowMillis: Long,
-    ): List<AppActorReceiptQueueItem> = lock.withLock {
-        val current = loadState()
-        val updated = current.toMutableMap()
-        val deferred = mutableListOf<AppActorReceiptQueueItem>()
-
-        current.entries.forEach { entry ->
-            val item = entry.value
-            if (confirmedAppUserIds.contains(item.appUserId)) {
-                return@forEach
-            }
-
-            when (item.phase) {
-                AppActorReceiptQueuePhase.WaitingForIdentity,
-                AppActorReceiptQueuePhase.NeedsFinish,
-                AppActorReceiptQueuePhase.DeadLettered -> Unit
-
-                AppActorReceiptQueuePhase.NeedsPost,
-                AppActorReceiptQueuePhase.Posting -> {
-                    val waiting = item.copy(
-                        phase = AppActorReceiptQueuePhase.WaitingForIdentity,
-                        claimedAtMillis = null,
-                        lastUpdatedAtMillis = nowMillis,
-                    )
-                    updated[entry.key] = waiting
-                    deferred += waiting
-                }
-            }
-        }
-
-        if (deferred.isNotEmpty() && !persist(updated, rateLimitCooldownMillis)) {
-            return emptyList()
-        }
-        return deferred
-    }
-
-    override fun releaseWaitingForIdentity(appUserId: String): List<AppActorReceiptQueueItem> = lock.withLock {
-        val current = loadState()
-        val updated = current.toMutableMap()
-        val released = mutableListOf<AppActorReceiptQueueItem>()
-
-        current.entries.forEach { entry ->
-            val item = entry.value
-            if (item.appUserId != appUserId || item.phase != AppActorReceiptQueuePhase.WaitingForIdentity) {
-                return@forEach
-            }
-            val ready = item.copy(
-                phase = AppActorReceiptQueuePhase.NeedsPost,
-                claimedAtMillis = null,
-                lastUpdatedAtMillis = System.currentTimeMillis(),
-            )
-            updated[entry.key] = ready
-            released += ready
-        }
-
-        if (released.isNotEmpty() && !persist(updated, rateLimitCooldownMillis)) {
-            return emptyList()
-        }
-        return released
-    }
-
     override fun claimReady(limit: Int, nowMillis: Long): List<AppActorReceiptQueueItem> = lock.withLock {
         val current = loadState()
         val updated = current.toMutableMap()
@@ -247,7 +174,6 @@ internal class AppActorAtomicJsonReceiptQueueStore(
             if (ready.size >= limit) return@forEach
             val item = entry.value
             val shouldClaim = when (item.phase) {
-                AppActorReceiptQueuePhase.WaitingForIdentity -> false
                 AppActorReceiptQueuePhase.NeedsPost -> item.nextRetryAtMillis <= nowMillis
                 AppActorReceiptQueuePhase.Posting -> (item.claimedAtMillis ?: 0L) <= staleThresholdMillis
                 AppActorReceiptQueuePhase.NeedsFinish -> item.nextRetryAtMillis <= nowMillis
@@ -304,8 +230,7 @@ internal class AppActorAtomicJsonReceiptQueueStore(
 
     override fun pendingCount(): Int = lock.withLock {
         loadState().values.count {
-            it.phase == AppActorReceiptQueuePhase.WaitingForIdentity ||
-                it.phase == AppActorReceiptQueuePhase.NeedsPost ||
+            it.phase == AppActorReceiptQueuePhase.NeedsPost ||
                 it.phase == AppActorReceiptQueuePhase.Posting ||
                 it.phase == AppActorReceiptQueuePhase.NeedsFinish
         }

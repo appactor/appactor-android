@@ -68,7 +68,7 @@ class PluginRequestRouterTests {
     fun `configure accepts canonical nested platform info contract`() = runBlocking {
         mockkObject(AppActor)
         try {
-            coEvery { AppActor.configure(any(), any(), any()) } returns Unit
+            coEvery { AppActor.configure(any(), any(), any(), any()) } returns Unit
 
             val result = PluginRequestRouter.route(
                 "configure",
@@ -93,6 +93,7 @@ class PluginRequestRouterTests {
                 AppActor.configure(
                     any(),
                     "pk_test_123",
+                    null,
                     withArg<AppActorOptions> { options ->
                         assertEquals(AppActorLogLevel.Debug, options.logLevel)
                         assertEquals(AppActorPlatformInfo("flutter", "1.2.3"), options.platformInfo)
@@ -108,7 +109,7 @@ class PluginRequestRouterTests {
     fun `configure leaves platform info null when omitted`() = runBlocking {
         mockkObject(AppActor)
         try {
-            coEvery { AppActor.configure(any(), any(), any()) } returns Unit
+            coEvery { AppActor.configure(any(), any(), any(), any()) } returns Unit
 
             val result = PluginRequestRouter.route(
                 "configure",
@@ -120,6 +121,7 @@ class PluginRequestRouterTests {
                 AppActor.configure(
                     any(),
                     "pk_test_123",
+                    null,
                     withArg<AppActorOptions> { options ->
                         assertEquals(null, options.platformInfo)
                     },
@@ -134,7 +136,7 @@ class PluginRequestRouterTests {
     fun `configure keeps legacy top level platform aliases during migration`() = runBlocking {
         mockkObject(AppActor)
         try {
-            coEvery { AppActor.configure(any(), any(), any()) } returns Unit
+            coEvery { AppActor.configure(any(), any(), any(), any()) } returns Unit
 
             val result = PluginRequestRouter.route(
                 "configure",
@@ -154,6 +156,7 @@ class PluginRequestRouterTests {
                 AppActor.configure(
                     any(),
                     "pk_test_123",
+                    null,
                     withArg<AppActorOptions> { options ->
                         assertEquals(AppActorPlatformInfo("flutter", "1.2.3"), options.platformInfo)
                     },
@@ -168,7 +171,7 @@ class PluginRequestRouterTests {
     fun `configure keeps flutter fallback when only version is provided`() = runBlocking {
         mockkObject(AppActor)
         try {
-            coEvery { AppActor.configure(any(), any(), any()) } returns Unit
+            coEvery { AppActor.configure(any(), any(), any(), any()) } returns Unit
 
             val result = PluginRequestRouter.route(
                 "configure",
@@ -180,6 +183,7 @@ class PluginRequestRouterTests {
                 AppActor.configure(
                     any(),
                     "pk_test_123",
+                    null,
                     withArg<AppActorOptions> { options ->
                         assertEquals(AppActorPlatformInfo("flutter", "1.2.3"), options.platformInfo)
                     },

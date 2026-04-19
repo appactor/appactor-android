@@ -30,14 +30,12 @@ class AppActorIdentityStoreTests {
         val firstStore = AppActorSharedPrefsIdentityStore(context)
         val installId = firstStore.installId
         val appUserId = firstStore.ensureAppUserId()
-        firstStore.setServerUserId("server_user_123")
         firstStore.setLastRequestId("req_123")
 
         val secondStore = AppActorSharedPrefsIdentityStore(context)
 
         assertEquals(installId, secondStore.installId)
         assertEquals(appUserId, secondStore.currentAppUserId)
-        assertEquals("server_user_123", secondStore.serverUserId)
         assertEquals("req_123", secondStore.lastRequestId)
     }
 
@@ -53,18 +51,26 @@ class AppActorIdentityStoreTests {
     }
 
     @Test
+    fun `resolve app user id preserves explicit non empty formatting`() {
+        val store = AppActorSharedPrefsIdentityStore(context)
+
+        val resolved = store.resolveAppUserId(" user_android_123 ")
+
+        assertEquals(" user_android_123 ", resolved)
+        assertEquals(" user_android_123 ", store.currentAppUserId)
+    }
+
+    @Test
     fun `clear identity preserves install id`() {
         val store = AppActorSharedPrefsIdentityStore(context)
         val installId = store.installId
         store.ensureAppUserId()
-        store.setServerUserId("server_user_123")
 
         store.clearIdentity()
 
         val reloaded = AppActorSharedPrefsIdentityStore(context)
         assertEquals(installId, reloaded.installId)
         assertEquals(null, reloaded.currentAppUserId)
-        assertEquals(null, reloaded.serverUserId)
         assertNotEquals("", installId)
     }
 
