@@ -13,8 +13,6 @@ import com.appactor.android.backend.dto.toSyncResponse
 import com.appactor.android.backend.dto.AppActorIdentifyRequestDTO
 import com.appactor.android.backend.dto.AppActorLoginRequestDTO
 import com.appactor.android.backend.dto.AppActorLoginResponseDTO
-import com.appactor.android.backend.dto.AppActorLogoutRequestDTO
-import com.appactor.android.backend.dto.AppActorLogoutResponseDTO
 import com.appactor.android.backend.dto.AppActorOfferingsEnvelopeDTO
 import com.appactor.android.backend.dto.AppActorRemoteConfigsEnvelopeDTO
 
@@ -22,8 +20,6 @@ internal interface AppActorBackendClient {
     suspend fun identify(request: AppActorIdentifyRequestDTO): AppActorBackendHttpResponse<AppActorCustomerEnvelopeDTO>
 
     suspend fun login(request: AppActorLoginRequestDTO): AppActorBackendHttpResponse<AppActorLoginResponseDTO>
-
-    suspend fun logout(request: AppActorLogoutRequestDTO): AppActorBackendHttpResponse<AppActorLogoutResponseDTO>
 
     suspend fun getOfferings(eTag: String? = null): AppActorBackendHttpResponse<AppActorOfferingsEnvelopeDTO>
 

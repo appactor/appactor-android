@@ -18,8 +18,6 @@ import com.appactor.android.backend.dto.AppActorIdentifyRequestDTO
 import com.appactor.android.backend.dto.AppActorLoginRequestDTO
 import com.appactor.android.backend.dto.AppActorLoginResponseDTO
 import com.appactor.android.backend.dto.AppActorOfferingDTO
-import com.appactor.android.backend.dto.AppActorLogoutRequestDTO
-import com.appactor.android.backend.dto.AppActorLogoutResponseDTO
 import com.appactor.android.backend.dto.AppActorOfferingsEnvelopeDTO
 import com.appactor.android.billing.AppActorStoreAdapter
 import com.appactor.android.billing.AppActorStoreProduct
@@ -174,7 +172,7 @@ class AppActorPaymentProcessorTests {
     }
 
     @Test
-    fun `purchase updates wait for identity confirmation before posting`() = runBlocking {
+    fun `purchase updates post immediately with resolved local identity`() = runBlocking {
         val purchase = AppActorStorePurchase(
             productId = "com.appactor.pro.monthly",
             productType = AppActorProductType.Subscription,
@@ -197,21 +195,11 @@ class AppActorPaymentProcessorTests {
                 requestId = "req_identity_gate",
                 signatureVerified = true,
             ),
-            identityConfirmed = false,
         )
 
         val info = dependencies.processor.processPurchaseUpdates(listOf(purchase))
 
-        assertNull(info)
-        assertTrue(dependencies.postedReceipts.isEmpty())
-        assertEquals(
-            com.appactor.android.storage.AppActorReceiptQueuePhase.WaitingForIdentity,
-            dependencies.queueStore.snapshot().single().phase,
-        )
-
-        dependencies.processor.confirmIdentity("user_android_123")
-        val drained = dependencies.processor.drainReadyQueue()
-        assertTrue(drained?.hasActiveEntitlement("premium") == true)
+        assertTrue(info?.hasActiveEntitlement("premium") == true)
         assertEquals(1, dependencies.postedReceipts.size)
     }
 
@@ -307,6 +295,48 @@ class AppActorPaymentProcessorTests {
         assertEquals("receipt should be posted once during purchase and once during retry drain", 2, dependencies.postedReceipts.size)
         assertEquals("successful retry should acknowledge purchase", listOf("token_123"), dependencies.acknowledgedTokens)
         assertTrue("queue should be empty after retry succeeds", dependencies.queueStore.snapshot().isEmpty())
+    }
+
+    @Test
+    fun `retry dead lettered items drains revived receipts immediately`() = runBlocking {
+        val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
+        val dependencies = createDependencies(
+            receiptResponse = AppActorBackendHttpResponse(
+                body = receiptResponse,
+                statusCode = 200,
+                requestId = receiptResponse.requestId,
+                signatureVerified = true,
+            ),
+        )
+        val deadLetteredItem = AppActorReceiptQueueItem(
+            key = "google:com.appactor.pro.monthly:monthly001:token_dead_123",
+            appUserId = "user_android_123",
+            packageName = context.packageName,
+            environment = "production",
+            productId = "com.appactor.pro.monthly",
+            productType = "subscription",
+            purchaseToken = "token_dead_123",
+            purchaseTime = "1710000000000",
+            purchaseState = "PURCHASED",
+            orderId = "GPA.dead.1234",
+            basePlanId = "monthly001",
+            offerId = "intro7d",
+            idempotencyKey = "google:com.appactor.pro.monthly:monthly001:token_dead_123",
+            rawPurchaseData = "{\"purchaseToken\":\"token_dead_123\"}",
+            purchaseSignature = "signature_dead_123",
+            createdAtMillis = System.currentTimeMillis(),
+            lastUpdatedAtMillis = System.currentTimeMillis(),
+            phase = com.appactor.android.storage.AppActorReceiptQueuePhase.DeadLettered,
+            lastError = "temporary outage",
+        )
+        dependencies.queueStore.upsert(deadLetteredItem)
+
+        val retried = dependencies.processor.retryDeadLetteredItems()
+
+        assertTrue(retried?.hasActiveEntitlement("premium") == true)
+        assertEquals(1, dependencies.postedReceipts.size)
+        assertEquals(listOf("token_dead_123"), dependencies.acknowledgedTokens)
+        assertTrue(dependencies.queueStore.snapshot().isEmpty())
     }
 
     @Test
@@ -620,8 +650,6 @@ class AppActorPaymentProcessorTests {
             ),
             identityStore = createMockIdentityStore(initialAppUserId = "user_live"),
         )
-
-        dependencies.processor.confirmIdentity("user_snapshot")
 
         dependencies.processor.purchase(
             activity = Activity(),
@@ -981,7 +1009,7 @@ class AppActorPaymentProcessorTests {
     }
 
     @Test
-    fun `confirm identity preempts delayed retry wake for newly released receipts`() = runBlocking {
+    fun `drain ready queue prioritizes immediately ready receipts over delayed retries`() = runBlocking {
         val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
         val postStarted = CountDownLatch(1)
         val dependencies = createDependencies(
@@ -1044,11 +1072,11 @@ class AppActorPaymentProcessorTests {
                 idempotencyKey = "google:com.appactor.pro.monthly:monthly001:token_waiting_identity_123",
                 createdAtMillis = now,
                 lastUpdatedAtMillis = now,
-                phase = com.appactor.android.storage.AppActorReceiptQueuePhase.WaitingForIdentity,
+                phase = com.appactor.android.storage.AppActorReceiptQueuePhase.NeedsPost,
             )
         )
 
-        dependencies.processor.confirmIdentity("user_waiting")
+        dependencies.processor.drainReadyQueue()
 
         assertTrue(postStarted.await(1, TimeUnit.SECONDS))
         assertEquals(1, dependencies.postedReceipts.size)
@@ -1537,25 +1565,21 @@ class AppActorPaymentProcessorTests {
         initialAppUserId: String? = "user_android_123",
     ): AppActorIdentityStore {
         var storedAppUserId: String? = initialAppUserId
-        var storedServerUserId: String? = null
         var storedLastRequestId: String? = null
 
         val mock = mockk<AppActorIdentityStore>(relaxed = true)
         every { mock.currentAppUserId } answers { storedAppUserId }
         every { mock.installId } returns "install_123"
-        every { mock.serverUserId } answers { storedServerUserId }
         every { mock.lastRequestId } answers { storedLastRequestId }
         every { mock.installReferrer } returns null
         every { mock.ensureAppUserId() } answers {
             storedAppUserId ?: "user_android_123".also { storedAppUserId = it }
         }
         every { mock.setAppUserId(any()) } answers { storedAppUserId = firstArg() }
-        every { mock.setServerUserId(any()) } answers { storedServerUserId = firstArg() }
         every { mock.setLastRequestId(any()) } answers { storedLastRequestId = firstArg() }
         every { mock.setInstallReferrer(any()) } answers { }
         every { mock.clearIdentity() } answers {
             storedAppUserId = null
-            storedServerUserId = null
             storedLastRequestId = null
         }
         return mock
@@ -1592,7 +1616,6 @@ class AppActorPaymentProcessorTests {
 
         coEvery { mock.identify(any()) } throws IllegalStateException("Unused in payment processor tests.")
         coEvery { mock.login(any()) } throws IllegalStateException("Unused in payment processor tests.")
-        coEvery { mock.logout(any()) } throws IllegalStateException("Unused in payment processor tests.")
 
         coEvery { mock.getOfferings(any()) } coAnswers { currentOfferingsResponse }
 
@@ -1826,7 +1849,6 @@ class AppActorPaymentProcessorTests {
         offeringsEnvelope: AppActorOfferingsEnvelopeDTO = fixtureOfferings(),
         directory: File? = null,
         identityStore: AppActorIdentityStore = createMockIdentityStore(),
-        identityConfirmed: Boolean = true,
         postReceiptStarted: CountDownLatch? = null,
         releasePostedReceipt: CountDownLatch? = null,
     ): Dependencies {
@@ -1929,9 +1951,6 @@ class AppActorPaymentProcessorTests {
             packageName = context.packageName,
             onPipelineEvent = { event -> pipelineEvents?.add(event) },
         )
-        if (identityConfirmed) {
-            processor.confirmIdentity()
-        }
 
         return Dependencies(
             processor = processor,

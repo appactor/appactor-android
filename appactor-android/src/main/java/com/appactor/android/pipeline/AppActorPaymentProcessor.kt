@@ -78,7 +78,6 @@ internal class AppActorPaymentProcessor(
     // Keep receipt reconciliation single-flight so purchase updates, startup sync,
     // restore, and foreground drains can't race each other.
     private val pipelineMutex = Mutex()
-    private val confirmedAppUserIds = linkedSetOf<String>()
     private var retryWakeJob: Job? = null
     private var scheduledRetryAtMillis: Long? = null
     // Key: purchaseToken, Value: "productId|timestampMillis"
@@ -135,24 +134,6 @@ internal class AppActorPaymentProcessor(
                     appUserIdOverride = userId,
                 )
             }
-    }
-
-    fun confirmIdentity(appUserId: String) {
-        if (appUserId.isBlank()) return
-        val inserted = confirmedAppUserIds.add(appUserId)
-        val released = queueStore.releaseWaitingForIdentity(appUserId)
-        if (inserted || released.isNotEmpty()) {
-            scheduleNextRetryWake()
-        }
-    }
-
-    fun confirmIdentity() {
-        val appUserId = identityStore.currentAppUserId ?: identityStore.ensureAppUserId()
-        confirmIdentity(appUserId)
-    }
-
-    private fun isIdentityConfirmed(appUserId: String): Boolean {
-        return confirmedAppUserIds.contains(appUserId)
     }
 
     suspend fun purchase(
@@ -355,9 +336,14 @@ internal class AppActorPaymentProcessor(
     suspend fun syncCurrentPurchases(
         limit: Int = 20,
         appUserIdOverride: String? = null,
+        refreshEntitlementsIfMissing: Boolean = true,
     ): AppActorCustomerInfo? {
         val result = pipelineMutex.withLock {
-            syncCurrentPurchasesLocked(limit = limit, appUserIdOverride = appUserIdOverride)
+            syncCurrentPurchasesLocked(
+                limit = limit,
+                appUserIdOverride = appUserIdOverride,
+                refreshEntitlementsIfMissing = refreshEntitlementsIfMissing,
+            )
         }
         scheduleNextRetryWake(limit)
         return result
@@ -367,12 +353,15 @@ internal class AppActorPaymentProcessor(
         limit: Int = 20,
         appUserIdOverride: String? = null,
         excludedPurchaseTokens: Set<String> = emptySet(),
+        refreshEntitlementsIfMissing: Boolean = true,
     ): AppActorCustomerInfo? {
         val appUserId = appUserIdOverride
             ?.takeIf { it.isNotBlank() }
             ?: identityStore.currentAppUserId
             ?: identityStore.ensureAppUserId()
-        val productEntitlements = ensureProductEntitlements()
+        val productEntitlements = ensureProductEntitlements(
+            refreshIfMissing = refreshEntitlementsIfMissing,
+        )
         var latestCustomer: AppActorCustomerInfo? = null
         val syncCandidates = mutableListOf<AppActorStorePurchase>()
 
@@ -616,21 +605,6 @@ internal class AppActorPaymentProcessor(
     }
 
     private suspend fun drainReadyQueueLocked(limit: Int = 20): AppActorCustomerInfo? {
-        queueStore.deferReadyUntilIdentity(
-            confirmedAppUserIds = confirmedAppUserIds,
-            nowMillis = dateProviderMillis(),
-        ).forEach { item ->
-            onPipelineEvent(
-                AppActorReceiptPipelineEvent.DeferredWaitingForIdentity(
-                    key = appActorPublicReceiptId(item.key),
-                    productId = item.productId,
-                    transactionId = item.orderId,
-                    appUserId = item.appUserId,
-                    orderId = item.orderId,
-                )
-            )
-        }
-
         val claimed = queueStore.claimReady(limit = limit, nowMillis = dateProviderMillis())
         if (claimed.isEmpty()) return null
 
@@ -663,9 +637,11 @@ internal class AppActorPaymentProcessor(
      * that transient backend failures from a previous session get another chance
      * when conditions may have changed (network restored, backend fixed, etc.).
      */
-    suspend fun retryDeadLetteredItems() {
+    suspend fun retryDeadLetteredItems(
+        limit: Int = 20,
+    ): AppActorCustomerInfo? {
         val items = queueStore.consumeDeadLettered()
-        if (items.isEmpty()) return
+        if (items.isEmpty()) return null
         val now = dateProviderMillis()
         val revived = items.map { item ->
             item.copy(
@@ -691,7 +667,11 @@ internal class AppActorPaymentProcessor(
                 )
             )
         }
-        scheduleNextRetryWake()
+        val result = pipelineMutex.withLock {
+            drainAllLocked(limit)
+        }
+        scheduleNextRetryWake(limit)
+        return result
     }
 
     private suspend fun drainAllLocked(
@@ -763,21 +743,6 @@ internal class AppActorPaymentProcessor(
             )
         }
         queueStore.upsert(item)
-        if (!isIdentityConfirmed(item.appUserId)) {
-            val waiting = item.copy(phase = AppActorReceiptQueuePhase.WaitingForIdentity)
-            queueStore.update(waiting)
-            onPipelineEvent(
-                AppActorReceiptPipelineEvent.DeferredWaitingForIdentity(
-                    key = appActorPublicReceiptId(waiting.key),
-                    productId = waiting.productId,
-                    transactionId = waiting.orderId,
-                    appUserId = waiting.appUserId,
-                    orderId = waiting.orderId,
-                )
-            )
-            scheduleNextRetryWake()
-            return ProcessingOutcome.Queued
-        }
         return processClaimedItem(item.copy(phase = AppActorReceiptQueuePhase.Posting), productEntitlements)
     }
 
@@ -969,7 +934,6 @@ internal class AppActorPaymentProcessor(
         if (finalAppUserId != requestedAppUserId) {
             customerManager.clearCache(requestedAppUserId)
             identityStore.setAppUserId(finalAppUserId)
-            identityStore.setServerUserId(finalAppUserId)
         }
         return finalAppUserId
     }
@@ -1031,25 +995,6 @@ internal class AppActorPaymentProcessor(
         item: AppActorReceiptQueueItem,
         productEntitlements: Map<String, List<String>>,
     ): ProcessingOutcome {
-        if (!isIdentityConfirmed(item.appUserId)) {
-            val waiting = item.copy(
-                phase = AppActorReceiptQueuePhase.WaitingForIdentity,
-                claimedAtMillis = null,
-                lastUpdatedAtMillis = dateProviderMillis(),
-            )
-            queueStore.update(waiting)
-            onPipelineEvent(
-                AppActorReceiptPipelineEvent.DeferredWaitingForIdentity(
-                    key = appActorPublicReceiptId(waiting.key),
-                    productId = waiting.productId,
-                    transactionId = waiting.orderId,
-                    appUserId = waiting.appUserId,
-                    orderId = waiting.orderId,
-                )
-            )
-            scheduleNextRetryWake()
-            return ProcessingOutcome.Queued
-        }
         val normalizedItem = normalizeQueueItemForPosting(item, productEntitlements)
         if (normalizedItem.productType == AppActorProductType.Unknown.wireValue) {
             return scheduleRetryOrDeadLetter(
@@ -1377,9 +1322,11 @@ internal class AppActorPaymentProcessor(
         }
     }
 
-    private suspend fun ensureProductEntitlements(): Map<String, List<String>> {
+    private suspend fun ensureProductEntitlements(
+        refreshIfMissing: Boolean = true,
+    ): Map<String, List<String>> {
         val existing = offeringsManager.currentProductEntitlements()
-        if (existing.isNotEmpty()) {
+        if (existing.isNotEmpty() || !refreshIfMissing) {
             return existing
         }
 
@@ -1467,7 +1414,6 @@ internal class AppActorPaymentProcessor(
         val stalePostingThreshold = nowMillis - AppActorAtomicJsonReceiptQueueStore.STALE_CLAIM_THRESHOLD_MILLIS
         return queueStore.snapshot().any { item ->
             when (item.phase) {
-                AppActorReceiptQueuePhase.WaitingForIdentity -> false
                 AppActorReceiptQueuePhase.NeedsPost -> item.nextRetryAtMillis <= nowMillis
                 AppActorReceiptQueuePhase.Posting -> (item.claimedAtMillis ?: 0L) <= stalePostingThreshold
                 AppActorReceiptQueuePhase.NeedsFinish -> item.nextRetryAtMillis <= nowMillis
@@ -1481,7 +1427,6 @@ internal class AppActorPaymentProcessor(
         val itemNextReady = queueStore.snapshot()
             .mapNotNull { item ->
                 when (item.phase) {
-                    AppActorReceiptQueuePhase.WaitingForIdentity,
                     AppActorReceiptQueuePhase.DeadLettered -> null
 
                     AppActorReceiptQueuePhase.NeedsPost,

@@ -8,9 +8,9 @@ import com.appactor.android.models.AppActorLogLevel
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -39,28 +39,12 @@ class AppActorStartupCoordinatorTests {
     }
 
     @Test
-    fun `startup identify confirms identity after completion`() = runBlocking {
-        val runtime = createRuntimeState(
-            options = runtimeTestOptions(),
-        )
-        val host = RecordingStartupHost(runtime)
-        val coordinator = AppActorStartupCoordinator(host)
-
-        val handles = coordinator.start(runtime)
-        handles.identityReadyJob?.join()
-
-        assertEquals(1, host.identifyCount.get())
-        assertEquals(1, host.confirmIdentityCount.get())
-        runtime.scope.cancel()
-    }
-
-    @Test
-    fun `deferred startup tasks preserve purchase sync then offerings then customer refresh order`() = runBlocking {
+    fun `startup bootstraps without an identify readiness phase`() = runBlocking {
         val runtime = createRuntimeState(
             options = runtimeTestOptions(),
         )
         val host = RecordingStartupHost(runtime).apply {
-            deferredStepsExpected = CountDownLatch(3)
+            deferredStepsExpected = CountDownLatch(4)
         }
         val coordinator = AppActorStartupCoordinator(host)
 
@@ -68,35 +52,92 @@ class AppActorStartupCoordinatorTests {
         handles.bootstrapCompletionJob?.join()
 
         assertTrue(host.deferredStepsExpected!!.await(5, TimeUnit.SECONDS))
-        awaitCondition { host.operationOrder.size >= 5 }
         val order = host.operationOrder.toList()
-        assertEquals("identify", order.first())
+        assertTrue(order.contains("offerings"))
+        assertTrue(order.contains("sync"))
+        assertTrue(order.contains("dead_letter_retry"))
+        assertTrue(order.contains("customer"))
         assertTrue("sync must come before dead_letter_retry", order.indexOf("sync") < order.indexOf("dead_letter_retry"))
         assertTrue("dead_letter_retry must come before customer", order.indexOf("dead_letter_retry") < order.indexOf("customer"))
-        assertTrue("offerings must be present", order.contains("offerings"))
         runtime.scope.cancel()
     }
 
     @Test
-    fun `purchase updates wait for identity readiness before processing`() = runBlocking {
+    fun `bootstrap completion does not wait for offerings prefetch warmup`() = runBlocking {
+        val runtime = createRuntimeState(
+            options = runtimeTestOptions(),
+        )
+        val host = RecordingStartupHost(runtime).apply {
+            deferredStepsExpected = CountDownLatch(3)
+            offeringsPrefetchStarted = CountDownLatch(1)
+            releaseOfferingsPrefetch = CountDownLatch(1)
+            offeringsPrefetchFinished = CountDownLatch(1)
+        }
+        val coordinator = AppActorStartupCoordinator(host)
+
+        val handles = coordinator.start(runtime)
+
+        assertTrue(host.offeringsPrefetchStarted!!.await(5, TimeUnit.SECONDS))
+        assertTrue(host.deferredStepsExpected!!.await(5, TimeUnit.SECONDS))
+        withTimeout(5_000L) {
+            handles.bootstrapCompletionJob?.join()
+        }
+
+        val order = host.operationOrder.toList()
+        assertTrue(order.contains("sync"))
+        assertTrue(order.contains("dead_letter_retry"))
+        assertTrue(order.contains("customer"))
+        assertFalse(host.offeringsPrefetchFinished!!.await(200, TimeUnit.MILLISECONDS))
+
+        host.releaseOfferingsPrefetch!!.countDown()
+        assertTrue(host.offeringsPrefetchFinished!!.await(5, TimeUnit.SECONDS))
+        assertTrue(host.deferredStepsExpected!!.await(5, TimeUnit.SECONDS))
+        assertTrue("sync must come before dead_letter_retry", order.indexOf("sync") < order.indexOf("dead_letter_retry"))
+        assertTrue("dead_letter_retry must come before customer", order.indexOf("dead_letter_retry") < order.indexOf("customer"))
+        runtime.scope.cancel()
+    }
+
+    @Test
+    fun `customer refresh waits for synchronous dead letter retry drain`() = runBlocking {
+        val runtime = createRuntimeState(
+            options = runtimeTestOptions(),
+        )
+        val host = RecordingStartupHost(runtime).apply {
+            deadLetterRetryStarted = CountDownLatch(1)
+            releaseDeadLetterRetry = CountDownLatch(1)
+            customerFetchStarted = CountDownLatch(1)
+            retryDeadLetterResult = AppActorCustomerInfo.empty.copy(
+                appUserId = runtime.identityStore.currentAppUserId ?: runtime.identityStore.ensureAppUserId(),
+            )
+        }
+        val coordinator = AppActorStartupCoordinator(host)
+
+        val handles = coordinator.start(runtime)
+
+        assertTrue(host.deadLetterRetryStarted!!.await(5, TimeUnit.SECONDS))
+        assertFalse(host.customerFetchStarted!!.await(200, TimeUnit.MILLISECONDS))
+
+        host.releaseDeadLetterRetry!!.countDown()
+        handles.bootstrapCompletionJob?.join()
+
+        assertTrue(host.customerFetchStarted!!.await(5, TimeUnit.SECONDS))
+        runtime.scope.cancel()
+    }
+
+    @Test
+    fun `purchase updates use resolved local identity immediately`() = runBlocking {
         val purchaseUpdates = MutableSharedFlow<List<AppActorStorePurchase>>(replay = 1)
         val runtime = createRuntimeState(
             storeAdapter = createMockStoreAdapter(purchaseUpdatesFlow = purchaseUpdates),
             options = runtimeTestOptions(),
         )
         val host = RecordingStartupHost(runtime).apply {
-            releaseIdentify = CountDownLatch(1)
             purchaseUpdateProcessed = CountDownLatch(1)
         }
         val coordinator = AppActorStartupCoordinator(host)
 
         coordinator.start(runtime)
         purchaseUpdates.emit(listOf(runtimeTestPurchase(obfuscatedAccountId = runtime.identityStore.currentAppUserId)))
-
-        Thread.sleep(150)
-        assertEquals(0, host.processPurchaseUpdatesCount.get())
-
-        host.releaseIdentify!!.countDown()
 
         assertTrue(host.purchaseUpdateProcessed!!.await(5, TimeUnit.SECONDS))
         assertEquals(1, host.processPurchaseUpdatesCount.get())
@@ -111,7 +152,6 @@ class AppActorStartupCoordinatorTests {
             options = runtimeTestOptions(),
         )
         val host = RecordingStartupHost(runtime).apply {
-            releaseIdentify = CountDownLatch(1)
             purchaseUpdateProcessed = CountDownLatch(1)
             bootstrapSnapshotAwaited = CountDownLatch(1)
             releaseBootstrapSnapshot = CountDownLatch(1)
@@ -119,8 +159,6 @@ class AppActorStartupCoordinatorTests {
         val coordinator = AppActorStartupCoordinator(host)
 
         coordinator.start(runtime)
-        host.releaseIdentify!!.countDown()
-
         assertTrue(host.bootstrapSnapshotAwaited!!.await(5, TimeUnit.SECONDS))
 
         purchaseUpdates.emit(listOf(runtimeTestPurchase(obfuscatedAccountId = runtime.identityStore.currentAppUserId)))
@@ -146,7 +184,7 @@ class AppActorStartupCoordinatorTests {
         val coordinator = AppActorStartupCoordinator(host)
         val handles = coordinator.start(runtime)
 
-        handles.identityReadyJob?.join()
+        handles.bootstrapCompletionJob?.join()
         purchaseUpdates.emit(listOf(runtimeTestPurchase(obfuscatedAccountId = runtime.identityStore.currentAppUserId)))
 
         assertTrue(host.purchaseUpdateProcessed!!.await(5, TimeUnit.SECONDS))
@@ -155,7 +193,7 @@ class AppActorStartupCoordinatorTests {
     }
 
     @Test
-    fun `startup identify phase emits duration debug event`() = runBlocking {
+    fun `startup no longer emits identify phase debug event`() = runBlocking {
         val runtime = createRuntimeState(
             options = runtimeTestOptions(),
         )
@@ -163,13 +201,10 @@ class AppActorStartupCoordinatorTests {
         val coordinator = AppActorStartupCoordinator(host)
 
         val handles = coordinator.start(runtime)
-        handles.identityReadyJob?.join()
+        handles.bootstrapCompletionJob?.join()
 
         val identifyEvent = host.debugEvents.firstOrNull { it["name"] == "startup_phase_identify" }
-        assertNotNull("Expected startup_phase_identify debug event", identifyEvent)
-        val durationMs = identifyEvent!!["duration_ms"]?.toLongOrNull()
-        assertNotNull("duration_ms should be present", durationMs)
-        assertTrue("duration_ms should be non-negative", durationMs!! >= 0)
+        assertEquals(null, identifyEvent)
 
         runtime.scope.cancel()
     }
@@ -206,38 +241,21 @@ class AppActorStartupCoordinatorTests {
 
         val operationOrder = CopyOnWriteArrayList<String>()
         val debugEvents = CopyOnWriteArrayList<Map<String, String>>()
-        val identifyCount = AtomicInteger(0)
-        val confirmIdentityCount = AtomicInteger(0)
         val processPurchaseUpdatesCount = AtomicInteger(0)
         val publishCustomerInfoCount = AtomicInteger(0)
 
-        var releaseIdentify: CountDownLatch? = null
         var deferredStepsExpected: CountDownLatch? = null
         var purchaseUpdateProcessed: CountDownLatch? = null
         var bootstrapSnapshotAwaited: CountDownLatch? = null
         var releaseBootstrapSnapshot: CountDownLatch? = null
+        var offeringsPrefetchStarted: CountDownLatch? = null
+        var releaseOfferingsPrefetch: CountDownLatch? = null
+        var offeringsPrefetchFinished: CountDownLatch? = null
+        var deadLetterRetryStarted: CountDownLatch? = null
+        var releaseDeadLetterRetry: CountDownLatch? = null
+        var customerFetchStarted: CountDownLatch? = null
         var persistResult: Boolean = true
-        var startupIdentifyResult: Pair<((AppActorCustomerInfo) -> Unit)?, AppActorCustomerInfo>? = null
-        var returnNullStartupIdentifyResult: Boolean = false
-
-        override suspend fun performStartupIdentify(
-            runtimeState: AppActorRuntimeState,
-        ): Pair<((AppActorCustomerInfo) -> Unit)?, AppActorCustomerInfo>? {
-            identifyCount.incrementAndGet()
-            operationOrder += "identify"
-            releaseIdentify?.await(5, TimeUnit.SECONDS)
-            if (returnNullStartupIdentifyResult) {
-                return null
-            }
-            return startupIdentifyResult
-                ?: ({ _: AppActorCustomerInfo -> } to customerInfo(
-                    runtime.identityStore.currentAppUserId ?: runtime.identityStore.ensureAppUserId(),
-                ))
-        }
-
-        override fun confirmIdentity(runtimeState: AppActorRuntimeState) {
-            confirmIdentityCount.incrementAndGet()
-        }
+        var retryDeadLetterResult: AppActorCustomerInfo? = null
 
         override suspend fun captureOperationSnapshot(
             resolveAppUserId: Boolean,
@@ -259,19 +277,29 @@ class AppActorStartupCoordinatorTests {
             return null
         }
 
-        override suspend fun retryDeadLetteredItems(runtimeState: AppActorRuntimeState) {
+        override suspend fun retryDeadLetteredItems(
+            snapshot: AppActorOperationSnapshot,
+        ): AppActorCustomerInfo? {
+            deadLetterRetryStarted?.countDown()
+            releaseDeadLetterRetry?.let { assertTrue(it.await(5, TimeUnit.SECONDS)) }
             operationOrder += "dead_letter_retry"
+            deferredStepsExpected?.countDown()
+            return retryDeadLetterResult
         }
 
-        override suspend fun fetchOfferings(runtimeState: AppActorRuntimeState): AppActorDiagnosticsDataSource? {
+        override suspend fun prefetchOfferings(runtimeState: AppActorRuntimeState): AppActorDiagnosticsDataSource? {
+            offeringsPrefetchStarted?.countDown()
+            releaseOfferingsPrefetch?.let { assertTrue(it.await(5, TimeUnit.SECONDS)) }
             operationOrder += "offerings"
             deferredStepsExpected?.countDown()
+            offeringsPrefetchFinished?.countDown()
             return AppActorDiagnosticsDataSource.Network
         }
 
         override suspend fun fetchCustomerInfo(
             snapshot: AppActorOperationSnapshot,
         ): Pair<AppActorCustomerInfo, AppActorDiagnosticsDataSource?> {
+            customerFetchStarted?.countDown()
             operationOrder += "customer"
             deferredStepsExpected?.countDown()
             return customerInfo(snapshot.appUserId) to AppActorDiagnosticsDataSource.Network

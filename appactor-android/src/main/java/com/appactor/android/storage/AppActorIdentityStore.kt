@@ -7,13 +7,13 @@ import java.util.UUID
 internal interface AppActorIdentityStore {
     val currentAppUserId: String?
     val installId: String
-    val serverUserId: String?
     val lastRequestId: String?
     val installReferrer: String?
 
     fun ensureAppUserId(): String
+    fun resolveAppUserId(explicitAppUserId: String?): String
+    fun clearLegacyIdentityState()
     fun setAppUserId(appUserId: String?)
-    fun setServerUserId(serverUserId: String?)
     fun setLastRequestId(requestId: String?)
     fun setInstallReferrer(referrer: String?)
     fun clearIdentity()
@@ -38,9 +38,6 @@ internal class AppActorSharedPrefsIdentityStore(
             return generated
         }
 
-    override val serverUserId: String?
-        get() = preferences.getString(KEY_SERVER_USER_ID, null)
-
     override val lastRequestId: String?
         get() = preferences.getString(KEY_LAST_REQUEST_ID, null)
 
@@ -57,15 +54,20 @@ internal class AppActorSharedPrefsIdentityStore(
         return generated
     }
 
+    override fun resolveAppUserId(explicitAppUserId: String?): String {
+        val normalizedExplicit = explicitAppUserId
+            ?.takeIf { it.trim().isNotEmpty() }
+        if (normalizedExplicit != null) {
+            com.appactor.android.models.AppActorValidation.validateAppUserId(normalizedExplicit)
+            setAppUserId(normalizedExplicit)
+            return normalizedExplicit
+        }
+        return ensureAppUserId()
+    }
+
     override fun setAppUserId(appUserId: String?) {
         preferences.edit().apply {
             if (appUserId.isNullOrBlank()) remove(KEY_APP_USER_ID) else putString(KEY_APP_USER_ID, appUserId)
-        }.apply()
-    }
-
-    override fun setServerUserId(serverUserId: String?) {
-        preferences.edit().apply {
-            if (serverUserId.isNullOrBlank()) remove(KEY_SERVER_USER_ID) else putString(KEY_SERVER_USER_ID, serverUserId)
         }.apply()
     }
 
@@ -81,10 +83,16 @@ internal class AppActorSharedPrefsIdentityStore(
         }.apply()
     }
 
+    override fun clearLegacyIdentityState() {
+        preferences.edit()
+            .remove(KEY_LEGACY_SERVER_USER_ID)
+            .apply()
+    }
+
     override fun clearIdentity() {
         preferences.edit()
             .remove(KEY_APP_USER_ID)
-            .remove(KEY_SERVER_USER_ID)
+            .remove(KEY_LEGACY_SERVER_USER_ID)
             .remove(KEY_LAST_REQUEST_ID)
             .apply()
     }
@@ -92,8 +100,8 @@ internal class AppActorSharedPrefsIdentityStore(
     private companion object {
         const val PREFS_NAME = "appactor_identity"
         const val KEY_APP_USER_ID = "appactor_billing_app_user_id"
+        const val KEY_LEGACY_SERVER_USER_ID = "appactor_billing_server_user_id"
         const val KEY_INSTALL_ID = "appactor_billing_install_id"
-        const val KEY_SERVER_USER_ID = "appactor_billing_server_user_id"
         const val KEY_LAST_REQUEST_ID = "appactor_billing_last_request_id"
         const val KEY_INSTALL_REFERRER = "appactor_billing_install_referrer"
     }

@@ -139,6 +139,10 @@ internal class FakeStoreAdapter(
     private val connectCompleted: CountDownLatch? = null,
     private val releaseConnect: CountDownLatch? = null,
     private val activePurchases: List<AppActorStorePurchase> = emptyList(),
+    private val resolvedProducts: List<AppActorStoreProduct> = emptyList(),
+    private val queryProductDetailsStarted: CountDownLatch? = null,
+    private val queryProductDetailsCompleted: CountDownLatch? = null,
+    private val releaseQueryProductDetails: CountDownLatch? = null,
     val storefront: AppActorStorefront? = null,
     val capabilities: Set<AppActorStoreCapability> = setOf(AppActorStoreCapability.Purchases),
 ) : AppActorStoreAdapter {
@@ -172,7 +176,17 @@ internal class FakeStoreAdapter(
         requests: List<AppActorStoreProductRequest>,
     ): List<AppActorStoreProduct> {
         connect()
-        return emptyList()
+        queryProductDetailsStarted?.countDown()
+        releaseQueryProductDetails?.await(5, TimeUnit.SECONDS)
+        queryProductDetailsCompleted?.countDown()
+        return requests.mapNotNull { request ->
+            resolvedProducts.firstOrNull { product ->
+                product.productId == request.productId &&
+                    product.productType == request.productType &&
+                    product.basePlanId == request.basePlanId &&
+                    product.offerId == request.offerId
+            }
+        }
     }
 
     override suspend fun launchPurchase(
@@ -287,7 +301,6 @@ internal fun loginEnvelope(
         {
           "requestId": "$requestId",
           "appUserId": "$appUserId",
-          "serverUserId": "$appUserId",
           "customer": {
             "entitlements": {},
             "subscriptions": {},

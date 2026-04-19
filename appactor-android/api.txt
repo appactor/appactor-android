@@ -4,7 +4,7 @@ package com.appactor.android.api {
   public final class AppActor {
     method public suspend Object? activeEntitlementKeysOffline(kotlin.coroutines.Continuation<? super java.util.Set<? extends java.lang.String>>);
     method public boolean canMakePurchases(optional java.util.Set<? extends com.appactor.android.models.AppActorStoreCapability> requiredCapabilities);
-    method public suspend Object? configure(android.content.Context context, String apiKey, optional com.appactor.android.models.AppActorOptions options, kotlin.coroutines.Continuation<? super kotlin.Unit>);
+    method public suspend Object? configure(android.content.Context context, String apiKey, optional String? appUserId, optional com.appactor.android.models.AppActorOptions options, kotlin.coroutines.Continuation<? super kotlin.Unit>);
     method public suspend Object? drainReceiptQueueAndRefreshCustomer(kotlin.coroutines.Continuation<? super com.appactor.android.models.AppActorCustomerInfo>);
     method public void enableInstallReferrer();
     method public String? getAppUserId();
@@ -28,7 +28,6 @@ package com.appactor.android.api {
     method public java.util.Set<com.appactor.android.models.AppActorStoreCapability> getStoreCapabilities();
     method public suspend Object? getStorefront(kotlin.coroutines.Continuation<? super com.appactor.android.models.AppActorStorefront?>);
     method public boolean isAnonymous();
-    method public boolean isConfigured();
     method public suspend Object? logIn(String newAppUserId, kotlin.coroutines.Continuation<? super com.appactor.android.models.AppActorCustomerInfo>);
     method public suspend Object? logOut(kotlin.coroutines.Continuation<? super java.lang.Boolean>);
     method public suspend Object? offerings(com.appactor.android.models.AppActorOfferingsFetchPolicy fetchPolicy, kotlin.coroutines.Continuation<? super com.appactor.android.models.AppActorOfferings>);
@@ -50,7 +49,6 @@ package com.appactor.android.api {
     property public final com.appactor.android.models.AppActorCustomerInfo customerInfo;
     property public final kotlinx.coroutines.flow.StateFlow<com.appactor.android.models.AppActorCustomerInfo> customerInfoFlow;
     property public final boolean isAnonymous;
-    property public final boolean isConfigured;
     property public final kotlin.jvm.functions.Function1<com.appactor.android.models.AppActorCustomerInfo,kotlin.Unit>? onCustomerInfoChanged;
     property public final kotlin.jvm.functions.Function2<java.lang.String,com.appactor.android.models.AppActorCustomerInfo,kotlin.Unit>? onDeferredPurchaseResolved;
     property public final kotlin.jvm.functions.Function1<com.appactor.android.models.AppActorReceiptPipelineEvent,kotlin.Unit>? onReceiptPipelineEvent;
@@ -67,9 +65,10 @@ package com.appactor.android.api {
     method public static boolean canMakePurchases(java.util.Set<? extends com.appactor.android.models.AppActorStoreCapability> requiredCapabilities);
     method public static void clearListeners();
     method public static void configure(android.content.Context context, String apiKey);
-    method public static void configure(android.content.Context context, String apiKey, optional com.appactor.android.models.AppActorOptions options);
-    method public static void configure(android.content.Context context, String apiKey, optional com.appactor.android.models.AppActorOptions options, optional com.appactor.android.models.AppActorCompletionCallback? onComplete);
-    method public static void configure(android.content.Context context, String apiKey, optional com.appactor.android.models.AppActorOptions options, optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorBridgeErrorCallback? onError);
+    method public static void configure(android.content.Context context, String apiKey, optional String? appUserId);
+    method public static void configure(android.content.Context context, String apiKey, optional String? appUserId, optional com.appactor.android.models.AppActorOptions options);
+    method public static void configure(android.content.Context context, String apiKey, optional String? appUserId, optional com.appactor.android.models.AppActorOptions options, optional com.appactor.android.models.AppActorCompletionCallback? onComplete);
+    method public static void configure(android.content.Context context, String apiKey, optional String? appUserId, optional com.appactor.android.models.AppActorOptions options, optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorBridgeErrorCallback? onError);
     method public static void drainReceiptQueueAndRefreshCustomer();
     method public static void drainReceiptQueueAndRefreshCustomer(optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorCustomerInfo>? onSuccess);
     method public static void drainReceiptQueueAndRefreshCustomer(optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorCustomerInfo>? onSuccess, optional com.appactor.android.models.AppActorBridgeErrorCallback? onError);
@@ -105,7 +104,6 @@ package com.appactor.android.api {
     method public static void getStorefront(optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorStorefront?>? onSuccess);
     method public static void getStorefront(optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorStorefront?>? onSuccess, optional com.appactor.android.models.AppActorBridgeErrorCallback? onError);
     method public static boolean isAnonymous();
-    method public static boolean isConfigured();
     method public static void logIn(String appUserId);
     method public static void logIn(String appUserId, optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorCustomerInfo>? onSuccess);
     method public static void logIn(String appUserId, optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorCustomerInfo>? onSuccess, optional com.appactor.android.models.AppActorBridgeErrorCallback? onError);
@@ -142,7 +140,11 @@ package com.appactor.android.api {
   public final class AppActorJava {
     method public static boolean canMakePurchases();
     method public static boolean canMakePurchases(java.util.Set<? extends com.appactor.android.models.AppActorStoreCapability> requiredCapabilities);
-    method public static void configureAsync(android.content.Context context, String apiKey, optional com.appactor.android.models.AppActorOptions options, optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorErrorCallback? onError);
+    method public static void configureAsync(android.content.Context context, String apiKey);
+    method public static void configureAsync(android.content.Context context, String apiKey, optional String? appUserId);
+    method public static void configureAsync(android.content.Context context, String apiKey, optional String? appUserId, optional com.appactor.android.models.AppActorOptions options);
+    method public static void configureAsync(android.content.Context context, String apiKey, optional String? appUserId, optional com.appactor.android.models.AppActorOptions options, optional com.appactor.android.models.AppActorCompletionCallback? onComplete);
+    method public static void configureAsync(android.content.Context context, String apiKey, optional String? appUserId, optional com.appactor.android.models.AppActorOptions options, optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorErrorCallback? onError);
     method public static void drainReceiptQueueAndRefreshCustomerAsync(optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorCustomerInfo>? onSuccess, optional com.appactor.android.models.AppActorErrorCallback? onError);
     method public static void getCustomerInfoAsync(optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorCustomerInfo>? onSuccess, optional com.appactor.android.models.AppActorErrorCallback? onError);
     method public static void getExperimentAssignmentAsync(String experimentKey, optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorExperimentAssignment?>? onSuccess, optional com.appactor.android.models.AppActorErrorCallback? onError);
@@ -254,7 +256,6 @@ package com.appactor.android.models {
     property public final String type;
     field public static final com.appactor.android.models.AppActorBridgeReceiptEvent.Companion Companion;
     field public static final String TYPE_DEAD_LETTERED = "DEAD_LETTERED";
-    field public static final String TYPE_DEFERRED_WAITING_FOR_IDENTITY = "DEFERRED_WAITING_FOR_IDENTITY";
     field public static final String TYPE_DUPLICATE_SKIPPED = "DUPLICATE_SKIPPED";
     field public static final String TYPE_PERMANENTLY_REJECTED = "PERMANENTLY_REJECTED";
     field public static final String TYPE_POSTED_OK = "POSTED_OK";
@@ -1118,26 +1119,6 @@ package com.appactor.android.models {
     property public final int retryCount;
   }
 
-  public static final class AppActorReceiptPipelineEvent.DeferredWaitingForIdentity implements com.appactor.android.models.AppActorReceiptPipelineEvent {
-    ctor public AppActorReceiptPipelineEvent.DeferredWaitingForIdentity(String key, String productId, String? transactionId, String appUserId, optional String? orderId);
-    method public String component1();
-    method public String component2();
-    method public String? component3();
-    method public String component4();
-    method public String? component5();
-    method public com.appactor.android.models.AppActorReceiptPipelineEvent.DeferredWaitingForIdentity copy(String key, String productId, String? transactionId, String appUserId, String? orderId);
-    method public String getAppUserId();
-    method public String getKey();
-    method public String? getOrderId();
-    method public String getProductId();
-    method public String? getTransactionId();
-    property public String appUserId;
-    property public final String key;
-    property public final String? orderId;
-    property public final String productId;
-    property public final String? transactionId;
-  }
-
   public static final class AppActorReceiptPipelineEvent.DuplicateSkipped implements com.appactor.android.models.AppActorReceiptPipelineEvent {
     ctor public AppActorReceiptPipelineEvent.DuplicateSkipped(String key, String productId, String appUserId);
     method public String component1();
@@ -1414,4 +1395,3 @@ package com.appactor.android.models {
   }
 
 }
-

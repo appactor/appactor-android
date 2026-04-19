@@ -24,14 +24,16 @@ import com.appactor.android.models.AppActorSuccessCallback
 public object AppActorJava {
 
     @JvmStatic
+    @JvmOverloads
     public fun configureAsync(
         context: Context,
         apiKey: String,
+        appUserId: String? = null,
         options: AppActorOptions = AppActorOptions(),
         onComplete: AppActorCompletionCallback? = null,
         onError: AppActorErrorCallback? = null,
     ): Unit = AppActor.launchAsync(
-        operation = { AppActor.configure(context, apiKey, options) },
+        operation = { AppActor.configure(context, apiKey, appUserId, options) },
         onComplete = onComplete,
         onError = onError,
     )

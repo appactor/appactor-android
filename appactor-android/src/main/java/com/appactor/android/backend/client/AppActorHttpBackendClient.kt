@@ -13,8 +13,6 @@ import com.appactor.android.backend.dto.AppActorGoogleSyncResponseDTO
 import com.appactor.android.backend.dto.AppActorIdentifyRequestDTO
 import com.appactor.android.backend.dto.AppActorLoginRequestDTO
 import com.appactor.android.backend.dto.AppActorLoginResponseDTO
-import com.appactor.android.backend.dto.AppActorLogoutRequestDTO
-import com.appactor.android.backend.dto.AppActorLogoutResponseDTO
 import com.appactor.android.backend.dto.AppActorOfferingsEnvelopeDTO
 import com.appactor.android.backend.dto.AppActorRemoteConfigsEnvelopeDTO
 import com.appactor.android.models.AppActorConfiguration
@@ -56,15 +54,6 @@ internal class AppActorHttpBackendClient(
     override suspend fun login(request: AppActorLoginRequestDTO): AppActorBackendHttpResponse<AppActorLoginResponseDTO> {
         val httpRequest = buildJsonRequest(
             url = buildAppActorUrl(configuration.baseUrl, "v1", "payment", "login"),
-            method = "POST",
-            body = request,
-        )
-        return executeRetryable(httpRequest)
-    }
-
-    override suspend fun logout(request: AppActorLogoutRequestDTO): AppActorBackendHttpResponse<AppActorLogoutResponseDTO> {
-        val httpRequest = buildJsonRequest(
-            url = buildAppActorUrl(configuration.baseUrl, "v1", "payment", "logout"),
             method = "POST",
             body = request,
         )

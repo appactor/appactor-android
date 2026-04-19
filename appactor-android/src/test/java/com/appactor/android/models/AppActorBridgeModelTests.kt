@@ -190,7 +190,6 @@ class AppActorBridgeModelTests {
         val testUserId = "test_user_42"
         val testOrderId = "GPA.1234-5678-9012"
         val postedKey = appActorPublicReceiptId("raw_posted_key")
-        val deferredKey = appActorPublicReceiptId("raw_waiting_key")
         val retryKey = appActorPublicReceiptId("raw_retry_key")
         val rejectKey = appActorPublicReceiptId("raw_reject_key")
         val deadKey = appActorPublicReceiptId("raw_dead_key")
@@ -200,13 +199,6 @@ class AppActorBridgeModelTests {
                 key = postedKey,
                 productId = "monthly",
                 requestId = "req_123",
-                appUserId = testUserId,
-                orderId = testOrderId,
-            ),
-            AppActorReceiptPipelineEvent.DeferredWaitingForIdentity(
-                key = deferredKey,
-                productId = "monthly",
-                transactionId = "tx_waiting",
                 appUserId = testUserId,
                 orderId = testOrderId,
             ),
@@ -249,27 +241,23 @@ class AppActorBridgeModelTests {
         assertEquals(testUserId, mapped[0].appUserId)
         assertEquals(testOrderId, mapped[0].transactionId)
         assertNull(mapped[0].key)
-        assertEquals(AppActorBridgeReceiptEvent.TYPE_DEFERRED_WAITING_FOR_IDENTITY, mapped[1].type)
-        assertEquals("tx_waiting", mapped[1].transactionId)
-        assertNull(mapped[1].key)
-        assertNull(mapped[1].retryCount)
-        assertEquals(AppActorBridgeReceiptEvent.TYPE_RETRY_SCHEDULED, mapped[2].type)
+        assertEquals(AppActorBridgeReceiptEvent.TYPE_RETRY_SCHEDULED, mapped[1].type)
+        assertEquals(testOrderId, mapped[1].transactionId)
+        assertEquals(3, mapped[1].retryCount)
+        assertTrue(mapped[1].nextAttemptAt != null)
+        assertEquals("RATE_LIMITED", mapped[1].errorCode)
+        assertEquals(AppActorBridgeReceiptEvent.TYPE_PERMANENTLY_REJECTED, mapped[2].type)
         assertEquals(testOrderId, mapped[2].transactionId)
-        assertEquals(3, mapped[2].retryCount)
-        assertTrue(mapped[2].nextAttemptAt != null)
-        assertEquals("RATE_LIMITED", mapped[2].errorCode)
-        assertEquals(AppActorBridgeReceiptEvent.TYPE_PERMANENTLY_REJECTED, mapped[3].type)
+        assertEquals("INVALID_RECEIPT", mapped[2].errorCode)
+        assertNull(mapped[2].key)
+        assertEquals(AppActorBridgeReceiptEvent.TYPE_DEAD_LETTERED, mapped[3].type)
         assertEquals(testOrderId, mapped[3].transactionId)
-        assertEquals("INVALID_RECEIPT", mapped[3].errorCode)
+        assertEquals(4, mapped[3].retryCount)
+        assertEquals("network timeout", mapped[3].errorCode)
         assertNull(mapped[3].key)
-        assertEquals(AppActorBridgeReceiptEvent.TYPE_DEAD_LETTERED, mapped[4].type)
-        assertEquals(testOrderId, mapped[4].transactionId)
-        assertEquals(4, mapped[4].retryCount)
-        assertEquals("network timeout", mapped[4].errorCode)
-        assertNull(mapped[4].key)
         // DuplicateSkipped: transactionId = null, key = queueKey (matches iOS)
-        assertEquals(AppActorBridgeReceiptEvent.TYPE_DUPLICATE_SKIPPED, mapped[5].type)
-        assertNull(mapped[5].transactionId)
-        assertEquals(dupKey, mapped[5].key)
+        assertEquals(AppActorBridgeReceiptEvent.TYPE_DUPLICATE_SKIPPED, mapped[4].type)
+        assertNull(mapped[4].transactionId)
+        assertEquals(dupKey, mapped[4].key)
     }
 }

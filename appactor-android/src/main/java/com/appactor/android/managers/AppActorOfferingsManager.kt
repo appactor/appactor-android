@@ -89,6 +89,10 @@ internal class AppActorOfferingsManager(
                         return stale
                     }
 
+                    inFlight?.let { existing ->
+                        return@withLock OfferingsAction.Await(existing)
+                    }
+
                     loadCachedPayloadForImmediateReturnLocked()
                         ?.let { cachedValue ->
                             val refreshRequest = if (inFlight == null) {
@@ -168,6 +172,59 @@ internal class AppActorOfferingsManager(
             return executeFetchOrAwait(forceRefresh = true)
         }
         return getOfferings(fetchPolicy = AppActorOfferingsFetchPolicy.ReturnCachedThenRefresh)
+    }
+
+    suspend fun prefetchForBootstrap(): AppActorDiagnosticsDataSource? {
+        val action = stateMutex.withLock {
+            if (isMemoryCacheFreshLocked() && cachedOfferings?.all?.isNotEmpty() == true) {
+                return@withLock BootstrapPrefetchAction.Skip(
+                    lastLoadSource ?: AppActorDiagnosticsDataSource.Cache
+                )
+            }
+
+            inFlight?.let { existing ->
+                return@withLock BootstrapPrefetchAction.Await(existing, lastLoadSource)
+            }
+
+            val request = CompletableDeferred<AppActorOfferings>()
+            inFlight = request
+            BootstrapPrefetchAction.Execute(request, cacheGeneration)
+        }
+
+        return when (action) {
+            is BootstrapPrefetchAction.Skip -> action.source
+            is BootstrapPrefetchAction.Await -> {
+                runCatching { action.deferred.await() }
+                action.source ?: lastLoadSource
+            }
+
+            is BootstrapPrefetchAction.Execute -> {
+                try {
+                    val seed = fetchBootstrapSeed()
+                    stateMutex.withLock {
+                        if (cacheGeneration == action.generation) {
+                            offlineProductCatalogStore.save(seed.dto.toOfflineProductCatalog())
+                            lastLoadSource = seed.source
+                        }
+                    }
+                    launchBootstrapEnrichment(
+                        request = action.request,
+                        seed = seed,
+                        generation = action.generation,
+                    )
+                    seed.source
+                } catch (throwable: Throwable) {
+                    action.request.completeExceptionally(throwable)
+                    stateMutex.withLock {
+                        if (inFlight === action.request) {
+                            inFlight = null
+                        }
+                    }
+                    AppActorLogger.debug("Bootstrap offerings prefetch failed: ${throwable.message}")
+                    null
+                }
+            }
+        }
     }
 
     private suspend fun executeFetchOrAwait(forceRefresh: Boolean): AppActorOfferings {
@@ -363,6 +420,82 @@ internal class AppActorOfferingsManager(
         }
     }
 
+    private suspend fun fetchBootstrapSeed(): BootstrapSeed {
+        val requestLocales = currentLocales()
+        return try {
+            val response = backendClient.getOfferings(
+                eTag = cacheStore.eTag(forceRefresh = false, currentLocales = requestLocales),
+            )
+            when {
+                response.isNotModified -> {
+                    val cachedValue = cacheStore.handleNotModified(
+                        rotatedETag = response.eTag,
+                        currentLocales = requestLocales,
+                    ) ?: cacheStore.loadLocaleCompatible(requestLocales)
+                    val fallback = fallbackDTO
+                    when {
+                        cachedValue != null -> decodeBootstrapSeed(
+                            payload = cachedValue.payload,
+                            cachedAtMillis = cachedValue.cachedAtMillis,
+                            source = AppActorDiagnosticsDataSource.Cache,
+                            verification = cachedValue.verification,
+                        )
+
+                        fallback != null -> BootstrapSeed(
+                            dto = fallback,
+                            cachedAtMillis = dateProviderMillis(),
+                            source = AppActorDiagnosticsDataSource.Cache,
+                        )
+
+                        else -> throw IllegalStateException(
+                            "Offerings cache missing for 304 response with no fallback."
+                        )
+                    }
+                }
+
+                else -> {
+                    val body = requireNotNull(response.body) {
+                        "Offerings response body was null."
+                    }
+                    val payload = AppActorBackendJson.instance.encodeToString(body)
+                    cacheStore.save(
+                        payload = payload,
+                        eTag = response.eTag,
+                        verified = response.signatureVerified,
+                        preferredLocales = requestLocales,
+                    )
+                    BootstrapSeed(
+                        dto = body,
+                        cachedAtMillis = dateProviderMillis(),
+                        source = AppActorDiagnosticsDataSource.Network,
+                        verification = AppActorVerificationResult.from(response.signatureVerified),
+                    )
+                }
+            }
+        } catch (throwable: Throwable) {
+            if (!shouldFallbackToCache(throwable)) {
+                throw throwable.toAppActorError("Failed to fetch offerings.")
+            }
+            val cachedValue = cacheStore.loadLocaleCompatible(requestLocales)
+            when {
+                cachedValue != null -> decodeBootstrapSeed(
+                    payload = cachedValue.payload,
+                    cachedAtMillis = cachedValue.cachedAtMillis,
+                    source = AppActorDiagnosticsDataSource.Cache,
+                    verification = cachedValue.verification,
+                )
+
+                fallbackDTO != null -> BootstrapSeed(
+                    dto = requireNotNull(fallbackDTO),
+                    cachedAtMillis = dateProviderMillis(),
+                    source = AppActorDiagnosticsDataSource.Cache,
+                )
+
+                else -> throw throwable.toAppActorError("Failed to fetch offerings.")
+            }
+        }
+    }
+
     private fun isMemoryCacheFreshLocked(): Boolean {
         val cachedAt = cachedAtMillis ?: return false
         val ttl = if (isBackground) BACKGROUND_TTL_MILLIS else FOREGROUND_TTL_MILLIS
@@ -393,6 +526,48 @@ internal class AppActorOfferingsManager(
                 }
             }
         }
+    }
+
+    private fun launchBootstrapEnrichment(
+        request: CompletableDeferred<AppActorOfferings>,
+        seed: BootstrapSeed,
+        generation: Long,
+    ) {
+        backgroundScope.launch {
+            try {
+                val offerings = enrichAndCache(
+                    dto = seed.dto,
+                    cachedAtMillis = seed.cachedAtMillis,
+                    generation = generation,
+                    source = seed.source,
+                    verification = seed.verification,
+                )
+                request.complete(offerings)
+            } catch (throwable: Throwable) {
+                request.completeExceptionally(throwable)
+            } finally {
+                stateMutex.withLock {
+                    if (inFlight === request) {
+                        inFlight = null
+                    }
+                }
+            }
+        }
+    }
+
+    private fun decodeBootstrapSeed(
+        payload: String,
+        cachedAtMillis: Long,
+        source: AppActorDiagnosticsDataSource,
+        verification: AppActorVerificationResult,
+    ): BootstrapSeed {
+        val dto = AppActorBackendJson.instance.decodeFromString<AppActorOfferingsEnvelopeDTO>(payload)
+        return BootstrapSeed(
+            dto = dto,
+            cachedAtMillis = cachedAtMillis,
+            source = source,
+            verification = verification,
+        )
     }
 
     private suspend fun decodeAndEnrich(
@@ -663,6 +838,25 @@ internal class AppActorOfferingsManager(
             val refreshRequest: CompletableDeferred<AppActorOfferings>?,
         ) : OfferingsAction
     }
+
+    private sealed interface BootstrapPrefetchAction {
+        data class Skip(val source: AppActorDiagnosticsDataSource?) : BootstrapPrefetchAction
+        data class Await(
+            val deferred: CompletableDeferred<AppActorOfferings>,
+            val source: AppActorDiagnosticsDataSource?,
+        ) : BootstrapPrefetchAction
+        data class Execute(
+            val request: CompletableDeferred<AppActorOfferings>,
+            val generation: Long,
+        ) : BootstrapPrefetchAction
+    }
+
+    private data class BootstrapSeed(
+        val dto: AppActorOfferingsEnvelopeDTO,
+        val cachedAtMillis: Long,
+        val source: AppActorDiagnosticsDataSource,
+        val verification: AppActorVerificationResult = AppActorVerificationResult.NotRequested,
+    )
 
     private companion object {
         const val FOREGROUND_TTL_MILLIS: Long = 5 * 60 * 1_000

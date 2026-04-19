@@ -48,11 +48,8 @@ internal class AppActorRuntimeFactory(
         eTagManager.clearUnverifiedIfNeeded()
 
         identityStore.installId
-        if (!configuration.appUserId.isNullOrBlank()) {
-            identityStore.setAppUserId(configuration.appUserId)
-        } else {
-            identityStore.ensureAppUserId()
-        }
+        identityStore.resolveAppUserId(configuration.appUserId)
+        identityStore.clearLegacyIdentityState()
 
         val backendClient = AppActorHttpBackendClient(configuration)
         val storeAdapter = storeAdapterFactory(configuration.applicationContext)

@@ -8,6 +8,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -41,6 +42,7 @@ class AppActorIdentityTransitionTests {
         val firstRemoteConfigSeen = CountDownLatch(1)
         val releaseFirstRemoteConfig = CountDownLatch(1)
         val remoteConfigCalls = AtomicInteger(0)
+        val logoutCalls = AtomicInteger(0)
         AppActor.storeAdapterFactory = { FakeStoreAdapter() }
 
         TestBackendServer { request ->
@@ -77,14 +79,10 @@ class AppActorIdentityTransitionTests {
                     }
                 }
 
-                "/v1/payment/logout" -> jsonResponse(
-                    """
-                        {
-                          "requestId": "req_logout",
-                          "success": true
-                        }
-                    """.trimIndent(),
-                )
+                "/v1/payment/logout" -> {
+                    logoutCalls.incrementAndGet()
+                    jsonResponse("""{"requestId":"req_logout","success":true}""")
+                }
 
                 else -> {
                     if (path.startsWith("/v1/customers/")) {
@@ -117,8 +115,36 @@ class AppActorIdentityTransitionTests {
             releaseFirstRemoteConfig.countDown()
             val configs = remoteConfigsDeferred.await()
 
+            assertEquals(0, logoutCalls.get())
             assertTrue("Expected at least 2 remote config calls", remoteConfigCalls.get() >= 2)
             assertEquals("anonymous", configs["audience"]?.stringValue)
+            assertTrue(AppActor.appUserId?.startsWith("appactor-anon-") == true)
+        }
+    }
+
+    @Test
+    fun `logout clears legacy server user id state`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val preferences = context.getSharedPreferences("appactor_identity", Context.MODE_PRIVATE)
+        AppActor.storeAdapterFactory = { FakeStoreAdapter() }
+
+        stubBackend().use { backend ->
+            AppActor.configure(
+                com.appactor.android.models.AppActorConfiguration(
+                    context = context,
+                    apiKey = "pk_test_123",
+                    appUserId = "user_a",
+                    baseUrl = backend.baseUrl,
+                    options = testOptionsForLocalBackend(),
+                )
+            )
+
+            preferences.edit()
+                .putString("appactor_billing_server_user_id", "legacy_server_user_123")
+                .commit()
+
+            assertTrue(AppActor.logOut())
+            assertNull(preferences.getString("appactor_billing_server_user_id", null))
             assertTrue(AppActor.appUserId?.startsWith("appactor-anon-") == true)
         }
     }
@@ -345,6 +371,60 @@ class AppActorIdentityTransitionTests {
             assertEquals("user_b", info.appUserId)
             assertTrue(callbackObserved.await(5, TimeUnit.SECONDS))
             assertEquals(listOf("user_b"), callbackRemoteConfigValue)
+        }
+    }
+
+    @Test
+    fun `same user login still uses backend login path`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val loginCalls = AtomicInteger(0)
+        val identifyCalls = AtomicInteger(0)
+        AppActor.storeAdapterFactory = { FakeStoreAdapter() }
+
+        TestBackendServer { request ->
+            val path = request.path?.substringBefore("?") ?: ""
+            when (path) {
+                "/v1/payment/identify" -> {
+                    identifyCalls.incrementAndGet()
+                    val userId = identifyAppUserId(request, "user_a")
+                    jsonResponse(customerEnvelope(requestId = "req_identify_same_user", appUserId = userId))
+                }
+                "/v1/payment/offerings" -> jsonResponse("""{"requestId":"req_off","data":{"offerings":[],"productEntitlements":{}}}""")
+                "/v1/customers/user_a" -> jsonResponse(
+                    customerEnvelope(
+                        requestId = "req_customer_same_user",
+                        appUserId = "user_a",
+                    ),
+                )
+                "/v1/payment/login" -> {
+                    loginCalls.incrementAndGet()
+                    jsonResponse(
+                        loginEnvelope(
+                            requestId = "req_login_same_user",
+                            appUserId = "user_a",
+                        ),
+                    )
+                }
+
+                else -> jsonResponse("{}", 404)
+            }
+        }.use { backend ->
+            AppActor.configure(
+                com.appactor.android.models.AppActorConfiguration(
+                    context = context,
+                    apiKey = "pk_test_123",
+                    appUserId = "user_a",
+                    baseUrl = backend.baseUrl,
+                    options = testOptionsForLocalBackend(),
+                )
+            )
+
+            val info = withTimeout(5_000L) { AppActor.logIn("user_a") }
+
+            assertEquals("user_a", info.appUserId)
+            assertEquals("user_a", AppActor.appUserId)
+            assertEquals(1, loginCalls.get())
+            assertEquals(0, identifyCalls.get())
         }
     }
 }

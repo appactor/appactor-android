@@ -33,11 +33,12 @@ public object AppActorBridge {
     public fun configure(
         context: Context,
         apiKey: String,
+        appUserId: String? = null,
         options: AppActorOptions = AppActorOptions(),
         onComplete: AppActorCompletionCallback? = null,
         onError: AppActorBridgeErrorCallback? = null,
     ): Unit = AppActor.launchAsync(
-        operation = { AppActor.configure(context, apiKey, options) },
+        operation = { AppActor.configure(context, apiKey, appUserId, options) },
         onComplete = onComplete,
         onError = onError.asSdkErrorCallback(),
     )
@@ -251,9 +252,6 @@ public object AppActorBridge {
         onSuccess = onSuccess,
         onError = onError.asSdkErrorCallback(),
     )
-
-    @JvmStatic
-    public fun isConfigured(): Boolean = AppActor.isConfigured
 
     @JvmStatic
     public fun appUserId(): String? = AppActor.appUserId

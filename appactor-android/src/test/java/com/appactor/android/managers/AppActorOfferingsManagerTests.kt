@@ -15,6 +15,7 @@ import com.appactor.android.cache.AppActorCacheDiskStore
 import com.appactor.android.cache.AppActorETagManager
 import com.appactor.android.cache.AppActorOfflineProductCatalog
 import com.appactor.android.cache.AppActorOfferingsCacheStore
+import com.appactor.android.models.AppActorDiagnosticsDataSource
 import com.appactor.android.models.AppActorError
 import com.appactor.android.models.AppActorOfferingsFetchPolicy
 import com.appactor.android.models.AppActorProductType
@@ -26,6 +27,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -631,6 +633,49 @@ class AppActorOfferingsManagerTests {
         val productType = manager.currentOneTimeProductType("com.appactor.coins.100")
 
         assertEquals(AppActorProductType.Consumable, productType)
+    }
+
+    @Test
+    fun `bootstrap prefetch seeds offline catalog before store enrichment completes`() = runBlocking {
+        val dto = fixtureOfferings()
+        val mockClient = mockk<AppActorBackendClient>(relaxed = true)
+        coEvery { mockClient.getOfferings(any()) } returns freshOfferingsResponse(dto)
+        val queryStarted = CompletableDeferred<Unit>()
+        val releaseQuery = CompletableDeferred<Unit>()
+        val mockStoreAdapter = mockk<AppActorStoreAdapter>(relaxed = true)
+        coEvery { mockStoreAdapter.queryProductDetails(any()) } coAnswers {
+            queryStarted.complete(Unit)
+            releaseQuery.await()
+            val requests = firstArg<List<AppActorStoreProductRequest>>()
+            requests.mapNotNull { request -> pricedProducts()[requestKey(request)] }
+        }
+        val manager = AppActorOfferingsManager(
+            backendClient = mockClient,
+            cacheStore = offeringsCacheStore("offerings-bootstrap-prefetch"),
+            offlineProductCatalogStore = offlineProductCatalogStore("offerings-bootstrap-prefetch"),
+            storeAdapter = mockStoreAdapter,
+        )
+
+        val source = manager.prefetchForBootstrap()
+        queryStarted.await()
+
+        assertEquals(AppActorDiagnosticsDataSource.Network, source)
+        assertEquals(
+            listOf("premium"),
+            manager.currentProductEntitlements()["android:com.appactor.pro.monthly:monthly001"]
+        )
+        assertNull(manager.cached())
+
+        val earlyLookup = async(Dispatchers.Default) {
+            manager.getOfferings(fetchPolicy = AppActorOfferingsFetchPolicy.ReturnCachedThenRefresh)
+        }
+        assertFalse(earlyLookup.isCompleted)
+
+        releaseQuery.complete(Unit)
+        val offerings = earlyLookup.await()
+
+        assertEquals("off_main_android", offerings.current?.id)
+        assertNotNull(manager.cached())
     }
 
     @Test

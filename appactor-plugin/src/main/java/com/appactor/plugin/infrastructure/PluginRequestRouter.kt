@@ -24,7 +24,6 @@ internal object PluginRequestRouter {
             GetExperimentAssignmentRequest,
             ResetRequest,
             SetLogLevelRequest,
-            IsConfiguredRequest,
             GetSdkVersionRequest,
             GetAppUserIdRequest,
             GetIsAnonymousRequest,
