@@ -25,9 +25,10 @@ internal data class AppActorResolvedPurchaseTarget(
 internal fun AppActorPackage.toResolvedPurchaseTarget(
     appUserId: String,
 ): AppActorResolvedPurchaseTarget {
+    val lookupProductId = storeLookupProductId()
     return AppActorResolvedPurchaseTarget(
         request = AppActorStoreProductRequest(
-            productId = productId,
+            productId = lookupProductId,
             productType = productType,
             basePlanId = basePlanId,
             offerId = offerId,
@@ -35,7 +36,7 @@ internal fun AppActorPackage.toResolvedPurchaseTarget(
             oldPurchaseToken = oldPurchaseToken,
             replacementMode = replacementMode?.toBillingReplacementMode(),
         ),
-        expectedProductId = productId,
+        expectedProductId = lookupProductId,
         expectedProductType = productType,
         expectedBasePlanId = basePlanId,
         expectedOfferId = offerId,

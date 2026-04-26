@@ -5,6 +5,7 @@ import com.appactor.android.models.AppActorCustomerInfo
 import com.appactor.android.models.AppActorDebugCategory
 import com.appactor.android.models.AppActorDiagnosticsDataSource
 import com.appactor.android.models.AppActorLogLevel
+import com.appactor.android.pipeline.AppActorPurchaseUpdateProcessingResult
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.runBlocking
@@ -328,12 +329,24 @@ class AppActorStartupCoordinatorTests {
 
         override suspend fun processPurchaseUpdates(
             runtimeState: AppActorRuntimeState,
-            snapshot: AppActorOperationSnapshot,
             purchases: List<AppActorStorePurchase>,
-        ): AppActorCustomerInfo? {
+        ): AppActorPurchaseUpdateProcessingResult? {
             processPurchaseUpdatesCount.incrementAndGet()
             purchaseUpdateProcessed?.countDown()
-            return customerInfo(snapshot.appUserId)
+            val appUserId = runtime.identityStore.currentAppUserId ?: runtime.identityStore.ensureAppUserId()
+            return AppActorPurchaseUpdateProcessingResult(
+                customerInfo = customerInfo(appUserId),
+                appUserId = appUserId,
+            )
+        }
+
+        override suspend fun publishPurchaseUpdateIfCurrent(
+            runtimeState: AppActorRuntimeState,
+            result: AppActorPurchaseUpdateProcessingResult,
+        ): Boolean {
+            if (!persistResult) return false
+            publishCustomerInfoCount.incrementAndGet()
+            return true
         }
 
         override fun deliverOnMain(block: () -> Unit) {

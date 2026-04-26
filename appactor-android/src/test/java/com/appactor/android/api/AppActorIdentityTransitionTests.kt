@@ -2,8 +2,11 @@ package com.appactor.android.api
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import com.appactor.android.billing.AppActorStorePurchase
+import com.appactor.android.billing.AppActorStorePurchaseState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
@@ -425,6 +428,113 @@ class AppActorIdentityTransitionTests {
             assertEquals("user_a", AppActor.appUserId)
             assertEquals(1, loginCalls.get())
             assertEquals(0, identifyCalls.get())
+        }
+    }
+
+    @Test
+    fun `same user login publishes buffered purchase update for current identity`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val purchaseUpdates = MutableSharedFlow<List<AppActorStorePurchase>>(extraBufferCapacity = 1)
+        val loginStarted = CountDownLatch(1)
+        val releaseLogin = CountDownLatch(1)
+        val receiptCalls = AtomicInteger(0)
+        val deferredResolved = CountDownLatch(1)
+        val receiptPublished = CountDownLatch(1)
+        val deferredProducts = Collections.synchronizedList(mutableListOf<String>())
+        val publishedRequestIds = Collections.synchronizedList(mutableListOf<String>())
+        AppActor.storeAdapterFactory = {
+            FakeStoreAdapter(purchaseUpdatesFlow = purchaseUpdates)
+        }
+        context.getSharedPreferences("com.appactor.android.pending_purchases", Context.MODE_PRIVATE)
+            .edit()
+            .putString("token_same_user_appactor_deferred_123", "com.appactor.pro.monthly|${System.currentTimeMillis()}")
+            .commit()
+
+        TestBackendServer { request ->
+            val path = request.path?.substringBefore("?") ?: ""
+            when (path) {
+                "/v1/payment/identify" -> {
+                    val userId = identifyAppUserId(request, "user_a")
+                    jsonResponse(customerEnvelope(requestId = "req_identify_same_user_publish", appUserId = userId))
+                }
+                "/v1/payment/offerings" -> jsonResponse("""{"requestId":"req_off","data":{"offerings":[],"productEntitlements":{}}}""")
+                "/v1/customers/user_a" -> jsonResponse(
+                    customerEnvelope(
+                        requestId = "req_customer_same_user_publish",
+                        appUserId = "user_a",
+                    ),
+                )
+                "/v1/payment/login" -> {
+                    loginStarted.countDown()
+                    assertTrue(releaseLogin.await(5, TimeUnit.SECONDS))
+                    jsonResponse(
+                        loginEnvelope(
+                            requestId = "req_login_same_user_publish",
+                            appUserId = "user_a",
+                        ),
+                    )
+                }
+                "/v1/payment/receipts/google" -> {
+                    receiptCalls.incrementAndGet()
+                    jsonResponse(googleReceiptEnvelope(requestId = "req_receipt_same_user_publish", appUserId = "user_a"))
+                }
+
+                else -> jsonResponse("{}", 404)
+            }
+        }.use { backend ->
+            AppActor.configure(
+                com.appactor.android.models.AppActorConfiguration(
+                    context = context,
+                    apiKey = "pk_test_123",
+                    appUserId = "user_a",
+                    baseUrl = backend.baseUrl,
+                    options = testOptionsForLocalBackend(),
+                )
+            )
+            AppActor.onDeferredPurchaseResolved = { productId, customerInfo ->
+                deferredProducts += productId
+                if (customerInfo.requestId == "req_receipt_same_user_publish") {
+                    deferredResolved.countDown()
+                }
+            }
+            AppActor.onCustomerInfoChanged = { info ->
+                info.requestId?.let(publishedRequestIds::add)
+                if (info.requestId == "req_receipt_same_user_publish") {
+                    receiptPublished.countDown()
+                }
+            }
+
+            val login = async(Dispatchers.Default) { AppActor.logIn("user_a") }
+            assertTrue(loginStarted.await(5, TimeUnit.SECONDS))
+            purchaseUpdates.emit(
+                listOf(
+                    AppActorStorePurchase(
+                        productId = "com.appactor.pro.monthly",
+                        productType = com.appactor.android.models.AppActorProductType.Subscription,
+                        purchaseToken = "token_same_user_appactor_deferred_123",
+                        orderId = "GPA.same.user.appactor.1234",
+                        purchaseTimeMillis = 1_710_000_000_000,
+                        purchaseState = AppActorStorePurchaseState.Purchased,
+                        basePlanId = "monthly001",
+                        offerId = "intro7d",
+                        isAcknowledged = false,
+                        isAutoRenewing = true,
+                        rawPurchaseData = "{\"purchaseToken\":\"token_same_user_appactor_deferred_123\"}",
+                        purchaseSignature = "signature_same_user_appactor_deferred_123",
+                    )
+                )
+            )
+            releaseLogin.countDown()
+
+            val info = withTimeout(5_000L) { login.await() }
+
+            assertEquals("user_a", info.appUserId)
+            assertEquals("user_a", AppActor.appUserId)
+            assertTrue(awaitMainThreadCallback(deferredResolved))
+            assertTrue(awaitMainThreadCallback(receiptPublished))
+            assertEquals(1, receiptCalls.get())
+            assertEquals(listOf("com.appactor.pro.monthly"), deferredProducts)
+            assertTrue(publishedRequestIds.contains("req_receipt_same_user_publish"))
         }
     }
 }

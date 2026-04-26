@@ -2,6 +2,7 @@ package com.appactor.android.internal.logging
 
 import android.util.Log
 import com.appactor.android.models.AppActorLogLevel
+import java.util.Locale
 
 internal object AppActorLogger {
 
@@ -53,8 +54,23 @@ internal object AppActorLogger {
         }
     }
 
-    private fun dispatchToHandler(level: String, message: String) {
-        logHandler?.invoke(level, message, "sdk", java.time.Instant.now().toString())
+    fun log(
+        level: AppActorLogLevel,
+        message: String,
+        category: String = "sdk",
+    ) {
+        if (!shouldLog(level)) return
+        when (level) {
+            AppActorLogLevel.Debug -> Log.d(TAG, message)
+            AppActorLogLevel.Info -> Log.i(TAG, message)
+            AppActorLogLevel.Warn -> Log.w(TAG, message)
+            AppActorLogLevel.Error -> Log.e(TAG, message)
+        }
+        dispatchToHandler(level.name.lowercase(Locale.US), message, category)
+    }
+
+    private fun dispatchToHandler(level: String, message: String, category: String = "sdk") {
+        logHandler?.invoke(level, message, category, java.time.Instant.now().toString())
     }
 
     private fun shouldLog(messageLevel: AppActorLogLevel): Boolean {

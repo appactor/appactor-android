@@ -26,6 +26,7 @@ import com.appactor.android.models.AppActorPackage
 import com.appactor.android.models.AppActorPackageType
 import com.appactor.android.models.AppActorProductType
 import com.appactor.android.models.AppActorStore
+import com.appactor.android.models.appActorStoreLookupProductId
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -722,7 +723,7 @@ internal class AppActorOfferingsManager(
             customTypeIdentifier = customTypeIdentifier,
             store = AppActorStore.PlayStore,
             productId = productRef.productId,
-            storeProductId = productRef.storeProductId ?: productRef.productId,
+            storeProductId = productRef.storeLookupProductId(),
             productType = resolved.productType,
             basePlanId = resolved.basePlanId,
             offerId = resolved.offerId,
@@ -749,7 +750,7 @@ internal class AppActorOfferingsManager(
 
     private fun AppActorProductReferenceDTO.cacheKey(): String {
         val resolvedType = resolvedProductType(packageType = null)
-        return listOf(resolvedType.name, productId, basePlanId.orEmpty(), offerId.orEmpty()).joinToString("|")
+        return listOf(resolvedType.name, storeLookupProductId(), basePlanId.orEmpty(), offerId.orEmpty()).joinToString("|")
     }
 
     private fun AppActorPackageDTO.playStoreProducts(): List<AppActorProductReferenceDTO> {
@@ -760,7 +761,7 @@ internal class AppActorOfferingsManager(
         packageType: String?,
     ): AppActorStoreProductRequest {
         return AppActorStoreProductRequest(
-            productId = productId,
+            productId = storeLookupProductId(),
             productType = resolvedProductType(packageType),
             basePlanId = basePlanId,
             offerId = offerId,
@@ -790,11 +791,16 @@ internal class AppActorOfferingsManager(
     ): String {
         return listOfNotNull(
             "productId=$productId",
+            "storeProductId=${storeLookupProductId()}",
             "productType=${resolvedProductType(packageType).wireValue}",
             "basePlanId=${basePlanId ?: "null"}",
             "offerId=${offerId ?: "null"}",
             "packageType=${packageType ?: "null"}",
         ).joinToString(",")
+    }
+
+    private fun AppActorProductReferenceDTO.storeLookupProductId(): String {
+        return appActorStoreLookupProductId(productId = productId, storeProductId = storeProductId)
     }
 
     private fun AppActorStoreProductRequest.logDescriptor(): String {
@@ -873,7 +879,14 @@ private fun AppActorOfferings.toOfflineProductCatalog(): AppActorOfflineProductC
                 (appActorPackage.productType == AppActorProductType.Consumable ||
                     appActorPackage.productType == AppActorProductType.NonConsumable)
         }
-        .groupBy { appActorPackage -> AppActorOfflineProductCatalog.oneTimeKey(appActorPackage.productId) }
+        .groupBy { appActorPackage ->
+            AppActorOfflineProductCatalog.oneTimeKey(
+                appActorStoreLookupProductId(
+                    productId = appActorPackage.productId,
+                    storeProductId = appActorPackage.storeProductId,
+                )
+            )
+        }
         .mapNotNull { (key, packages) ->
             packages.map { it.productType }.distinct().singleOrNull()?.wireValue?.let { key to it }
         }
@@ -920,7 +933,12 @@ private fun AppActorOfferingsEnvelopeDTO.toOfflineProductCatalog(): AppActorOffl
             if (productType == AppActorProductType.Consumable ||
                 productType == AppActorProductType.NonConsumable
             ) {
-                AppActorOfflineProductCatalog.oneTimeKey(productRef.productId) to productType.wireValue
+                AppActorOfflineProductCatalog.oneTimeKey(
+                    appActorStoreLookupProductId(
+                        productId = productRef.productId,
+                        storeProductId = productRef.storeProductId,
+                    )
+                ) to productType.wireValue
             } else {
                 null
             }

@@ -5,8 +5,10 @@ import androidx.test.core.app.ApplicationProvider
 import com.appactor.android.backend.client.AppActorBackendClient
 import com.appactor.android.backend.client.AppActorBackendHttpResponse
 import com.appactor.android.backend.client.AppActorBackendJson
+import com.appactor.android.backend.dto.AppActorOfferingDTO
 import com.appactor.android.backend.dto.AppActorOfferingsEnvelopeDTO
 import com.appactor.android.backend.dto.AppActorOfferingsPayloadDTO
+import com.appactor.android.backend.dto.AppActorPackageDTO
 import com.appactor.android.billing.AppActorStoreAdapter
 import com.appactor.android.billing.AppActorStoreProduct
 import com.appactor.android.billing.AppActorStoreProductRequest
@@ -290,6 +292,9 @@ class AppActorOfferingsManagerTests {
         )
         val dto = fixture.copy(
             data = fixture.data.copy(
+                currentOffering = fixture.data.currentOffering?.copy(
+                    packages = listOf(monthlyPackage) + fixture.data.currentOffering.packages.drop(1),
+                ),
                 offerings = fixture.data.offerings.mapIndexed { index, offering ->
                     if (index == 0) {
                         offering.copy(packages = listOf(monthlyPackage) + offering.packages.drop(1))
@@ -319,6 +324,62 @@ class AppActorOfferingsManagerTests {
         assertEquals(AppActorProductType.Subscription, resolvedPackage.productType)
         assertEquals("com.appactor.pro.monthly", resolvedPackage.productId)
         assertEquals("monthly001", resolvedPackage.basePlanId)
+    }
+
+    @Test
+    fun `get offerings queries play details with store product id while preserving logical product id`() = runBlocking {
+        val fixture = fixtureOfferings()
+        val monthlyPackage = fixture.data.offerings.first().packages.first().copy(
+            products = listOf(
+                com.appactor.android.backend.dto.AppActorProductReferenceDTO(
+                    id = "play_product_ref",
+                    store = "play_store",
+                    productId = "logical_monthly",
+                    storeProductId = "com.appactor.pro.monthly",
+                    productType = "subscription",
+                    basePlanId = "monthly001",
+                    offerId = "intro7d",
+                ),
+            ),
+        )
+        val dto = fixture.copy(
+            data = fixture.data.copy(
+                currentOffering = fixture.data.currentOffering?.copy(
+                    packages = listOf(monthlyPackage) + fixture.data.currentOffering.packages.drop(1),
+                ),
+                offerings = fixture.data.offerings.mapIndexed { index, offering ->
+                    if (index == 0) {
+                        offering.copy(packages = listOf(monthlyPackage) + offering.packages.drop(1))
+                    } else {
+                        offering
+                    }
+                }
+            )
+        )
+        val capturedRequests = mutableListOf<AppActorStoreProductRequest>()
+        val mockClient = mockk<AppActorBackendClient>(relaxed = true)
+        coEvery { mockClient.getOfferings(any()) } returns freshOfferingsResponse(dto)
+        val mockStoreAdapter = mockk<AppActorStoreAdapter>(relaxed = true)
+        coEvery { mockStoreAdapter.queryProductDetails(any()) } answers {
+            val requests = firstArg<List<AppActorStoreProductRequest>>()
+            capturedRequests += requests
+            requests.mapNotNull { request -> pricedProducts()[requestKey(request)] }
+        }
+        val manager = AppActorOfferingsManager(
+            backendClient = mockClient,
+            cacheStore = offeringsCacheStore("offerings-store-product-id"),
+            offlineProductCatalogStore = offlineProductCatalogStore("offerings-store-product-id"),
+            storeAdapter = mockStoreAdapter,
+        )
+
+        val offerings = manager.getOfferings()
+        val resolvedPackage = requireNotNull(offerings.current?.monthly)
+
+        assertTrue(capturedRequests.any { it.productId == "com.appactor.pro.monthly" })
+        assertFalse(capturedRequests.any { it.productId == "logical_monthly" })
+        assertEquals("logical_monthly", resolvedPackage.productId)
+        assertEquals("com.appactor.pro.monthly", resolvedPackage.storeProductId)
+        assertEquals("$4.99", resolvedPackage.localizedPriceString)
     }
 
     @Test
@@ -586,7 +647,7 @@ class AppActorOfferingsManagerTests {
     fun `current one time product type prefers cached offerings payload before stale offline catalog`() = runBlocking {
         val cacheStore = offeringsCacheStore("offerings-one-time-type-precedence")
         val offlineCatalogStore = offlineProductCatalogStore("offerings-one-time-type-precedence")
-        val dto = fixtureOfferings()
+        val dto = fixtureOfferingsWithLogicalCoinProductId()
         cacheStore.save(
             payload = AppActorBackendJson.instance.encodeToString(dto),
             eTag = "\"etag_123\"",
@@ -610,6 +671,32 @@ class AppActorOfferingsManagerTests {
         val productType = manager.currentOneTimeProductType("com.appactor.coins.100")
 
         assertEquals(AppActorProductType.Consumable, productType)
+    }
+
+    @Test
+    fun `current one time product type uses store product id from enriched offerings`() = runBlocking {
+        val dto = fixtureOfferingsWithLogicalCoinProductId()
+        val mockClient = mockk<AppActorBackendClient>(relaxed = true)
+        coEvery { mockClient.getOfferings(any()) } returns freshOfferingsResponse(dto)
+        val mockStoreAdapter = mockk<AppActorStoreAdapter>(relaxed = true)
+        coEvery { mockStoreAdapter.queryProductDetails(any()) } answers {
+            val requests = firstArg<List<AppActorStoreProductRequest>>()
+            requests.mapNotNull { request -> pricedProducts()[requestKey(request)] }
+        }
+        val manager = AppActorOfferingsManager(
+            backendClient = mockClient,
+            cacheStore = offeringsCacheStore("offerings-one-time-store-id"),
+            offlineProductCatalogStore = offlineProductCatalogStore("offerings-one-time-store-id"),
+            storeAdapter = mockStoreAdapter,
+        )
+
+        manager.getOfferings()
+
+        assertEquals(
+            AppActorProductType.Consumable,
+            manager.currentOneTimeProductType("com.appactor.coins.100"),
+        )
+        assertNull(manager.currentOneTimeProductType("logical_coin_pack_100"))
     }
 
     @Test
@@ -726,6 +813,41 @@ class AppActorOfferingsManagerTests {
             javaClass.classLoader?.getResource("fixtures/backend/offerings_android_sample.json")
         ).readText()
         return AppActorBackendJson.instance.decodeFromString(payload)
+    }
+
+    private fun fixtureOfferingsWithLogicalCoinProductId(): AppActorOfferingsEnvelopeDTO {
+        val fixture = fixtureOfferings()
+
+        fun rewritePackage(packageDTO: AppActorPackageDTO): AppActorPackageDTO {
+            if (packageDTO.id != "pkg_coin_pack_100") return packageDTO
+            return packageDTO.copy(
+                products = packageDTO.products.map { productRef ->
+                    if (productRef.id == "prod_google_coins_100") {
+                        productRef.copy(
+                            productId = "logical_coin_pack_100",
+                            storeProductId = "com.appactor.coins.100",
+                        )
+                    } else {
+                        productRef
+                    }
+                }
+            )
+        }
+
+        fun rewriteOffering(offeringDTO: AppActorOfferingDTO): AppActorOfferingDTO {
+            return offeringDTO.copy(packages = offeringDTO.packages.map(::rewritePackage))
+        }
+
+        return fixture.copy(
+            data = fixture.data.copy(
+                currentOffering = fixture.data.currentOffering?.let(::rewriteOffering),
+                offerings = fixture.data.offerings.map(::rewriteOffering),
+                productEntitlements = mapOf(
+                    "android:com.appactor.pro.monthly:monthly001" to listOf("premium"),
+                    "android:com.appactor.coins.100" to listOf("coin_pack_100"),
+                ),
+            )
+        )
     }
 
     private fun offeringsCacheStore(name: String): AppActorOfferingsCacheStore {

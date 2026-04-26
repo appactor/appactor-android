@@ -152,6 +152,40 @@ class AppActorConfigureTests {
     }
 
     @Test
+    fun `configure debug event is emitted through log handler`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val logs = mutableListOf<Triple<String, String, String>>()
+        AppActor.setLogHandler { level, message, category, _ ->
+            logs += Triple(level, message, category)
+        }
+        try {
+            stubBackend().use { backend ->
+                AppActor.configure(
+                    AppActorConfiguration(
+                        context = context,
+                        apiKey = "pk_test_log_handler",
+                        appUserId = "user_log_handler",
+                        baseUrl = backend.baseUrl,
+                        options = testOptionsForLocalBackend(),
+                    )
+                )
+            }
+        } finally {
+            AppActor.setLogHandler(null)
+        }
+
+        assertTrue(
+            logs.any { (level, message, category) ->
+                level == "info" &&
+                    category == "Lifecycle" &&
+                    message.contains("configured") &&
+                    message.contains("AppActor configured.")
+            }
+        )
+        assertFalse(logs.any { (_, message, _) -> message.contains("user_log_handler") })
+    }
+
+    @Test
     fun `configure seeds explicit app user id into identity storage`() = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val preferences = context.getSharedPreferences("appactor_identity", Context.MODE_PRIVATE)

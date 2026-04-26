@@ -58,6 +58,11 @@ import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
 
+internal data class AppActorPurchaseUpdateProcessingResult(
+    val customerInfo: AppActorCustomerInfo?,
+    val appUserId: String,
+)
+
 internal class AppActorPaymentProcessor(
     private val configuration: AppActorConfiguration,
     private val backendClient: AppActorBackendClient,
@@ -120,18 +125,20 @@ internal class AppActorPaymentProcessor(
         }
     }
 
-    suspend fun endIdentityTransition() {
+    suspend fun endIdentityTransition(): List<AppActorPurchaseUpdateProcessingResult> {
         val buffered = transitionMutex.withLock {
             val items = identityTransitionBuffer.toList()
             identityTransitionBuffer.clear()
             identityTransitionAppUserId = null
             items
         }
-        buffered.groupBy { it.capturedAppUserId }
-            .forEach { (userId, items) ->
-                processPurchaseUpdates(
+        val currentAppUserId = identityStore.currentAppUserId
+        return buffered.groupBy { it.capturedAppUserId }
+            .mapNotNull { (userId, items) ->
+                processPurchaseUpdatesInternal(
                     purchases = items.map { it.purchase },
                     appUserIdOverride = userId,
+                    emitDeferredPurchaseCallback = currentAppUserId == userId,
                 )
             }
     }
@@ -190,6 +197,27 @@ internal class AppActorPaymentProcessor(
         purchases: List<AppActorStorePurchase>,
         appUserIdOverride: String? = null,
     ): AppActorCustomerInfo? {
+        return processPurchaseUpdatesInternal(
+            purchases = purchases,
+            appUserIdOverride = appUserIdOverride,
+        )?.customerInfo
+    }
+
+    suspend fun processLivePurchaseUpdates(
+        purchases: List<AppActorStorePurchase>,
+    ): AppActorPurchaseUpdateProcessingResult? {
+        return processPurchaseUpdatesInternal(
+            purchases = purchases,
+            appUserIdOverride = null,
+        )
+    }
+
+    private suspend fun processPurchaseUpdatesInternal(
+        purchases: List<AppActorStorePurchase>,
+        appUserIdOverride: String? = null,
+        emitDeferredPurchaseCallback: Boolean = true,
+    ): AppActorPurchaseUpdateProcessingResult? {
+        if (purchases.isEmpty()) return null
         if (appUserIdOverride == null) {
             val overflow = transitionMutex.withLock {
                 val userId = identityTransitionAppUserId ?: return@withLock null
@@ -209,26 +237,39 @@ internal class AppActorPaymentProcessor(
             } else if (overflow.isEmpty()) {
                 return null
             } else {
-                return processPurchaseUpdates(purchases = overflow, appUserIdOverride = identityStore.currentAppUserId ?: identityStore.ensureAppUserId())
+                return processPurchaseUpdatesInternal(
+                    purchases = overflow,
+                    appUserIdOverride = identityStore.currentAppUserId ?: identityStore.ensureAppUserId(),
+                    emitDeferredPurchaseCallback = emitDeferredPurchaseCallback,
+                )
             }
         }
+        var processedAppUserId: String? = null
         val result = pipelineMutex.withLock {
-            if (purchases.isEmpty()) return@withLock null
             val appUserId = appUserIdOverride
                 ?.takeIf { it.isNotBlank() }
                 ?: identityStore.currentAppUserId
                 ?: identityStore.ensureAppUserId()
+            processedAppUserId = appUserId
             val productEntitlements = ensureProductEntitlements()
             var latestCustomer: AppActorCustomerInfo? = null
             purchases.forEach { purchase ->
                 when (val outcome = enqueueAndProcess(purchase, productEntitlements, appUserId)) {
                     is ProcessingOutcome.Success -> {
                         latestCustomer = outcome.customerInfo
-                        fireDeferredPurchaseCallbackIfNeeded(purchase, outcome.customerInfo)
+                        fireDeferredPurchaseCallbackIfNeeded(
+                            purchase = purchase,
+                            customerInfo = outcome.customerInfo,
+                            emitCallback = emitDeferredPurchaseCallback,
+                        )
                     }
                     is ProcessingOutcome.AlreadyPosted -> {
                         latestCustomer = outcome.customerInfo
-                        fireDeferredPurchaseCallbackIfNeeded(purchase, outcome.customerInfo)
+                        fireDeferredPurchaseCallbackIfNeeded(
+                            purchase = purchase,
+                            customerInfo = outcome.customerInfo,
+                            emitCallback = emitDeferredPurchaseCallback,
+                        )
                     }
                     is ProcessingOutcome.Queued,
                     is ProcessingOutcome.PermanentFailure -> Unit
@@ -237,7 +278,10 @@ internal class AppActorPaymentProcessor(
             latestCustomer
         }
         scheduleNextRetryWake()
-        return result
+        return AppActorPurchaseUpdateProcessingResult(
+            customerInfo = result,
+            appUserId = processedAppUserId ?: return null,
+        )
     }
 
     private suspend fun purchaseWithTarget(
@@ -1296,7 +1340,11 @@ internal class AppActorPaymentProcessor(
         }
     }
 
-    private fun fireDeferredPurchaseCallbackIfNeeded(purchase: AppActorStorePurchase, customerInfo: AppActorCustomerInfo) {
+    private fun fireDeferredPurchaseCallbackIfNeeded(
+        purchase: AppActorStorePurchase,
+        customerInfo: AppActorCustomerInfo,
+        emitCallback: Boolean = true,
+    ) {
         var resolvedProductId: String? = null
         pendingPurchaseTokens.compute(purchase.purchaseToken) { _, entry ->
             if (entry == null) return@compute null
@@ -1310,7 +1358,9 @@ internal class AppActorPaymentProcessor(
         }
         if (resolvedProductId != null) {
             persistPendingState()
-            onDeferredPurchaseResolved?.invoke(resolvedProductId!!, customerInfo)
+            if (emitCallback) {
+                onDeferredPurchaseResolved?.invoke(resolvedProductId!!, customerInfo)
+            }
         }
     }
 
