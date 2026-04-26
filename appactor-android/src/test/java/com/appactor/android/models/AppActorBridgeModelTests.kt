@@ -3,6 +3,8 @@ package com.appactor.android.models
 import com.appactor.android.backend.client.AppActorBackendException
 import com.appactor.android.backend.client.toAppActorError
 import com.appactor.android.backend.dto.AppActorBackendErrorDTO
+import com.appactor.android.billing.AppActorStorePurchase
+import com.appactor.android.billing.AppActorStorePurchaseState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
@@ -51,6 +53,49 @@ class AppActorBridgeModelTests {
         assertEquals(AppActorProductType.Subscription, params.productType)
         assertEquals(AppActorProductType.Subscription, roundTrippedPackage.productType)
         assertEquals("monthly_plan", roundTrippedPackage.storeProductId)
+    }
+
+    @Test
+    fun `resolved package purchase target uses store product id for billing lookup and matching`() {
+        val appActorPackage = AppActorPackage(
+            id = "monthly",
+            store = AppActorStore.PlayStore,
+            productId = "logical_monthly",
+            storeProductId = "com.appactor.pro.monthly",
+            productType = AppActorProductType.Subscription,
+            basePlanId = "monthly001",
+        )
+
+        val target = appActorPackage.toResolvedPurchaseTarget("user_android_123")
+
+        assertEquals("com.appactor.pro.monthly", target.request.productId)
+        assertTrue(
+            target.matches(
+                AppActorStorePurchase(
+                    productId = "com.appactor.pro.monthly",
+                    productType = AppActorProductType.Subscription,
+                    purchaseToken = "token_store_lookup",
+                    purchaseTimeMillis = 1_710_000_000_000,
+                    purchaseState = AppActorStorePurchaseState.Purchased,
+                    basePlanId = "monthly001",
+                )
+            )
+        )
+    }
+
+    @Test
+    fun `resolved direct purchase target uses store product id when provided`() {
+        val params = AppActorPurchaseParams(
+            productId = "logical_monthly",
+            storeProductId = "com.appactor.pro.monthly",
+            productType = AppActorProductType.Subscription,
+            basePlanId = "monthly001",
+        )
+
+        val target = params.toResolvedPurchaseTarget("user_android_123")
+
+        assertEquals("com.appactor.pro.monthly", target.request.productId)
+        assertEquals("com.appactor.pro.monthly", target.expectedProductId)
     }
 
     @Test

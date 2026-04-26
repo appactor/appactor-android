@@ -143,6 +143,7 @@ internal class FakeStoreAdapter(
     private val queryProductDetailsStarted: CountDownLatch? = null,
     private val queryProductDetailsCompleted: CountDownLatch? = null,
     private val releaseQueryProductDetails: CountDownLatch? = null,
+    private val purchaseUpdatesFlow: Flow<List<AppActorStorePurchase>> = emptyFlow(),
     val storefront: AppActorStorefront? = null,
     val capabilities: Set<AppActorStoreCapability> = setOf(AppActorStoreCapability.Purchases),
 ) : AppActorStoreAdapter {
@@ -194,7 +195,7 @@ internal class FakeStoreAdapter(
         request: AppActorStoreProductRequest,
     ): AppActorStorePurchaseLaunchResult = AppActorStorePurchaseLaunchResult.Cancelled
 
-    override fun purchaseUpdates(): Flow<List<AppActorStorePurchase>> = emptyFlow()
+    override fun purchaseUpdates(): Flow<List<AppActorStorePurchase>> = purchaseUpdatesFlow
 
     override suspend fun resolveDirectPurchaseRequest(
         request: AppActorStoreProductRequest,

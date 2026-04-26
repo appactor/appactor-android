@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.0.9
+
+- Resolved Play Billing lookups through `storeProductId` while preserving logical public product identifiers.
+- Buffered live purchase updates during identity transitions against the captured previous identity and suppressed stale-user deferred callbacks.
+- Restored same-user login deferred purchase callbacks and customer info publishing when the buffered purchase still belongs to the current user.
+- Surfaced offline entitlement bridge errors and routed debug events through the SDK log handler/plugin `sdk_log` event stream.
+- Persisted one-time offline catalog keys using store product identifiers for consumable and non-consumable recovery.
+
 ## 0.0.8
 
 - Established the local `appUserId` during `configure()` and aligned startup flows around the resolved local identity.

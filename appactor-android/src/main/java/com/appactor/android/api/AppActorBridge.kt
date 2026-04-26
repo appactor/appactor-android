@@ -300,10 +300,11 @@ public object AppActorBridge {
     @JvmOverloads
     public fun activeEntitlementKeysOffline(
         onSuccess: AppActorSuccessCallback<Set<String>>? = null,
+        onError: AppActorBridgeErrorCallback? = null,
     ): Unit = AppActor.launchAsync(
         operation = { AppActor.activeEntitlementKeysOffline() },
         onSuccess = onSuccess,
-        onError = null,
+        onError = onError.asSdkErrorCallback(),
     )
 
     @Volatile

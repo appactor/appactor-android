@@ -6,6 +6,7 @@ import com.appactor.android.models.AppActorCustomerInfo
 import com.appactor.android.models.AppActorDebugCategory
 import com.appactor.android.models.AppActorDiagnosticsDataSource
 import com.appactor.android.models.AppActorLogLevel
+import com.appactor.android.pipeline.AppActorPurchaseUpdateProcessingResult
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.collect
@@ -45,9 +46,13 @@ internal interface AppActorStartupCoordinatorHost {
 
     suspend fun processPurchaseUpdates(
         runtimeState: AppActorRuntimeState,
-        snapshot: AppActorOperationSnapshot,
         purchases: List<AppActorStorePurchase>,
-    ): AppActorCustomerInfo?
+    ): AppActorPurchaseUpdateProcessingResult?
+
+    suspend fun publishPurchaseUpdateIfCurrent(
+        runtimeState: AppActorRuntimeState,
+        result: AppActorPurchaseUpdateProcessingResult,
+    ): Boolean
 
     fun deliverOnMain(block: () -> Unit)
 
@@ -80,18 +85,13 @@ internal class AppActorStartupCoordinator(
         val purchaseUpdates = runtimeState.storeAdapter.purchaseUpdates()
         val purchaseUpdatesJob = runtimeState.scope.launch {
             purchaseUpdates.collect { purchases ->
-                val snapshot = host.captureOperationSnapshot(
-                    resolveAppUserId = true,
-                    awaitBootstrapCompletion = false,
-                )
                 runCatching {
-                    host.processPurchaseUpdates(runtimeState, snapshot, purchases)
+                    host.processPurchaseUpdates(runtimeState, purchases)
                 }.onSuccess { updatedCustomer ->
-                    if (updatedCustomer != null && host.persistCustomerInfoIfCurrent(snapshot, updatedCustomer)) {
-                        host.publishCustomerInfoIfCurrent(
-                            snapshot = snapshot,
-                            info = updatedCustomer,
-                            source = AppActorDiagnosticsDataSource.Network,
+                    if (updatedCustomer?.customerInfo != null) {
+                        host.publishPurchaseUpdateIfCurrent(
+                            runtimeState = runtimeState,
+                            result = updatedCustomer,
                         )
                     }
                 }.onFailure { throwable ->

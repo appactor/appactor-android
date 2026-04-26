@@ -575,6 +575,153 @@ class AppActorPaymentProcessorTests {
     }
 
     @Test
+    fun `live purchase updates during identity transition are posted with captured old identity`() = runBlocking {
+        val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
+        val dependencies = createDependencies(
+            receiptResponse = AppActorBackendHttpResponse(
+                body = receiptResponse,
+                statusCode = 200,
+                requestId = receiptResponse.requestId,
+                signatureVerified = true,
+            ),
+            identityStore = createMockIdentityStore(initialAppUserId = "user_old"),
+        )
+        val purchase = AppActorStorePurchase(
+            productId = "com.appactor.pro.monthly",
+            productType = AppActorProductType.Subscription,
+            purchaseToken = "token_transition_buffer_123",
+            orderId = "GPA.transition.1234",
+            purchaseTimeMillis = 1_710_000_000_000,
+            purchaseState = com.appactor.android.billing.AppActorStorePurchaseState.Purchased,
+            basePlanId = "monthly001",
+            offerId = "intro7d",
+            isAcknowledged = false,
+            isAutoRenewing = true,
+            rawPurchaseData = "{\"purchaseToken\":\"token_transition_buffer_123\"}",
+            purchaseSignature = "signature_transition_buffer_123",
+        )
+
+        dependencies.processor.beginIdentityTransition()
+        val liveResult = dependencies.processor.processLivePurchaseUpdates(listOf(purchase))
+        dependencies.identityStore.setAppUserId("user_new")
+        dependencies.processor.endIdentityTransition()
+
+        assertNull(liveResult)
+        assertEquals("user_old", dependencies.postedReceipts.single().appUserId)
+    }
+
+    @Test
+    fun `buffered identity transition purchases do not emit deferred callback for old user`() = runBlocking {
+        val pendingPrefs = context.getSharedPreferences(
+            "com.appactor.android.pending_purchases",
+            Context.MODE_PRIVATE,
+        )
+        pendingPrefs.edit()
+            .clear()
+            .putString("token_transition_buffer_deferred_123", "com.appactor.pro.monthly|${System.currentTimeMillis()}")
+            .commit()
+
+        try {
+            val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
+            val dependencies = createDependencies(
+                receiptResponse = AppActorBackendHttpResponse(
+                    body = receiptResponse,
+                    statusCode = 200,
+                    requestId = receiptResponse.requestId,
+                    signatureVerified = true,
+                ),
+                identityStore = createMockIdentityStore(initialAppUserId = "user_old"),
+            )
+            val deferredCallbacks = mutableListOf<Pair<String, String?>>()
+            dependencies.processor.onDeferredPurchaseResolved = { productId, customerInfo ->
+                deferredCallbacks += productId to customerInfo.appUserId
+            }
+            val purchase = AppActorStorePurchase(
+                productId = "com.appactor.pro.monthly",
+                productType = AppActorProductType.Subscription,
+                purchaseToken = "token_transition_buffer_deferred_123",
+                orderId = "GPA.transition.deferred.1234",
+                purchaseTimeMillis = 1_710_000_000_000,
+                purchaseState = com.appactor.android.billing.AppActorStorePurchaseState.Purchased,
+                basePlanId = "monthly001",
+                offerId = "intro7d",
+                isAcknowledged = false,
+                isAutoRenewing = true,
+                rawPurchaseData = "{\"purchaseToken\":\"token_transition_buffer_deferred_123\"}",
+                purchaseSignature = "signature_transition_buffer_deferred_123",
+            )
+
+            dependencies.processor.beginIdentityTransition()
+            val liveResult = dependencies.processor.processLivePurchaseUpdates(listOf(purchase))
+            dependencies.identityStore.setAppUserId("user_new")
+            dependencies.processor.endIdentityTransition()
+
+            assertNull(liveResult)
+            assertEquals("user_old", dependencies.postedReceipts.single().appUserId)
+            assertTrue(deferredCallbacks.isEmpty())
+            assertFalse(pendingPrefs.contains("token_transition_buffer_deferred_123"))
+        } finally {
+            pendingPrefs.edit().clear().commit()
+        }
+    }
+
+    @Test
+    fun `buffered same user transition purchases emit deferred callback`() = runBlocking {
+        val pendingPrefs = context.getSharedPreferences(
+            "com.appactor.android.pending_purchases",
+            Context.MODE_PRIVATE,
+        )
+        pendingPrefs.edit()
+            .clear()
+            .putString("token_same_user_transition_deferred_123", "com.appactor.pro.monthly|${System.currentTimeMillis()}")
+            .commit()
+
+        try {
+            val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
+            val dependencies = createDependencies(
+                receiptResponse = AppActorBackendHttpResponse(
+                    body = receiptResponse,
+                    statusCode = 200,
+                    requestId = receiptResponse.requestId,
+                    signatureVerified = true,
+                ),
+                identityStore = createMockIdentityStore(initialAppUserId = "user_same"),
+            )
+            val deferredCallbacks = mutableListOf<Pair<String, String?>>()
+            dependencies.processor.onDeferredPurchaseResolved = { productId, customerInfo ->
+                deferredCallbacks += productId to customerInfo.appUserId
+            }
+            val purchase = AppActorStorePurchase(
+                productId = "com.appactor.pro.monthly",
+                productType = AppActorProductType.Subscription,
+                purchaseToken = "token_same_user_transition_deferred_123",
+                orderId = "GPA.same.user.transition.1234",
+                purchaseTimeMillis = 1_710_000_000_000,
+                purchaseState = com.appactor.android.billing.AppActorStorePurchaseState.Purchased,
+                basePlanId = "monthly001",
+                offerId = "intro7d",
+                isAcknowledged = false,
+                isAutoRenewing = true,
+                rawPurchaseData = "{\"purchaseToken\":\"token_same_user_transition_deferred_123\"}",
+                purchaseSignature = "signature_same_user_transition_deferred_123",
+            )
+
+            dependencies.processor.beginIdentityTransition()
+            val liveResult = dependencies.processor.processLivePurchaseUpdates(listOf(purchase))
+            val transitionResults = dependencies.processor.endIdentityTransition()
+
+            assertNull(liveResult)
+            assertEquals("user_same", dependencies.postedReceipts.single().appUserId)
+            assertEquals(1, transitionResults.size)
+            assertEquals("user_same", transitionResults.single().appUserId)
+            assertEquals(listOf("com.appactor.pro.monthly"), deferredCallbacks.map { it.first })
+            assertFalse(pendingPrefs.contains("token_same_user_transition_deferred_123"))
+        } finally {
+            pendingPrefs.edit().clear().commit()
+        }
+    }
+
+    @Test
     fun `sync current purchases uses explicit app user override instead of mutable identity`() = runBlocking {
         val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
         val activePurchase = AppActorStorePurchase(

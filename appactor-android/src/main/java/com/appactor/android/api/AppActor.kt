@@ -51,6 +51,7 @@ import com.appactor.android.models.toAppActorPackage
 import com.appactor.android.models.AppActorStoreCapability
 import com.appactor.android.models.AppActorStorefront
 import com.appactor.android.models.AppActorValidation
+import com.appactor.android.pipeline.AppActorPurchaseUpdateProcessingResult
 import com.appactor.android.storage.AppActorAtomicJsonPostedLedgerStore
 import com.appactor.android.storage.AppActorAtomicJsonReceiptQueueStore
 import kotlinx.coroutines.CoroutineScope
@@ -171,13 +172,18 @@ public object AppActor {
 
                 override suspend fun processPurchaseUpdates(
                     runtimeState: AppActorRuntimeState,
-                    snapshot: AppActorOperationSnapshot,
                     purchases: List<AppActorStorePurchase>,
-                ): AppActorCustomerInfo? {
-                    return runtimeState.paymentProcessor.processPurchaseUpdates(
+                ): AppActorPurchaseUpdateProcessingResult? {
+                    return runtimeState.paymentProcessor.processLivePurchaseUpdates(
                         purchases = purchases,
-                        appUserIdOverride = snapshot.appUserId,
                     )
+                }
+
+                override suspend fun publishPurchaseUpdateIfCurrent(
+                    runtimeState: AppActorRuntimeState,
+                    result: AppActorPurchaseUpdateProcessingResult,
+                ): Boolean {
+                    return this@AppActor.publishPurchaseUpdateIfCurrent(runtimeState, result)
                 }
 
                 override fun deliverOnMain(block: () -> Unit) {
@@ -467,14 +473,16 @@ public object AppActor {
 
     public suspend fun logIn(newAppUserId: String): AppActorCustomerInfo {
         awaitStartupBeforeTransition()
-        val (info, callback) = transitionMutex.withLock {
+        val (info, callbacks) = transitionMutex.withLock {
             bumpIdentityEpochLocked()
             val currentRuntime = requireConfiguredRuntime()
             AppActorValidation.validateAppUserId(newAppUserId)
             val currentAppUserId = currentRuntime.identityStore.currentAppUserId
                 ?: currentRuntime.identityStore.ensureAppUserId()
+            val callbacks = mutableListOf<Pair<((AppActorCustomerInfo) -> Unit)?, AppActorCustomerInfo>>()
+            var transitionResults = emptyList<AppActorPurchaseUpdateProcessingResult>()
             currentRuntime.paymentProcessor.beginIdentityTransition()
-            try {
+            val info = try {
                 currentRuntime.paymentProcessor.drainAll()
                 if (currentAppUserId != newAppUserId) {
                     currentRuntime.customerManager.clearCache(currentAppUserId)
@@ -486,17 +494,24 @@ public object AppActor {
                     newAppUserId = newAppUserId,
                 )
                 persistCustomerInfoLocked(currentRuntime, info)
-                info to publishCustomerInfoLocked(
+                callbacks += publishCustomerInfoLocked(
                     currentRuntime = currentRuntime,
                     info = info,
                     source = currentRuntime.customerManager.lastLoadSource(),
-                )
+                ) to info
+                info
             } finally {
-                currentRuntime.paymentProcessor.endIdentityTransition()
+                transitionResults = currentRuntime.paymentProcessor.endIdentityTransition()
             }
+            transitionResults.forEach { result ->
+                purchaseUpdatePublishCallbackIfCurrentLocked(currentRuntime, result)?.let(callbacks::add)
+            }
+            info to callbacks
         }
-        deliverOnMain {
-            callback?.invoke(info)
+        callbacks.forEach { (callback, callbackInfo) ->
+            deliverOnMain {
+                callback?.invoke(callbackInfo)
+            }
         }
         return info
     }
@@ -514,8 +529,9 @@ public object AppActor {
                 )
             }
 
+            var transitionResults = emptyList<AppActorPurchaseUpdateProcessingResult>()
             currentRuntime.paymentProcessor.beginIdentityTransition()
-            try {
+            val callbacks = try {
                 currentRuntime.paymentProcessor.drainAll()
                 currentRuntime.customerManager.clearCache(currentAppUserId)
                 currentRuntime.remoteConfigManager.clearCache(currentAppUserId)
@@ -531,8 +547,12 @@ public object AppActor {
                 ) to AppActorCustomerInfo.empty
                 callbacks
             } finally {
-                currentRuntime.paymentProcessor.endIdentityTransition()
+                transitionResults = currentRuntime.paymentProcessor.endIdentityTransition()
             }
+            transitionResults.forEach { result ->
+                purchaseUpdatePublishCallbackIfCurrentLocked(currentRuntime, result)?.let(callbacks::add)
+            }
+            callbacks
         }
         callbacks.forEach { (callback, info) ->
             deliverOnMain {
@@ -1065,6 +1085,41 @@ public object AppActor {
         return callback != null
     }
 
+    private suspend fun publishPurchaseUpdateIfCurrent(
+        runtimeState: AppActorRuntimeState,
+        result: AppActorPurchaseUpdateProcessingResult,
+        source: AppActorDiagnosticsDataSource = AppActorDiagnosticsDataSource.Network,
+    ): Boolean {
+        val callbackAndInfo = transitionMutex.withLock {
+            val currentRuntime = runtime ?: return@withLock null
+            if (currentRuntime.sessionId != runtimeState.sessionId) {
+                return@withLock null
+            }
+            purchaseUpdatePublishCallbackIfCurrentLocked(currentRuntime, result, source)
+        } ?: return false
+        val (callback, info) = callbackAndInfo
+        deliverOnMain {
+            callback?.invoke(info)
+        }
+        return callback != null
+    }
+
+    private fun purchaseUpdatePublishCallbackIfCurrentLocked(
+        currentRuntime: AppActorRuntimeState,
+        result: AppActorPurchaseUpdateProcessingResult,
+        source: AppActorDiagnosticsDataSource = AppActorDiagnosticsDataSource.Network,
+    ): Pair<((AppActorCustomerInfo) -> Unit)?, AppActorCustomerInfo>? {
+        val info = result.customerInfo ?: return null
+        val currentAppUserId = currentRuntime.identityStore.currentAppUserId
+            ?: return null
+        val infoAppUserId = info.appUserId?.takeIf { it.isNotBlank() }
+        if (currentAppUserId != result.appUserId || (infoAppUserId != null && infoAppUserId != result.appUserId)) {
+            return null
+        }
+        persistCustomerInfoLocked(currentRuntime, info)
+        return publishCustomerInfoLocked(currentRuntime, info, source) to info
+    }
+
     private suspend fun persistLastRequestIdIfCurrent(
         snapshot: AppActorOperationSnapshot,
         requestId: String?,
@@ -1183,17 +1238,55 @@ public object AppActor {
         requestId: String? = null,
         attributes: Map<String, String> = emptyMap(),
     ) {
-        synchronized(this) {
+        val formattedMessage = synchronized(this) {
             val currentRuntime = runtime ?: return
             if (currentRuntime.sessionId != runtimeSessionId) {
                 return
             }
-            category
-            level
-            name
-            message
-            requestId
-            attributes
+            buildDebugEventMessage(
+                name = name,
+                message = message,
+                requestId = requestId,
+                attributes = attributes,
+            )
+        }
+        AppActorLogger.log(
+            level = level,
+            category = category.name,
+            message = formattedMessage,
+        )
+    }
+
+    private fun buildDebugEventMessage(
+        name: String,
+        message: String,
+        requestId: String?,
+        attributes: Map<String, String>,
+    ): String {
+        return buildString {
+            append(name)
+            append(": ")
+            append(message)
+            requestId?.takeIf { it.isNotBlank() }?.let {
+                append(" requestId=")
+                append(it)
+            }
+            if (attributes.isNotEmpty()) {
+                append(" attributes=")
+                append(
+                    attributes.entries.joinToString(",") { (key, value) ->
+                        "$key=${redactDebugAttribute(key, value)}"
+                    }
+                )
+            }
+        }
+    }
+
+    private fun redactDebugAttribute(key: String, value: String): String {
+        return if (key.contains("user_id", ignoreCase = true)) {
+            "<redacted>"
+        } else {
+            value
         }
     }
 

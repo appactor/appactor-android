@@ -48,6 +48,23 @@ class AppActorBridgeTests {
     }
 
     @Test
+    fun `offline entitlement bridge delivers not configured errors`() {
+        val latch = CountDownLatch(1)
+        val capturedError = AtomicReference<AppActorBridgeError?>()
+
+        AppActorBridge.activeEntitlementKeysOffline(
+            onSuccess = AppActorSuccessCallback { latch.countDown() },
+            onError = AppActorBridgeErrorCallback { error ->
+                capturedError.set(error)
+                latch.countDown()
+            },
+        )
+
+        assertTrue(awaitMainThreadCallback(latch))
+        assertEquals(AppActorBridgeError.CODE_NOT_CONFIGURED, capturedError.get()?.code)
+    }
+
+    @Test
     fun `bridge listener surfaces flatten receipt events and deliver on main thread`() {
         val customerLatch = CountDownLatch(1)
         val eventLatch = CountDownLatch(1)

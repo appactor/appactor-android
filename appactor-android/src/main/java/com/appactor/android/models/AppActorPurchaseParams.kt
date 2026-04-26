@@ -29,10 +29,10 @@ public data class AppActorPurchaseParams @JvmOverloads constructor(
 
 internal fun AppActorPurchaseParams.toAppActorPackage(): AppActorPackage {
     return AppActorPackage(
-        id = storeProductId ?: productId,
+        id = storeLookupProductId(),
         store = AppActorStore.PlayStore,
         productId = productId,
-        storeProductId = storeProductId,
+        storeProductId = storeProductId?.takeIf { it.isNotBlank() },
         productType = resolvedProductType(),
         basePlanId = basePlanId,
         offerId = offerId,
@@ -59,9 +59,10 @@ internal fun AppActorPurchaseParams.toResolvedPurchaseTarget(
     appUserId: String,
 ): AppActorResolvedPurchaseTarget {
     validateDirectPurchaseContract()
+    val lookupProductId = storeLookupProductId()
     return AppActorResolvedPurchaseTarget(
         request = AppActorStoreProductRequest(
-            productId = productId,
+            productId = lookupProductId,
             productType = productType,
             basePlanId = basePlanId,
             offerId = offerId,
@@ -69,7 +70,7 @@ internal fun AppActorPurchaseParams.toResolvedPurchaseTarget(
             oldPurchaseToken = oldPurchaseToken,
             replacementMode = replacementMode?.toBillingReplacementMode(),
         ),
-        expectedProductId = productId,
+        expectedProductId = lookupProductId,
         expectedProductType = productType,
         expectedBasePlanId = basePlanId,
         expectedOfferId = offerId,
