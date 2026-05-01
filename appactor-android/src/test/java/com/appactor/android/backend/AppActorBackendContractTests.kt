@@ -3,6 +3,7 @@ package com.appactor.android.backend
 import com.appactor.android.backend.client.buildAppActorUrl
 import com.appactor.android.backend.client.AppActorBackendJson
 import com.appactor.android.backend.dto.AppActorCustomerEnvelopeDTO
+import com.appactor.android.backend.dto.AppActorGoogleReceiptRequestDTO
 import com.appactor.android.backend.dto.AppActorOfferingDTO
 import com.appactor.android.backend.dto.AppActorOfferingsPayloadDTO
 import com.appactor.android.backend.dto.AppActorGoogleReceiptPostResult
@@ -71,6 +72,28 @@ class AppActorBackendContractTests {
         assertEquals("off_current_only", offerings.current?.id)
         assertEquals("off_current_only", offerings.offering("off_current_only")?.id)
         assertEquals("off_current_only", offerings.offeringByLookupKey("main")?.id)
+    }
+
+    @Test
+    fun `google receipt request encodes price snapshot fields`() {
+        val payload = AppActorBackendJson.instance.encodeToString(
+            AppActorGoogleReceiptRequestDTO(
+                appUserId = "user_android_123",
+                packageName = "com.appactor.android",
+                environment = "production",
+                productId = "com.appactor.pro.monthly",
+                productType = "subscription",
+                purchaseToken = "token_123",
+                purchaseTime = "1710000000000",
+                purchaseState = "PURCHASED",
+                priceAmountMicros = 4_990_000,
+                currency = "USD",
+                idempotencyKey = "google:com.appactor.pro.monthly:monthly001:token_123",
+            )
+        )
+
+        assertTrue(payload.contains("\"priceAmountMicros\":4990000"))
+        assertTrue(payload.contains("\"currency\":\"USD\""))
     }
 
     @Test

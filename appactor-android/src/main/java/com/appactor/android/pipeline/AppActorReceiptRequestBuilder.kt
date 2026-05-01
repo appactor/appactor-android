@@ -21,6 +21,8 @@ internal object AppActorReceiptRequestBuilder {
             orderId = item.orderId,
             basePlanId = item.basePlanId,
             offerId = item.offerId,
+            priceAmountMicros = item.priceAmountMicros,
+            currency = item.currencyCode,
             isAutoRenewing = item.isAutoRenewing,
             obfuscatedAccountId = item.obfuscatedAccountId,
             obfuscatedProfileId = null,
