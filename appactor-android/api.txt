@@ -60,6 +60,7 @@ package com.appactor.android.api {
   public final class AppActorBridge {
     method public static void activeEntitlementKeysOffline();
     method public static void activeEntitlementKeysOffline(optional com.appactor.android.models.AppActorSuccessCallback<java.util.Set<java.lang.String>>? onSuccess);
+    method public static void activeEntitlementKeysOffline(optional com.appactor.android.models.AppActorSuccessCallback<java.util.Set<java.lang.String>>? onSuccess, optional com.appactor.android.models.AppActorBridgeErrorCallback? onError);
     method public static String? appUserId();
     method public static boolean canMakePurchases();
     method public static boolean canMakePurchases(java.util.Set<? extends com.appactor.android.models.AppActorStoreCapability> requiredCapabilities);
@@ -912,6 +913,7 @@ package com.appactor.android.models {
     method public com.appactor.android.models.AppActorPackageType getPackageType();
     method public Integer? getPosition();
     method public Double? getPrice();
+    method public Long? getPriceAmountMicros();
     method public String? getProductDescription();
     method public String getProductId();
     method public String? getProductName();
@@ -934,6 +936,7 @@ package com.appactor.android.models {
     property public final com.appactor.android.models.AppActorPackageType packageType;
     property public final Integer? position;
     property public final Double? price;
+    property public final Long? priceAmountMicros;
     property public final String? productDescription;
     property public final String productId;
     property public final String? productName;

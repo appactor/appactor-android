@@ -21,6 +21,8 @@ internal data class AppActorGoogleRestorePurchaseDTO(
     val orderId: String? = null,
     val basePlanId: String? = null,
     val offerId: String? = null,
+    val priceAmountMicros: Long? = null,
+    val currency: String? = null,
     val isAutoRenewing: Boolean? = null,
 )
 

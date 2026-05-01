@@ -15,6 +15,8 @@ internal data class AppActorGoogleReceiptRequestDTO(
     val orderId: String? = null,
     val basePlanId: String? = null,
     val offerId: String? = null,
+    val priceAmountMicros: Long? = null,
+    val currency: String? = null,
     val isAutoRenewing: Boolean? = null,
     val obfuscatedAccountId: String? = null,
     val obfuscatedProfileId: String? = null,
