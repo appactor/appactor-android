@@ -115,6 +115,8 @@ class AppActorPaymentProcessorTests {
         assertTrue(success.customerInfo.isComputedOffline)
         assertTrue(success.customerInfo.hasActiveEntitlement("premium"))
         assertEquals(1, dependencies.queueStore.pendingCount())
+        assertEquals(4_990_000L, dependencies.queueStore.snapshot().single().priceAmountMicros)
+        assertEquals("USD", dependencies.queueStore.snapshot().single().currencyCode)
         assertTrue(dependencies.acknowledgedTokens.isEmpty())
     }
 
@@ -182,6 +184,8 @@ class AppActorPaymentProcessorTests {
             purchaseState = com.appactor.android.billing.AppActorStorePurchaseState.Purchased,
             basePlanId = "monthly001",
             offerId = "intro7d",
+            priceAmountMicros = 4_990_000,
+            currencyCode = "USD",
             isAcknowledged = false,
             isAutoRenewing = true,
             obfuscatedAccountId = appActorGoogleObfuscatedAccountId("user_android_123"),
@@ -201,6 +205,8 @@ class AppActorPaymentProcessorTests {
 
         assertTrue(info?.hasActiveEntitlement("premium") == true)
         assertEquals(1, dependencies.postedReceipts.size)
+        assertEquals(4_990_000L, dependencies.postedReceipts.single().priceAmountMicros)
+        assertEquals("USD", dependencies.postedReceipts.single().currency)
     }
 
     @Test
@@ -351,6 +357,8 @@ class AppActorPaymentProcessorTests {
             purchaseState = com.appactor.android.billing.AppActorStorePurchaseState.Purchased,
             basePlanId = "monthly001",
             offerId = "intro7d",
+            priceAmountMicros = 4_990_000,
+            currencyCode = "USD",
             isAcknowledged = false,
             isAutoRenewing = true,
             rawPurchaseData = "{\"purchaseToken\":\"token_sync_123\"}",
@@ -371,6 +379,8 @@ class AppActorPaymentProcessorTests {
         assertTrue(info?.hasActiveEntitlement("premium") == true)
         assertEquals(1, dependencies.syncRequests.size)
         assertEquals("token_sync_123", dependencies.syncRequests.single().purchases.single().purchaseToken)
+        assertEquals(4_990_000L, dependencies.syncRequests.single().purchases.single().priceAmountMicros)
+        assertEquals("USD", dependencies.syncRequests.single().purchases.single().currency)
     }
 
     @Test
@@ -385,6 +395,8 @@ class AppActorPaymentProcessorTests {
             purchaseState = com.appactor.android.billing.AppActorStorePurchaseState.Purchased,
             basePlanId = "monthly001",
             offerId = "intro7d",
+            priceAmountMicros = 4_990_000,
+            currencyCode = "USD",
             isAcknowledged = false,
             isAutoRenewing = true,
         )
@@ -453,6 +465,8 @@ class AppActorPaymentProcessorTests {
             purchaseState = com.appactor.android.billing.AppActorStorePurchaseState.Purchased,
             basePlanId = "monthly001",
             offerId = "intro7d",
+            priceAmountMicros = 4_990_000,
+            currencyCode = "USD",
             isAcknowledged = false,
             isAutoRenewing = true,
         )
@@ -1246,6 +1260,8 @@ class AppActorPaymentProcessorTests {
             purchaseState = com.appactor.android.billing.AppActorStorePurchaseState.Purchased,
             basePlanId = "monthly001",
             offerId = "intro7d",
+            priceAmountMicros = 4_990_000,
+            currencyCode = "USD",
             isAcknowledged = false,
             isAutoRenewing = true,
         )
@@ -1270,6 +1286,8 @@ class AppActorPaymentProcessorTests {
         assertTrue(info.hasActiveEntitlement("premium"))
         assertEquals(1, dependencies.restoreRequests.size)
         assertEquals("token_restore_123", dependencies.restoreRequests.single().purchases.single().purchaseToken)
+        assertEquals(4_990_000L, dependencies.restoreRequests.single().purchases.single().priceAmountMicros)
+        assertEquals("USD", dependencies.restoreRequests.single().purchases.single().currency)
         assertEquals(0, dependencies.postedReceipts.size)
         assertEquals(listOf("token_restore_123"), dependencies.acknowledgedTokens)
         assertTrue(dependencies.queueStore.snapshot().isEmpty())
@@ -1896,6 +1914,8 @@ class AppActorPaymentProcessorTests {
                     basePlanId = request.basePlanId,
                     offerId = request.offerId,
                     localizedPrice = if (request.productType == AppActorProductType.Subscription) "$4.99" else "$1.99",
+                    priceAmountMicros = if (request.productType == AppActorProductType.Subscription) 4_990_000 else 1_990_000,
+                    currencyCode = "USD",
                 )
             }
         }
@@ -1913,6 +1933,8 @@ class AppActorPaymentProcessorTests {
                         purchaseState = com.appactor.android.billing.AppActorStorePurchaseState.Purchased,
                         basePlanId = request.basePlanId,
                         offerId = request.offerId,
+                        priceAmountMicros = if (request.productType == AppActorProductType.Subscription) 4_990_000 else 1_990_000,
+                        currencyCode = "USD",
                         isAcknowledged = false,
                         isAutoRenewing = true,
                         obfuscatedAccountId = request.obfuscatedAccountId,

@@ -155,6 +155,8 @@ class GooglePlayStoreAdapterTests {
 
         assertEquals(1, products.size)
         assertEquals("$4.99", products.first().localizedPrice)
+        assertEquals(4_990_000L, products.first().priceAmountMicros)
+        assertEquals("USD", products.first().currencyCode)
         assertEquals("monthly001", products.first().basePlanId)
         assertEquals("intro7d", products.first().offerId)
     }
@@ -292,6 +294,8 @@ class GooglePlayStoreAdapterTests {
         )
 
         assertEquals("$1.99", products.first().localizedPrice)
+        assertEquals(1_990_000L, products.first().priceAmountMicros)
+        assertEquals("USD", products.first().currencyCode)
         assertNull(products.first().offerId)
     }
 
@@ -427,6 +431,11 @@ class GooglePlayStoreAdapterTests {
                             basePlanId = "monthly001",
                             offerId = "intro7d",
                             offerToken = "intro-token",
+                            pricing = AppActorStorePricing(
+                                formattedPrice = "$4.99",
+                                priceAmountMicros = 4_990_000,
+                                currencyCode = "USD",
+                            ),
                         )
                     ),
                 )
@@ -463,7 +472,53 @@ class GooglePlayStoreAdapterTests {
         assertEquals("token_123", result.purchases.first().purchaseToken)
         assertEquals("monthly001", result.purchases.first().basePlanId)
         assertEquals("intro7d", result.purchases.first().offerId)
+        assertEquals(4_990_000L, result.purchases.first().priceAmountMicros)
+        assertEquals("USD", result.purchases.first().currencyCode)
         assertEquals("intro-token", captures.lastLaunchOfferToken)
+    }
+
+    @Test
+    fun `launch purchase maps one time price snapshot onto purchase`() = kotlinx.coroutines.runBlocking {
+        val (billingClient, _) = createMockBillingClient(
+            productDetails = listOf(
+                AppActorBillingProductDetailsPayload(
+                    productId = "com.appactor.coins.100",
+                    productType = AppActorProductType.Consumable,
+                    oneTimeOffer = AppActorStorePricing(
+                        formattedPrice = "$1.99",
+                        priceAmountMicros = 1_990_000,
+                        currencyCode = "USD",
+                    ),
+                )
+            ),
+            launchResult = AppActorBillingLaunchResult.Purchased(
+                purchases = listOf(
+                    AppActorBillingPurchasePayload(
+                        products = listOf("com.appactor.coins.100"),
+                        productType = AppActorProductType.Consumable,
+                        purchaseToken = "token_coins_100",
+                        orderId = "GPA.5678",
+                        purchaseTimeMillis = 1_710_000_000_000,
+                        purchaseState = AppActorStorePurchaseState.Purchased,
+                        isAcknowledged = false,
+                    )
+                )
+            ),
+        )
+        val adapter = GooglePlayStoreAdapter(context, billingClient)
+        val request = AppActorStoreProductRequest(
+            productId = "com.appactor.coins.100",
+            productType = AppActorProductType.Consumable,
+        )
+        adapter.queryProductDetails(listOf(request))
+
+        val result = adapter.launchPurchase(
+            activity = Activity(),
+            request = request,
+        ) as AppActorStorePurchaseLaunchResult.Purchased
+
+        assertEquals(1_990_000L, result.purchases.first().priceAmountMicros)
+        assertEquals("USD", result.purchases.first().currencyCode)
     }
 
     @Test

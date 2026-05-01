@@ -1,5 +1,7 @@
 package com.appactor.android.models
 
+import kotlin.math.roundToLong
+
 public data class AppActorPackage(
     val id: String,
     val packageType: AppActorPackageType = AppActorPackageType.Custom,
@@ -32,4 +34,9 @@ public data class AppActorPackage(
         get() = customTypeIdentifier
             ?: packageType.takeUnless { it == AppActorPackageType.Custom }?.wireValue
             ?: id
+
+    public val priceAmountMicros: Long?
+        get() = price
+            ?.takeIf { it.isFinite() }
+            ?.let { (it * 1_000_000).roundToLong() }
 }

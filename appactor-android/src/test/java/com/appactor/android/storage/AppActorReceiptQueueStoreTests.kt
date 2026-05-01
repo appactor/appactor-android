@@ -63,6 +63,38 @@ class AppActorReceiptQueueStoreTests {
     }
 
     @Test
+    fun `queue store persists google price snapshot across reload`() {
+        val directory = tempDirectory("queue-price")
+        val store = AppActorAtomicJsonReceiptQueueStore(context, directory)
+        val item = queueItem().copy(
+            priceAmountMicros = 4_990_000,
+            currencyCode = "USD",
+        )
+
+        store.upsert(item)
+        val reloaded = AppActorAtomicJsonReceiptQueueStore(context, directory)
+
+        assertEquals(4_990_000L, reloaded.snapshot().single().priceAmountMicros)
+        assertEquals("USD", reloaded.snapshot().single().currencyCode)
+    }
+
+    @Test
+    fun `queue store decodes old items without price snapshot fields`() {
+        val directory = tempDirectory("queue-old-price")
+        File(directory, "receipt_queue.json").writeText(
+            """
+            {"items":[{"key":"google:com.appactor.pro.monthly:monthly001:token_123","appUserId":"user_android_123","packageName":"com.appactor.android","environment":"production","productId":"com.appactor.pro.monthly","productType":"subscription","purchaseToken":"token_123","purchaseTime":"1710000000000","purchaseState":"PURCHASED","basePlanId":"monthly001","idempotencyKey":"google:purchase:token_123","createdAtMillis":1710000000000,"lastUpdatedAtMillis":1710000000000,"phase":"NeedsPost"}],"rateLimitCooldownMillis":null}
+            """.trimIndent()
+        )
+
+        val reloaded = AppActorAtomicJsonReceiptQueueStore(context, directory)
+
+        assertEquals(1, reloaded.pendingCount())
+        assertEquals(null, reloaded.snapshot().single().priceAmountMicros)
+        assertEquals(null, reloaded.snapshot().single().currencyCode)
+    }
+
+    @Test
     fun `queue store preserves in memory state when disk persist fails`() {
         val brokenDirectory = brokenDirectory("queue-broken")
         val store = AppActorAtomicJsonReceiptQueueStore(context, brokenDirectory)
