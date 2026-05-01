@@ -572,6 +572,8 @@ internal class GooglePlayStoreAdapter(
                 productType = product.productType,
                 basePlanId = product.basePlanId,
                 offerId = product.offerId,
+                priceAmountMicros = product.priceAmountMicros,
+                currencyCode = product.currencyCode,
                 obfuscatedAccountId = obfuscatedAccountId,
             )
         }
@@ -633,6 +635,8 @@ private fun AppActorBillingPurchasePayload.toStorePurchase(
         purchaseState = purchaseState,
         basePlanId = request.basePlanId,
         offerId = request.offerId,
+        priceAmountMicros = request.priceAmountMicros,
+        currencyCode = request.currencyCode,
         isAcknowledged = isAcknowledged,
         isAutoRenewing = isAutoRenewing,
         obfuscatedAccountId = obfuscatedAccountId ?: request.obfuscatedAccountId,
@@ -652,6 +656,8 @@ private fun AppActorBillingPurchaseHistoryPayload.toHistoryRecord(
         purchaseTimeMillis = purchaseTimeMillis,
         basePlanId = request.basePlanId,
         offerId = request.offerId,
+        priceAmountMicros = request.priceAmountMicros,
+        currencyCode = request.currencyCode,
         isAutoRenewing = isAutoRenewing,
         obfuscatedAccountId = obfuscatedAccountId ?: request.obfuscatedAccountId,
         rawPurchaseData = rawPurchaseData,

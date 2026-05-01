@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.0
+
+- Added Google Play purchase price and currency propagation from resolved Play Billing products into receipt submissions.
+- Persisted receipt queue price metadata so retries and delayed drains keep transaction economics intact.
+- Updated the Android plugin bridge offering payloads with `price_amount_micros` for Flutter visibility.
+
 ## 0.0.9
 
 - Resolved Play Billing lookups through `storeProductId` while preserving logical public product identifiers.
