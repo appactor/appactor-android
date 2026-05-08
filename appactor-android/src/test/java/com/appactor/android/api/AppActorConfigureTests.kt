@@ -145,10 +145,10 @@ class AppActorConfigureTests {
         assertNull(defaults.platformInfo)
 
         val customized = AppActorOptions(
-            platformInfo = AppActorPlatformInfo("flutter", "0.1.0"),
+            platformInfo = AppActorPlatformInfo("flutter", "0.1.1"),
         ).toLegacyOptions()
 
-        assertEquals(AppActorPlatformInfo("flutter", "0.1.0"), customized.platformInfo)
+        assertEquals(AppActorPlatformInfo("flutter", "0.1.1"), customized.platformInfo)
     }
 
     @Test
