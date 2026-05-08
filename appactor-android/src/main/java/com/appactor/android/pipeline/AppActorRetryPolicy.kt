@@ -5,7 +5,6 @@ import kotlin.math.pow
 
 internal object AppActorRetryPolicy {
     private const val MAX_RETRY_DELAY_MILLIS: Long = 60 * 60 * 1_000L
-    const val MAX_RETRY_ATTEMPTS: Int = 3
 
     fun nextRetryAtMillis(
         nowMillis: Long,
@@ -22,9 +21,5 @@ internal object AppActorRetryPolicy {
         )
         val resolvedDelay = maxOf(serverDelayMillis ?: 0L, backoffMillis)
         return nowMillis + resolvedDelay
-    }
-
-    fun hasExhaustedRetries(nextRetryCount: Int): Boolean {
-        return nextRetryCount >= MAX_RETRY_ATTEMPTS
     }
 }

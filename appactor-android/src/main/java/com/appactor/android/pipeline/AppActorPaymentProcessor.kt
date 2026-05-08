@@ -1648,6 +1648,7 @@ internal class AppActorPaymentProcessor(
             idempotencyKey = "google:${purchase.productId}:${purchase.basePlanId.orEmpty()}:${purchase.purchaseToken}",
             rawPurchaseData = purchase.rawPurchaseData,
             purchaseSignature = purchase.purchaseSignature,
+            countryCode = storeAdapter.currentStorefront()?.countryCode,
             isAcknowledged = purchase.isAcknowledged,
             createdAtMillis = now,
             lastUpdatedAtMillis = now,

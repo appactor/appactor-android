@@ -37,10 +37,11 @@ import com.appactor.android.models.AppActorError
 import com.appactor.android.models.AppActorPackage
 import com.appactor.android.models.AppActorPackageType
 import com.appactor.android.models.AppActorProductType
+import com.appactor.android.models.AppActorPurchaseParams
 import com.appactor.android.models.AppActorPurchaseResult
 import com.appactor.android.models.AppActorReceiptPipelineEvent
 import com.appactor.android.models.AppActorStore
-import com.appactor.android.models.AppActorPurchaseParams
+import com.appactor.android.models.AppActorStorefront
 import com.appactor.android.models.AppActorSubscriptionReplacementMode
 import com.appactor.android.models.appActorGoogleObfuscatedAccountId
 import com.appactor.android.storage.AppActorAtomicJsonPostedLedgerStore
@@ -95,6 +96,27 @@ class AppActorPaymentProcessorTests {
         assertTrue(dependencies.consumedTokens.isEmpty())
         assertTrue(dependencies.queueStore.snapshot().isEmpty())
         assertTrue(dependencies.ledgerStore.isPosted("google:com.appactor.pro.monthly:monthly001:token_123"))
+    }
+
+    @Test
+    fun `purchase receipt includes cached storefront country code`() = runBlocking {
+        val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
+        val dependencies = createDependencies(
+            receiptResponse = AppActorBackendHttpResponse(
+                body = receiptResponse,
+                statusCode = 200,
+                requestId = receiptResponse.requestId,
+                signatureVerified = true,
+            ),
+            storefront = AppActorStorefront(
+                store = AppActorStore.PlayStore,
+                countryCode = "TR",
+            ),
+        )
+
+        dependencies.processor.purchase(Activity(), monthlyPackage())
+
+        assertEquals("TR", dependencies.postedReceipts.single().countryCode)
     }
 
     @Test
@@ -919,7 +941,7 @@ class AppActorPaymentProcessorTests {
     }
 
     @Test
-    fun `payment processor dead letters after max retry attempts`() = runBlocking {
+    fun `retryable receipt remains queued after repeated failures`() = runBlocking {
         val retryableResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_retryable.json")
         val events = mutableListOf<AppActorReceiptPipelineEvent>()
         val dependencies = createDependencies(
@@ -1897,6 +1919,7 @@ class AppActorPaymentProcessorTests {
         directPurchaseRequests: Map<String, AppActorStoreProductRequest> = emptyMap(),
         directPurchaseResolutionError: Throwable? = null,
         historyQueryError: Throwable? = null,
+        storefront: AppActorStorefront? = null,
         acknowledgedTokens: MutableList<String>,
         consumedTokens: MutableList<String>,
     ): AppActorStoreAdapter {
@@ -1946,6 +1969,7 @@ class AppActorPaymentProcessorTests {
         }
 
         every { mock.purchaseUpdates() } returns emptyFlow()
+        every { mock.currentStorefront() } returns storefront
 
         coEvery { mock.resolveDirectPurchaseRequest(any()) } coAnswers {
             val request: AppActorStoreProductRequest = firstArg()
@@ -2014,6 +2038,7 @@ class AppActorPaymentProcessorTests {
         directPurchaseRequests: Map<String, AppActorStoreProductRequest> = emptyMap(),
         directPurchaseResolutionError: Throwable? = null,
         historyQueryError: Throwable? = null,
+        storefront: AppActorStorefront? = null,
         pipelineEvents: MutableList<AppActorReceiptPipelineEvent>? = null,
         offeringsEnvelope: AppActorOfferingsEnvelopeDTO = fixtureOfferings(),
         directory: File? = null,
@@ -2059,6 +2084,7 @@ class AppActorPaymentProcessorTests {
             directPurchaseRequests = directPurchaseRequests,
             directPurchaseResolutionError = directPurchaseResolutionError,
             historyQueryError = historyQueryError,
+            storefront = storefront,
             acknowledgedTokens = acknowledgedTokens,
             consumedTokens = consumedTokens,
         )
