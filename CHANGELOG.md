@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.1
+
+- Clarified restore, reinstall identity, main-process, and retryable receipt queue policies in the Android SDK documentation.
+- Removed stale retry-attempt exhaustion helpers so retryable receipt failures remain queued instead of implying a dead-letter threshold.
+- Preserved cached Play Store storefront country code on receipt submissions.
+
 ## 0.1.0
 
 - Added Google Play purchase price and currency propagation from resolved Play Billing products into receipt submissions.

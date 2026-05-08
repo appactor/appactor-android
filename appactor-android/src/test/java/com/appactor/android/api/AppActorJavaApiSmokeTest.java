@@ -29,7 +29,7 @@ public final class AppActorJavaApiSmokeTest {
         AppActorOptions options = new AppActorOptions(null);
         AppActorOptions bridgeOptions = new AppActorOptions(
             null,
-            new AppActorPlatformInfo("flutter", "0.1.0")
+            new AppActorPlatformInfo("flutter", "0.1.1")
         );
         AppActorOptions compatibilityOptions = new AppActorOptions();
         Activity activity = Robolectric.buildActivity(Activity.class).setup().get();
