@@ -137,6 +137,7 @@ class AppActorHttpBackendClientTests {
                     purchaseToken = "token_123",
                     purchaseTime = "1710000000000",
                     purchaseState = "PURCHASED",
+                    sourceIntent = "purchase",
                     idempotencyKey = "google:purchase:token_123",
                 )
             )

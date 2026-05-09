@@ -20,6 +20,7 @@ internal data class AppActorGoogleReceiptRequestDTO(
     val isAutoRenewing: Boolean? = null,
     val obfuscatedAccountId: String? = null,
     val obfuscatedProfileId: String? = null,
+    val sourceIntent: String,
     val source: String? = null,
     val observedAt: String? = null,
     val idempotencyKey: String,
