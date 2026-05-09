@@ -190,6 +190,18 @@ class AppActorReceiptQueueStoreTests {
         assertEquals(1, store.deadLetteredCount())
     }
 
+    @Test
+    fun `upsert preserves original source intent across retries`() {
+        val store = AppActorAtomicJsonReceiptQueueStore(context, tempDirectory("queue-source-intent"))
+        val purchaseItem = queueItem().copy(sourceIntent = "purchase")
+        store.upsert(purchaseItem)
+
+        val restoreRetry = purchaseItem.copy(sourceIntent = "restore", lastUpdatedAtMillis = purchaseItem.lastUpdatedAtMillis + 1)
+        store.upsert(restoreRetry)
+
+        assertEquals("purchase", store.get(purchaseItem.key)?.sourceIntent)
+    }
+
     private fun queueItem(
         createdAtMillis: Long = System.currentTimeMillis(),
         phase: AppActorReceiptQueuePhase = AppActorReceiptQueuePhase.NeedsPost,
