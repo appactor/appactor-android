@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.2
+
+- Added source intent tagging for purchase, restore, and sync receipt flows while preserving queued purchase intent across retries.
+- Kept restore and sync replays distinguishable from live purchase submissions for backend billing classification.
+
 ## 0.1.1
 
 - Clarified restore, reinstall identity, main-process, and retryable receipt queue policies in the Android SDK documentation.
