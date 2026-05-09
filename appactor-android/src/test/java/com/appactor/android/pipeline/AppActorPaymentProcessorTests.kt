@@ -400,6 +400,7 @@ class AppActorPaymentProcessorTests {
 
         assertTrue(info?.hasActiveEntitlement("premium") == true)
         assertEquals(1, dependencies.syncRequests.size)
+        assertEquals("sync", dependencies.syncRequests.single().sourceIntent)
         assertEquals("token_sync_123", dependencies.syncRequests.single().purchases.single().purchaseToken)
         assertEquals(4_990_000L, dependencies.syncRequests.single().purchases.single().priceAmountMicros)
         assertEquals("USD", dependencies.syncRequests.single().purchases.single().currency)
@@ -1161,6 +1162,7 @@ class AppActorPaymentProcessorTests {
         firstBoot.processor.syncCurrentPurchases()
         val unresolved = firstBoot.queueStore.snapshot().single()
         assertEquals(com.appactor.android.storage.AppActorReceiptQueuePhase.NeedsPost, unresolved.phase)
+        assertEquals("sync", unresolved.sourceIntent)
 
         firstBoot.queueStore.update(
             unresolved.copy(
@@ -1307,6 +1309,7 @@ class AppActorPaymentProcessorTests {
 
         assertTrue(info.hasActiveEntitlement("premium"))
         assertEquals(1, dependencies.restoreRequests.size)
+        assertEquals("restore", dependencies.restoreRequests.single().sourceIntent)
         assertEquals("token_restore_123", dependencies.restoreRequests.single().purchases.single().purchaseToken)
         assertEquals(4_990_000L, dependencies.restoreRequests.single().purchases.single().priceAmountMicros)
         assertEquals("USD", dependencies.restoreRequests.single().purchases.single().currency)
