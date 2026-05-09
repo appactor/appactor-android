@@ -26,6 +26,7 @@ internal object AppActorReceiptRequestBuilder {
             isAutoRenewing = item.isAutoRenewing,
             obfuscatedAccountId = item.obfuscatedAccountId,
             obfuscatedProfileId = null,
+            sourceIntent = item.sourceIntent,
             source = "purchase_update",
             observedAt = item.purchaseTime.toLongOrNull()?.let { AppActorBridgeReceiptEvent.millisToIso8601(it) },
             idempotencyKey = item.idempotencyKey,

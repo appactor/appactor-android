@@ -418,7 +418,12 @@ internal class AppActorPaymentProcessor(
             }
             allProcessedPurchases += normalized
             if (normalized.productType == AppActorProductType.Unknown) {
-                when (val outcome = enqueueAndProcess(normalized, productEntitlements, appUserId)) {
+                when (val outcome = enqueueAndProcess(
+                    normalized,
+                    productEntitlements,
+                    appUserId,
+                    sourceIntent = SOURCE_INTENT_SYNC,
+                )) {
                     is ProcessingOutcome.Success -> latestCustomer = outcome.customerInfo
                     is ProcessingOutcome.AlreadyPosted -> latestCustomer = outcome.customerInfo
                     is ProcessingOutcome.Queued,
@@ -436,6 +441,7 @@ internal class AppActorPaymentProcessor(
                         appUserId = appUserId,
                         obfuscatedAccountId = appActorGoogleObfuscatedAccountId(appUserId),
                         obfuscatedProfileId = null,
+                        sourceIntent = SOURCE_INTENT_SYNC,
                         source = "foreground_sync",
                         observedAt = isoNow(),
                         purchases = syncCandidates.map { it.toRestorePurchaseDTO() },
@@ -467,11 +473,24 @@ internal class AppActorPaymentProcessor(
                     },
                     appUserId = resolvedAppUserId,
                 )
-                enqueueFailedBatchPurchases(syncCandidates, successfulPurchaseKeys, productEntitlements, resolvedAppUserId)
+                enqueueFailedBatchPurchases(
+                    syncCandidates,
+                    successfulPurchaseKeys,
+                    productEntitlements,
+                    resolvedAppUserId,
+                    SOURCE_INTENT_SYNC,
+                )
                 latestCustomer = customerManager.cachedInfo(resolvedAppUserId)
             } catch (_: Throwable) {
                 syncCandidates.forEach { purchase ->
-                    when (val outcome = enqueueAndProcess(purchase, productEntitlements, appUserId)) {
+                    when (
+                        val outcome = enqueueAndProcess(
+                            purchase,
+                            productEntitlements,
+                            appUserId,
+                            sourceIntent = SOURCE_INTENT_SYNC,
+                        )
+                    ) {
                         is ProcessingOutcome.Success -> latestCustomer = outcome.customerInfo
                         is ProcessingOutcome.AlreadyPosted -> latestCustomer = outcome.customerInfo
                         is ProcessingOutcome.Queued,
@@ -560,6 +579,7 @@ internal class AppActorPaymentProcessor(
                         appUserId = currentAppUserId,
                         obfuscatedAccountId = appActorGoogleObfuscatedAccountId(currentAppUserId),
                         obfuscatedProfileId = null,
+                        sourceIntent = SOURCE_INTENT_RESTORE,
                         source = "user_restore",
                         observedAt = isoNow(),
                         purchases = batch.map { it.purchase.toRestorePurchaseDTO() },
@@ -592,7 +612,13 @@ internal class AppActorPaymentProcessor(
                     },
                     appUserId = resolvedAppUserId,
                 )
-                enqueueFailedBatchPurchases(activeCandidates, successfulPurchaseKeys, productEntitlements, resolvedAppUserId)
+                enqueueFailedBatchPurchases(
+                    activeCandidates,
+                    successfulPurchaseKeys,
+                    productEntitlements,
+                    resolvedAppUserId,
+                    SOURCE_INTENT_RESTORE,
+                )
                 latestBatchCustomer = customerManager.cachedInfo(resolvedAppUserId)
             } catch (throwable: Throwable) {
                 val fallbackCustomer = runCatching {
@@ -740,9 +766,10 @@ internal class AppActorPaymentProcessor(
         appUserIdOverride: String? = null,
         offeringId: String? = null,
         packageId: String? = null,
+        sourceIntent: String = SOURCE_INTENT_PURCHASE,
     ): ProcessingOutcome {
         val normalizedPurchase = normalizePurchaseForPosting(purchase)
-        val item = makeQueueItem(normalizedPurchase, appUserIdOverride, offeringId, packageId)
+        val item = makeQueueItem(normalizedPurchase, appUserIdOverride, offeringId, packageId, sourceIntent)
         val existing = queueStore.get(item.key)
         if (existing?.phase == AppActorReceiptQueuePhase.DeadLettered) {
             val revived = reviveRecoverableDeadLetter(
@@ -969,9 +996,10 @@ internal class AppActorPaymentProcessor(
         successfulKeys: Set<String>,
         productEntitlements: Map<String, List<String>>,
         appUserId: String,
+        sourceIntent: String,
     ) {
         candidates.filter { !successfulKeys.contains(batchPurchaseKey(it)) }
-            .forEach { enqueueAndProcess(it, productEntitlements, appUserId) }
+            .forEach { enqueueAndProcess(it, productEntitlements, appUserId, sourceIntent = sourceIntent) }
     }
 
     private fun adoptResolvedAppUserId(
@@ -994,6 +1022,7 @@ internal class AppActorPaymentProcessor(
         val restoreItem = makeQueueItem(
             purchase = purchase,
             appUserIdOverride = appUserId,
+            sourceIntent = SOURCE_INTENT_RESTORE,
         ).copy(
             shouldAcknowledge = purchase.productType == AppActorProductType.Subscription ||
                 purchase.productType == AppActorProductType.NonConsumable,
@@ -1025,6 +1054,7 @@ internal class AppActorPaymentProcessor(
             currencyCode = restoreItem.currencyCode ?: existing.currencyCode,
             isAutoRenewing = restoreItem.isAutoRenewing ?: existing.isAutoRenewing,
             obfuscatedAccountId = restoreItem.obfuscatedAccountId ?: existing.obfuscatedAccountId,
+            sourceIntent = existing.sourceIntent,
             idempotencyKey = restoreItem.idempotencyKey,
             rawPurchaseData = restoreItem.rawPurchaseData ?: existing.rawPurchaseData,
             purchaseSignature = restoreItem.purchaseSignature ?: existing.purchaseSignature,
@@ -1615,6 +1645,7 @@ internal class AppActorPaymentProcessor(
         appUserIdOverride: String? = null,
         offeringId: String? = null,
         packageId: String? = null,
+        sourceIntent: String = SOURCE_INTENT_PURCHASE,
     ): AppActorReceiptQueueItem {
         val appUserId = appUserIdOverride?.takeIf { it.isNotBlank() }
             ?: identityStore.currentAppUserId
@@ -1645,6 +1676,7 @@ internal class AppActorPaymentProcessor(
             currencyCode = purchase.currencyCode,
             isAutoRenewing = purchase.isAutoRenewing,
             obfuscatedAccountId = purchase.obfuscatedAccountId,
+            sourceIntent = sourceIntent,
             idempotencyKey = "google:${purchase.productId}:${purchase.basePlanId.orEmpty()}:${purchase.purchaseToken}",
             rawPurchaseData = purchase.rawPurchaseData,
             purchaseSignature = purchase.purchaseSignature,
@@ -1709,6 +1741,9 @@ internal class AppActorPaymentProcessor(
     private companion object {
         const val PENDING_PREFS_NAME = "com.appactor.android.pending_purchases"
         const val PENDING_EXPIRY_MILLIS: Long = 7 * 24 * 60 * 60 * 1_000L // 7 days
+        const val SOURCE_INTENT_PURCHASE = "purchase"
+        const val SOURCE_INTENT_RESTORE = "restore"
+        const val SOURCE_INTENT_SYNC = "sync"
     }
 }
 

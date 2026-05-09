@@ -88,12 +88,14 @@ class AppActorBackendContractTests {
                 purchaseState = "PURCHASED",
                 priceAmountMicros = 4_990_000,
                 currency = "USD",
+                sourceIntent = "purchase",
                 idempotencyKey = "google:com.appactor.pro.monthly:monthly001:token_123",
             )
         )
 
         assertTrue(payload.contains("\"priceAmountMicros\":4990000"))
         assertTrue(payload.contains("\"currency\":\"USD\""))
+        assertTrue(payload.contains("\"sourceIntent\":\"purchase\""))
     }
 
     @Test
