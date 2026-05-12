@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.3
+
+- Classified background purchase updates as queued source intent while preserving explicit foreground purchases for backend billing classification.
+- Kept boot, sync, restore, and retry receipt paths from being treated as new subscriber purchase intent.
+
 ## 0.1.2
 
 - Added source intent tagging for purchase, restore, and sync receipt flows while preserving queued purchase intent across retries.
