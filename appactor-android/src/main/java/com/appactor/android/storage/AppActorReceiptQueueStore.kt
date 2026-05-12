@@ -89,10 +89,25 @@ internal class AppActorAtomicJsonReceiptQueueStore(
         const val STALE_CLAIM_THRESHOLD_MILLIS: Long = 2 * 60 * 1_000L
         const val DEAD_LETTER_RETENTION_MILLIS: Long = 30L * 24 * 60 * 60 * 1_000
         private val RECOVERABLE_PRODUCT_TYPE = com.appactor.android.models.AppActorProductType.Unknown.wireValue
+        private val SOURCE_INTENT_PRIORITY = mapOf(
+            "queue" to 0,
+            "sync" to 1,
+            "restore" to 2,
+            "purchase" to 3,
+        )
 
         fun deletePersistedFile(context: Context) {
             val file = File(File(context.filesDir, "appactor"), "receipt_queue.json")
             file.delete()
+        }
+
+        private fun mergeSourceIntent(
+            existing: AppActorReceiptQueueItem,
+            incoming: AppActorReceiptQueueItem,
+        ): String {
+            val existingPriority = SOURCE_INTENT_PRIORITY[existing.sourceIntent] ?: 0
+            val incomingPriority = SOURCE_INTENT_PRIORITY[incoming.sourceIntent] ?: 0
+            return if (incomingPriority > existingPriority) incoming.sourceIntent else existing.sourceIntent
         }
     }
 
@@ -128,7 +143,7 @@ internal class AppActorAtomicJsonReceiptQueueStore(
                     currencyCode = item.currencyCode ?: existing.currencyCode,
                     isAutoRenewing = item.isAutoRenewing ?: existing.isAutoRenewing,
                     obfuscatedAccountId = item.obfuscatedAccountId ?: existing.obfuscatedAccountId,
-                    sourceIntent = existing.sourceIntent,
+                    sourceIntent = mergeSourceIntent(existing, item),
                     rawPurchaseData = item.rawPurchaseData ?: existing.rawPurchaseData,
                     purchaseSignature = item.purchaseSignature ?: existing.purchaseSignature,
                     countryCode = item.countryCode ?: existing.countryCode,

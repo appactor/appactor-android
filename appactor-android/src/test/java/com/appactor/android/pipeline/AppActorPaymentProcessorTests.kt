@@ -53,6 +53,7 @@ import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.emptyFlow
@@ -227,8 +228,156 @@ class AppActorPaymentProcessorTests {
 
         assertTrue(info?.hasActiveEntitlement("premium") == true)
         assertEquals(1, dependencies.postedReceipts.size)
+        assertEquals("queue", dependencies.postedReceipts.single().sourceIntent)
         assertEquals(4_990_000L, dependencies.postedReceipts.single().priceAmountMicros)
         assertEquals("USD", dependencies.postedReceipts.single().currency)
+    }
+
+    @Test
+    fun `purchase updates post merged higher priority source intent`() = runBlocking {
+        val purchase = AppActorStorePurchase(
+            productId = "com.appactor.pro.monthly",
+            productType = AppActorProductType.Subscription,
+            purchaseToken = "token_gate_123",
+            orderId = "GPA.gate.123",
+            purchaseTimeMillis = 1_710_000_000_000,
+            purchaseState = com.appactor.android.billing.AppActorStorePurchaseState.Purchased,
+            basePlanId = "monthly001",
+            offerId = "intro7d",
+            priceAmountMicros = 4_990_000,
+            currencyCode = "USD",
+            isAcknowledged = false,
+            isAutoRenewing = true,
+            rawPurchaseData = "{\"purchaseToken\":\"token_gate_123\"}",
+            purchaseSignature = "signature_gate_123",
+        )
+        val dependencies = createDependencies(
+            receiptResponse = AppActorBackendHttpResponse(
+                body = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json"),
+                statusCode = 200,
+                requestId = "req_merged_intent",
+                signatureVerified = true,
+            ),
+        )
+        dependencies.queueStore.upsert(
+            AppActorReceiptQueueItem(
+                key = AppActorReceiptQueueItem.makeKey(
+                    purchaseToken = purchase.purchaseToken,
+                    productId = purchase.productId,
+                    basePlanId = purchase.basePlanId,
+                ),
+                appUserId = "user_android_123",
+                packageName = context.packageName,
+                environment = "production",
+                productId = purchase.productId,
+                productType = AppActorProductType.Subscription.wireValue,
+                purchaseToken = purchase.purchaseToken,
+                purchaseTime = purchase.purchaseTimeMillis.toString(),
+                purchaseState = "PURCHASED",
+                orderId = purchase.orderId,
+                basePlanId = purchase.basePlanId,
+                offerId = purchase.offerId,
+                sourceIntent = "purchase",
+                idempotencyKey = "google:${purchase.productId}:${purchase.basePlanId}:${purchase.purchaseToken}",
+                createdAtMillis = 1_710_000_000_000,
+                lastUpdatedAtMillis = 1_710_000_000_000,
+                phase = com.appactor.android.storage.AppActorReceiptQueuePhase.NeedsPost,
+            )
+        )
+
+        dependencies.processor.processPurchaseUpdates(listOf(purchase))
+
+        assertEquals(1, dependencies.postedReceipts.size)
+        assertEquals("purchase", dependencies.postedReceipts.single().sourceIntent)
+    }
+
+    @Test
+    fun `purchase update after cancelled foreground purchase remains purchase intent`() = runBlocking {
+        val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
+        val dependencies = createDependencies(
+            receiptResponse = AppActorBackendHttpResponse(
+                body = receiptResponse,
+                statusCode = 200,
+                requestId = receiptResponse.requestId,
+                signatureVerified = true,
+            ),
+        )
+        coEvery { dependencies.storeAdapter.launchPurchase(any(), any()) } throws CancellationException("purchase cancelled")
+
+        val cancelled = runCatching {
+            dependencies.processor.purchase(Activity(), monthlyPackage())
+        }.exceptionOrNull()
+        assertTrue(cancelled is CancellationException)
+
+        dependencies.processor.processPurchaseUpdates(
+            listOf(
+                AppActorStorePurchase(
+                    productId = "com.appactor.pro.monthly",
+                    productType = AppActorProductType.Subscription,
+                    purchaseToken = "token_cancelled_callback_123",
+                    orderId = "GPA.cancelled.callback.123",
+                    purchaseTimeMillis = 1_710_000_000_000,
+                    purchaseState = com.appactor.android.billing.AppActorStorePurchaseState.Purchased,
+                    basePlanId = "monthly001",
+                    offerId = "intro7d",
+                    priceAmountMicros = 4_990_000,
+                    currencyCode = "USD",
+                    isAcknowledged = false,
+                    isAutoRenewing = true,
+                    rawPurchaseData = "{\"purchaseToken\":\"token_cancelled_callback_123\"}",
+                    purchaseSignature = "signature_cancelled_callback_123",
+                )
+            )
+        )
+
+        assertEquals(1, dependencies.postedReceipts.size)
+        assertEquals("purchase", dependencies.postedReceipts.single().sourceIntent)
+    }
+
+    @Test
+    fun `purchase update after cancelled foreground grace expires is queue intent`() = runBlocking {
+        var now = 1_000L
+        val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
+        val dependencies = createDependencies(
+            receiptResponse = AppActorBackendHttpResponse(
+                body = receiptResponse,
+                statusCode = 200,
+                requestId = receiptResponse.requestId,
+                signatureVerified = true,
+            ),
+            dateProviderMillis = { now },
+        )
+        coEvery { dependencies.storeAdapter.launchPurchase(any(), any()) } throws CancellationException("purchase cancelled")
+
+        val cancelled = runCatching {
+            dependencies.processor.purchase(Activity(), monthlyPackage())
+        }.exceptionOrNull()
+        assertTrue(cancelled is CancellationException)
+
+        now += 31_000L
+        dependencies.processor.processPurchaseUpdates(
+            listOf(
+                AppActorStorePurchase(
+                    productId = "com.appactor.pro.monthly",
+                    productType = AppActorProductType.Subscription,
+                    purchaseToken = "token_cancelled_late_123",
+                    orderId = "GPA.cancelled.late.123",
+                    purchaseTimeMillis = 1_710_000_000_000,
+                    purchaseState = com.appactor.android.billing.AppActorStorePurchaseState.Purchased,
+                    basePlanId = "monthly001",
+                    offerId = "intro7d",
+                    priceAmountMicros = 4_990_000,
+                    currencyCode = "USD",
+                    isAcknowledged = false,
+                    isAutoRenewing = true,
+                    rawPurchaseData = "{\"purchaseToken\":\"token_cancelled_late_123\"}",
+                    purchaseSignature = "signature_cancelled_late_123",
+                )
+            )
+        )
+
+        assertEquals(1, dependencies.postedReceipts.size)
+        assertEquals("queue", dependencies.postedReceipts.single().sourceIntent)
     }
 
     @Test
@@ -695,6 +844,7 @@ class AppActorPaymentProcessorTests {
 
             assertNull(liveResult)
             assertEquals("user_old", dependencies.postedReceipts.single().appUserId)
+            assertEquals("purchase", dependencies.postedReceipts.single().sourceIntent)
             assertTrue(deferredCallbacks.isEmpty())
             assertFalse(pendingPrefs.contains("token_transition_buffer_deferred_123"))
         } finally {
@@ -749,6 +899,7 @@ class AppActorPaymentProcessorTests {
 
             assertNull(liveResult)
             assertEquals("user_same", dependencies.postedReceipts.single().appUserId)
+            assertEquals("purchase", dependencies.postedReceipts.single().sourceIntent)
             assertEquals(1, transitionResults.size)
             assertEquals("user_same", transitionResults.single().appUserId)
             assertEquals(listOf("com.appactor.pro.monthly"), deferredCallbacks.map { it.first })
@@ -2048,6 +2199,7 @@ class AppActorPaymentProcessorTests {
         identityStore: AppActorIdentityStore = createMockIdentityStore(),
         postReceiptStarted: CountDownLatch? = null,
         releasePostedReceipt: CountDownLatch? = null,
+        dateProviderMillis: () -> Long = { System.currentTimeMillis() },
     ): Dependencies {
         val actualDirectory = directory ?: File(context.filesDir, "tests/payment-${UUID.randomUUID()}").apply { mkdirs() }
         val postedReceipts = mutableListOf<AppActorGoogleReceiptRequestDTO>()
@@ -2148,6 +2300,7 @@ class AppActorPaymentProcessorTests {
             offlineProductCatalogStore = offlineProductCatalogStore,
             packageName = context.packageName,
             onPipelineEvent = { event -> pipelineEvents?.add(event) },
+            dateProviderMillis = dateProviderMillis,
         )
 
         return Dependencies(

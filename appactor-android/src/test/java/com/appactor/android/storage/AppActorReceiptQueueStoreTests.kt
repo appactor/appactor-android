@@ -202,6 +202,18 @@ class AppActorReceiptQueueStoreTests {
         assertEquals("purchase", store.get(purchaseItem.key)?.sourceIntent)
     }
 
+    @Test
+    fun `upsert upgrades queue source intent when explicit purchase arrives`() {
+        val store = AppActorAtomicJsonReceiptQueueStore(context, tempDirectory("queue-source-intent-upgrade"))
+        val queueItem = queueItem().copy(sourceIntent = "queue")
+        store.upsert(queueItem)
+
+        val purchaseRetry = queueItem.copy(sourceIntent = "purchase", lastUpdatedAtMillis = queueItem.lastUpdatedAtMillis + 1)
+        store.upsert(purchaseRetry)
+
+        assertEquals("purchase", store.get(queueItem.key)?.sourceIntent)
+    }
+
     private fun queueItem(
         createdAtMillis: Long = System.currentTimeMillis(),
         phase: AppActorReceiptQueuePhase = AppActorReceiptQueuePhase.NeedsPost,
