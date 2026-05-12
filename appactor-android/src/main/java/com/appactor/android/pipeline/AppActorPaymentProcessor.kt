@@ -48,6 +48,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -87,6 +88,7 @@ internal class AppActorPaymentProcessor(
     private var scheduledRetryAtMillis: Long? = null
     // Key: purchaseToken, Value: "productId|timestampMillis"
     private val pendingPurchaseTokens = java.util.concurrent.ConcurrentHashMap<String, String>()
+    private val foregroundPurchaseProductExpiries = java.util.concurrent.ConcurrentHashMap<String, Long>()
     private val pendingPrefs = configuration.applicationContext.getSharedPreferences(
         PENDING_PREFS_NAME, android.content.Context.MODE_PRIVATE,
     )
@@ -254,7 +256,14 @@ internal class AppActorPaymentProcessor(
             val productEntitlements = ensureProductEntitlements()
             var latestCustomer: AppActorCustomerInfo? = null
             purchases.forEach { purchase ->
-                when (val outcome = enqueueAndProcess(purchase, productEntitlements, appUserId)) {
+                when (
+                    val outcome = enqueueAndProcess(
+                        purchase = purchase,
+                        productEntitlements = productEntitlements,
+                        appUserIdOverride = appUserId,
+                        sourceIntent = sourceIntentForPurchaseUpdate(purchase),
+                    )
+                ) {
                     is ProcessingOutcome.Success -> {
                         latestCustomer = outcome.customerInfo
                         fireDeferredPurchaseCallbackIfNeeded(
@@ -298,7 +307,11 @@ internal class AppActorPaymentProcessor(
         } else {
             target.request
         }
-        return when (val launchResult = storeAdapter.launchPurchase(activity, resolvedRequest)) {
+        val foregroundProductId = resolvedRequest.productId
+        var keepForegroundMarker = false
+        markForegroundPurchaseProduct(foregroundProductId)
+        try {
+            return when (val launchResult = storeAdapter.launchPurchase(activity, resolvedRequest)) {
                 is AppActorStorePurchaseLaunchResult.Cancelled -> AppActorPurchaseResult.Cancelled
                 is AppActorStorePurchaseLaunchResult.Pending -> {
                     val now = dateProviderMillis()
@@ -375,6 +388,18 @@ internal class AppActorPaymentProcessor(
                     purchaseResult
                 }
             }
+        } catch (error: CancellationException) {
+            markForegroundPurchaseProduct(
+                productId = foregroundProductId,
+                ttlMillis = FOREGROUND_PURCHASE_CANCELLATION_GRACE_MILLIS,
+            )
+            keepForegroundMarker = true
+            throw error
+        } finally {
+            if (!keepForegroundMarker) {
+                clearForegroundPurchaseProduct(foregroundProductId)
+            }
+        }
     }
 
     suspend fun syncCurrentPurchases(
@@ -647,7 +672,6 @@ internal class AppActorPaymentProcessor(
                 }
             }
         }
-
         val followUpCustomer = if (shouldRunFollowUpSync) {
             syncCurrentPurchasesLocked(
                 limit = batchSize,
@@ -814,7 +838,8 @@ internal class AppActorPaymentProcessor(
             )
         }
         queueStore.upsert(item)
-        return processClaimedItem(item.copy(phase = AppActorReceiptQueuePhase.Posting), productEntitlements)
+        val mergedItem = queueStore.get(item.key) ?: item
+        return processClaimedItem(mergedItem.copy(phase = AppActorReceiptQueuePhase.Posting), productEntitlements)
     }
 
     private suspend fun reviveRecoverableDeadLetter(
@@ -1400,6 +1425,49 @@ internal class AppActorPaymentProcessor(
         }
     }
 
+    private fun markForegroundPurchaseProduct(
+        productId: String,
+        ttlMillis: Long = FOREGROUND_PURCHASE_EXPIRY_MILLIS,
+    ) {
+        val now = dateProviderMillis()
+        foregroundPurchaseProductExpiries.entries.removeIf { it.value <= now }
+        foregroundPurchaseProductExpiries[productId] = now + ttlMillis
+    }
+
+    private fun clearForegroundPurchaseProduct(productId: String) {
+        foregroundPurchaseProductExpiries.remove(productId)
+    }
+
+    private fun consumeRecentForegroundPurchaseProduct(productId: String): Boolean {
+        val expiresAt = foregroundPurchaseProductExpiries[productId] ?: return false
+        if (dateProviderMillis() >= expiresAt) {
+            foregroundPurchaseProductExpiries.remove(productId)
+            return false
+        }
+        foregroundPurchaseProductExpiries.remove(productId)
+        return true
+    }
+
+    private fun sourceIntentForPurchaseUpdate(purchase: AppActorStorePurchase): String {
+        val entry = pendingPurchaseTokens[purchase.purchaseToken]
+            ?: return if (consumeRecentForegroundPurchaseProduct(purchase.productId)) {
+                SOURCE_INTENT_PURCHASE
+            } else {
+                SOURCE_INTENT_QUEUE
+            }
+        val timestamp = entry.substringAfterLast('|', "0").toLongOrNull() ?: 0L
+        if (dateProviderMillis() - timestamp > PENDING_EXPIRY_MILLIS) {
+            pendingPurchaseTokens.remove(purchase.purchaseToken)
+            persistPendingState()
+            return if (consumeRecentForegroundPurchaseProduct(purchase.productId)) {
+                SOURCE_INTENT_PURCHASE
+            } else {
+                SOURCE_INTENT_QUEUE
+            }
+        }
+        return SOURCE_INTENT_PURCHASE
+    }
+
     private fun persistPendingState() {
         pendingPrefs.edit().apply {
             clear()
@@ -1741,9 +1809,12 @@ internal class AppActorPaymentProcessor(
     private companion object {
         const val PENDING_PREFS_NAME = "com.appactor.android.pending_purchases"
         const val PENDING_EXPIRY_MILLIS: Long = 7 * 24 * 60 * 60 * 1_000L // 7 days
+        const val FOREGROUND_PURCHASE_EXPIRY_MILLIS: Long = 10 * 60 * 1_000L // 10 minutes
+        const val FOREGROUND_PURCHASE_CANCELLATION_GRACE_MILLIS: Long = 30 * 1_000L // 30 seconds
         const val SOURCE_INTENT_PURCHASE = "purchase"
         const val SOURCE_INTENT_RESTORE = "restore"
         const val SOURCE_INTENT_SYNC = "sync"
+        const val SOURCE_INTENT_QUEUE = "queue"
     }
 }
 

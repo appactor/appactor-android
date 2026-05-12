@@ -22,8 +22,10 @@ import com.appactor.android.models.AppActorStore
 import com.appactor.android.models.AppActorStoreCapability
 import com.appactor.android.models.AppActorStorefront
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.InternalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -64,7 +66,19 @@ internal class GooglePlayBillingClientBridge(
     private val purchasesUpdatedListener = PurchasesUpdatedListener { billingResult, purchases ->
         val resolvedProductType = pendingPurchaseProductType ?: AppActorProductType.Unknown
         val purchasePayloads = purchases.orEmpty().map { it.toPayload(resolvedProductType) }
-        if (purchasePayloads.isNotEmpty()) {
+
+        val continuation = purchaseContinuation
+        purchaseContinuation = null
+        pendingPurchaseProductType = null
+        val handledByContinuation = resumePurchaseContinuationIfActive(
+            continuation,
+            billingResult.toLaunchResult(
+                productType = resolvedProductType,
+                purchases = purchases.orEmpty(),
+            ),
+        )
+
+        if (purchasePayloads.isNotEmpty() && !handledByContinuation) {
             val sent = purchaseUpdatesChannel.trySend(
                 AppActorBillingPurchaseUpdate(
                     purchaseTokens = purchasePayloads.mapTo(linkedSetOf()) { it.purchaseToken },
@@ -75,16 +89,6 @@ internal class GooglePlayBillingClientBridge(
                 throw IllegalStateException("Billing purchase update was dropped before the SDK could process it.")
             }
         }
-
-        val continuation = purchaseContinuation
-        purchaseContinuation = null
-        pendingPurchaseProductType = null
-        continuation?.resume(
-            billingResult.toLaunchResult(
-                productType = resolvedProductType,
-                purchases = purchases.orEmpty(),
-            )
-        )
     }
     private val billingClient: BillingClient = billingClientFactory(applicationContext, purchasesUpdatedListener)
 
@@ -101,7 +105,7 @@ internal class GooglePlayBillingClientBridge(
     private var reconnectDelayMs: Long = RECONNECT_DELAY_START_MS
 
     @Volatile
-    private var purchaseContinuation: kotlin.coroutines.Continuation<AppActorBillingLaunchResult>? = null
+    private var purchaseContinuation: CancellableContinuation<AppActorBillingLaunchResult>? = null
 
     @Volatile
     private var pendingPurchaseProductType: AppActorProductType? = null
@@ -111,7 +115,18 @@ internal class GooglePlayBillingClientBridge(
     private var capabilities: Set<AppActorStoreCapability> = emptySet()
     private val pendingRequests = ArrayDeque<QueuedBillingRequest>()
 
-    override suspend fun connect() {
+    @OptIn(InternalCoroutinesApi::class)
+    private fun resumePurchaseContinuationIfActive(
+        continuation: CancellableContinuation<AppActorBillingLaunchResult>?,
+        result: AppActorBillingLaunchResult,
+    ): Boolean {
+        if (continuation == null) return false
+        val resumeToken = continuation.tryResume(result, null) ?: return false
+        continuation.completeResume(resumeToken)
+        return true
+    }
+
+	override suspend fun connect() {
         if (billingClient.isReady) {
             refreshConnectedState()
             return
@@ -241,6 +256,12 @@ internal class GooglePlayBillingClientBridge(
 
             purchaseContinuation = continuation
             pendingPurchaseProductType = productType
+            continuation.invokeOnCancellation {
+                if (purchaseContinuation === continuation) {
+                    purchaseContinuation = null
+                    pendingPurchaseProductType = null
+                }
+            }
             val launchResult = billingClient.launchBillingFlow(activity, paramsBuilder.build())
             if (launchResult.responseCode != BillingResponseCode.OK) {
                 purchaseContinuation = null
