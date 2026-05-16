@@ -53,6 +53,7 @@ public sealed class AppActorAttributeValue {
         override fun toJsonElement(): JsonElement = JsonArray(value.map(::JsonPrimitive))
     }
 
+    @Deprecated("Date arrays are not supported by the AppActor backend. Send individual date attributes instead.")
     public data class DateArrayValue(public val value: List<Date>) : AppActorAttributeValue() {
         override fun toJsonElement(): JsonElement =
             JsonArray(value.map { JsonPrimitive(AppActorIso8601.format(it)) })
@@ -84,8 +85,21 @@ public sealed class AppActorAttributeValue {
         public fun boolArray(value: List<Boolean>): AppActorAttributeValue = BooleanArrayValue(value)
 
         @JvmStatic
+        @Suppress("DEPRECATION")
         public fun dateArray(value: List<Date>): AppActorAttributeValue = DateArrayValue(value)
     }
+}
+
+public enum class AppActorIntegrationIdentifier(public val wireValue: String) {
+    AppsFlyerId("appsflyer_id"),
+    AdjustId("adjust_adid"),
+    BranchId("branch_id"),
+    FirebaseAppInstanceId("firebase_app_instance_id"),
+    AmplitudeUserId("amplitude_user_id"),
+    AmplitudeDeviceId("amplitude_device_id"),
+    MixpanelDistinctId("mixpanel_distinct_id"),
+    FacebookAnonymousId("fb_anon_id"),
+    OneSignalId("onesignal_id"),
 }
 
 public data class AppActorAttribution(
@@ -116,9 +130,39 @@ public data class AppActorAttribution(
     public val attributedAt: Date? = null,
 ) {
     init {
-        require(provider.isNotBlank()) { "Attribution provider must not be blank." }
-        require(provider.length <= 64) { "Attribution provider must be at most 64 characters." }
-        identifiers.keys.forEach(AppActorAttributesValidation::validateIntegrationIdentifierType)
+        AppActorAttributesValidation.validateAttributionProvider(provider)
+        listOf(
+            "network" to network,
+            "campaign" to campaign,
+            "ad_group" to adGroup,
+            "ad" to ad,
+            "creative" to creative,
+            "keyword" to keyword,
+            "source" to source,
+            "medium" to medium,
+            "click_id" to clickId,
+            "status" to status,
+            "provider_name" to providerName,
+            "campaign_id" to campaignId,
+            "campaign_name" to campaignName,
+            "ad_group_id" to adGroupId,
+            "ad_group_name" to adGroupName,
+            "ad_id" to adId,
+            "ad_name" to adName,
+            "creative_id" to creativeId,
+            "creative_name" to creativeName,
+            "keyword_id" to keywordId,
+        ).forEach { (field, value) ->
+            AppActorAttributesValidation.validateAttributionString(field = field, value = value)
+        }
+        identifiers.forEach { (key, value) ->
+            AppActorAttributesValidation.validateIntegrationIdentifierType(key)
+            AppActorAttributesValidation.validateIntegrationIdentifierValue(value)
+        }
+        metadata.forEach { (key, value) ->
+            AppActorAttributesValidation.normalizeCustomKey(key)
+            AppActorAttributesValidation.validateValue(value)
+        }
     }
 }
 
@@ -126,14 +170,66 @@ internal object AppActorAttributeReservedKeys {
     const val email = "\$email"
     const val displayName = "\$displayName"
     const val phoneNumber = "\$phoneNumber"
+    const val apnsToken = "\$apnsToken"
     const val fcmToken = "\$fcmToken"
+    const val idfv = "\$idfv"
+    const val idfa = "\$idfa"
     const val bundleId = "\$bundleId"
     const val locale = "\$locale"
+    const val timezone = "\$timezone"
+    const val platform = "\$platform"
     const val deviceModel = "\$deviceModel"
     const val osVersion = "\$osVersion"
     const val sdkVersion = "\$sdkVersion"
     const val appVersion = "\$appVersion"
+    const val appBuild = "\$appBuild"
     const val storefrontCountry = "\$storefrontCountry"
+    const val ipCountry = "\$ipCountry"
+    const val localeCountry = "\$localeCountry"
+    const val attConsentStatus = "\$attConsentStatus"
+    const val appsflyerId = "\$appsflyerId"
+    const val adjustId = "\$adjustId"
+    const val branchId = "\$branchId"
+    const val firebaseAppInstanceId = "\$firebaseAppInstanceId"
+    const val onesignalId = "\$onesignalId"
+    const val airshipChannelId = "\$airshipChannelId"
+    const val amplitudeId = "\$amplitudeId"
+    const val mixpanelDistinctId = "\$mixpanelDistinctId"
+    const val posthogDistinctId = "\$posthogDistinctId"
+    const val customerioId = "\$customerioId"
+
+    val all: Set<String> = setOf(
+        email,
+        displayName,
+        phoneNumber,
+        apnsToken,
+        fcmToken,
+        idfv,
+        idfa,
+        bundleId,
+        locale,
+        timezone,
+        platform,
+        deviceModel,
+        osVersion,
+        sdkVersion,
+        appVersion,
+        appBuild,
+        storefrontCountry,
+        ipCountry,
+        localeCountry,
+        attConsentStatus,
+        appsflyerId,
+        adjustId,
+        branchId,
+        firebaseAppInstanceId,
+        onesignalId,
+        airshipChannelId,
+        amplitudeId,
+        mixpanelDistinctId,
+        posthogDistinctId,
+        customerioId,
+    )
 }
 
 internal object AppActorAttributesValidation {
@@ -162,6 +258,9 @@ internal object AppActorAttributesValidation {
         val normalized = key.trim()
         require(normalized.startsWith("$")) { "Reserved attribute keys must start with '$'." }
         require(normalized.length <= maxKeyLength) { "Attribute key must be at most $maxKeyLength characters." }
+        require(AppActorAttributeReservedKeys.all.contains(normalized)) {
+            "Unknown reserved attribute key '$normalized'."
+        }
         return normalized
     }
 
@@ -174,12 +273,43 @@ internal object AppActorAttributesValidation {
     fun validateIntegrationIdentifierType(type: String) {
         require(type.isNotBlank()) { "Integration identifier type must not be blank." }
         require(type.length <= maxKeyLength) { "Integration identifier type must be at most $maxKeyLength characters." }
+        require(keyRegex.matches(type)) {
+            "Integration identifier type may only contain letters, numbers, underscore, dot, colon, or dash."
+        }
         require(!type.startsWith("$")) { "Integration identifier type must not start with '$'." }
         require(!type.startsWith("appactor.", ignoreCase = true)) {
             "Integration identifier type must not start with 'appactor.'."
         }
     }
 
+    fun validateIntegrationIdentifierValue(value: String) {
+        require(value.trim() == value && value.isNotEmpty()) {
+            "Integration identifier value must not be empty or padded with whitespace."
+        }
+        require(value.toByteArray(Charsets.UTF_8).size <= maxStringLength) {
+            "Integration identifier value must be at most $maxStringLength bytes."
+        }
+    }
+
+    fun validateAttributionProvider(value: String) {
+        validateAttributionString(field = "provider", value = value, maxBytes = maxKeyLength)
+    }
+
+    fun validateAttributionString(
+        field: String,
+        value: String?,
+        maxBytes: Int = maxStringLength,
+    ) {
+        if (value == null) return
+        require(value.trim() == value && value.isNotEmpty()) {
+            "Attribution field '$field' must not be empty or padded with whitespace."
+        }
+        require(value.toByteArray(Charsets.UTF_8).size <= maxBytes) {
+            "Attribution field '$field' must be at most $maxBytes bytes."
+        }
+    }
+
+    @Suppress("DEPRECATION")
     fun validateValue(value: AppActorAttributeValue) {
         when (value) {
             is AppActorAttributeValue.StringValue -> validateString(value.value)
@@ -192,7 +322,38 @@ internal object AppActorAttributesValidation {
             }
             is AppActorAttributeValue.NumberArrayValue -> validateArraySize(value.value.size)
             is AppActorAttributeValue.BooleanArrayValue -> validateArraySize(value.value.size)
-            is AppActorAttributeValue.DateArrayValue -> validateArraySize(value.value.size)
+            is AppActorAttributeValue.DateArrayValue -> require(false) {
+                "Date arrays are not supported. Send individual date attributes instead."
+            }
+        }
+    }
+
+    fun validateEmail(value: String) {
+        val normalized = value.trim()
+        require(normalized == value && value.isNotEmpty()) {
+            "Email must not be empty or padded with whitespace."
+        }
+        require(value.toByteArray(Charsets.UTF_8).size <= 320) {
+            "Email must be at most 320 bytes."
+        }
+        require(Regex("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$").matches(value)) {
+            "Email must be a valid email address."
+        }
+    }
+
+    fun validatePhoneNumber(value: String) {
+        val normalized = value.trim()
+        require(normalized == value && value.isNotEmpty()) {
+            "Phone number must not be empty or padded with whitespace."
+        }
+        require(value.toByteArray(Charsets.UTF_8).size <= 64) {
+            "Phone number must be at most 64 bytes."
+        }
+        require(value.count(Char::isDigit) >= 3) {
+            "Phone number must contain at least 3 digits."
+        }
+        require(Regex("^[+0-9().\\-\\s]+$").matches(value)) {
+            "Phone number contains unsupported characters."
         }
     }
 

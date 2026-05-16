@@ -12,9 +12,11 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.doubleOrNull
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonPrimitive
 import java.text.SimpleDateFormat
@@ -23,7 +25,7 @@ import java.util.Locale
 import java.util.TimeZone
 
 internal class SetAttributesRequest private constructor(
-    private val attributes: Map<String, AppActorAttributeValue?>,
+    private val attributes: Map<String, AppActorAttributeValue>,
 ) : PluginRequest {
 
     override suspend fun execute(): PluginResult {
@@ -301,8 +303,11 @@ internal class UpdateAttributionRequest private constructor(
 }
 
 private object AttributePluginParsing {
-    fun toAttributeMap(input: Map<String, JsonElement>): Map<String, AppActorAttributeValue?> {
-        return input.mapValues { (_, value) -> toAttributeValue(value) }
+    fun toAttributeMap(input: Map<String, JsonElement>): Map<String, AppActorAttributeValue> {
+        return input.mapValues { (key, value) ->
+            toAttributeValue(value)
+                ?: throw IllegalArgumentException("Attribute '$key' value must not be null; use unset_attribute.")
+        }
     }
 
     fun toNonNullAttributeMap(input: Map<String, JsonElement>): Map<String, AppActorAttributeValue> {
@@ -322,16 +327,27 @@ private object AttributePluginParsing {
         if (element is JsonArray) {
             return arrayValue(element)
         }
+        if (element is JsonObject) {
+            return objectValue(element)
+        }
         throw IllegalArgumentException("Unsupported attribute value shape.")
     }
 
     fun parseIsoDate(value: String?): Date? {
         val raw = value?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        val normalized = normalizeIsoFraction(raw)
         return DATE_FORMATS.firstNotNullOfOrNull { format ->
             runCatching {
-                synchronized(format) { format.parse(raw) }
+                synchronized(format) { format.parse(normalized) }
             }.getOrNull()
         }
+    }
+
+    private fun normalizeIsoFraction(value: String): String {
+        val match = ISO_UTC_FRACTION_RE.matchEntire(value) ?: return value
+        val fraction = match.groupValues[2].takeIf { it.isNotEmpty() } ?: return value
+        val millis = fraction.take(3).padEnd(3, '0')
+        return "${match.groupValues[1]}.$millis${match.groupValues[3]}"
     }
 
     private fun arrayValue(array: JsonArray): AppActorAttributeValue {
@@ -351,8 +367,23 @@ private object AttributePluginParsing {
         throw IllegalArgumentException("Attribute arrays must contain only strings, numbers, or booleans.")
     }
 
+    private fun objectValue(obj: JsonObject): AppActorAttributeValue {
+        val rawType = obj["valueType"]?.jsonPrimitive?.contentOrNull
+            ?: obj["value_type"]?.jsonPrimitive?.contentOrNull
+        if (rawType == "date") {
+            val rawValue = obj["value"]?.jsonPrimitive?.contentOrNull
+                ?: throw IllegalArgumentException("Date attribute envelope requires a value.")
+            val parsed = parseIsoDate(rawValue)
+                ?: throw IllegalArgumentException("Date attribute envelope has an invalid ISO-8601 value.")
+            return AppActorAttributeValue.date(parsed)
+        }
+        throw IllegalArgumentException("Unsupported attribute object envelope.")
+    }
+
     private val DATE_FORMATS: List<SimpleDateFormat> = listOf(
         SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US),
         SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US),
     ).onEach { it.timeZone = TimeZone.getTimeZone("UTC") }
+
+    private val ISO_UTC_FRACTION_RE = Regex("^(\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2})(?:\\.(\\d{1,9}))?(Z)$")
 }

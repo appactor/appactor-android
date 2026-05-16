@@ -9,6 +9,7 @@ import com.appactor.android.models.AppActorPlatformInfo;
 import com.appactor.android.models.AppActorProductType;
 import com.appactor.android.models.AppActorPurchaseParams;
 import com.appactor.android.models.AppActorStoreCapability;
+import com.appactor.android.models.AppActorIntegrationIdentifier;
 
 import android.app.Activity;
 
@@ -52,6 +53,9 @@ public final class AppActorJavaApiSmokeTest {
         Runnable javaSync = () -> AppActorJava.syncPurchasesAsync(info -> { }, error -> { });
         Runnable javaQuietSync = () -> AppActorJava.quietSyncPurchasesAsync(info -> { }, error -> { });
         Runnable javaDrain = () -> AppActorJava.drainReceiptQueueAndRefreshCustomerAsync(info -> { }, error -> { });
+        Runnable javaIntegrationId = () -> AppActorJava.setIntegrationIdentifierAsync(AppActorIntegrationIdentifier.AppsFlyerId, "af-user-123", () -> { }, error -> { });
+        Runnable javaMediaSource = () -> AppActorJava.setMediaSourceAsync("facebook", () -> { }, error -> { });
+        Runnable javaCampaign = () -> AppActorJava.setCampaignAsync("spring_sale", () -> { }, error -> { });
 
         Runnable bridgeCustomerListener = () -> AppActorBridge.setCustomerInfoListener(info -> { });
         Runnable bridgeReceiptListener = () -> AppActorBridge.setReceiptPipelineListener(event -> { });
@@ -84,6 +88,9 @@ public final class AppActorJavaApiSmokeTest {
         Runnable bridgeSync = () -> AppActorBridge.syncPurchases(info -> { }, error -> { });
         Runnable bridgeQuietSync = () -> AppActorBridge.quietSyncPurchases(info -> { }, error -> { });
         Runnable bridgeDrain = () -> AppActorBridge.drainReceiptQueueAndRefreshCustomer(info -> { }, error -> { });
+        Runnable bridgeIntegrationId = () -> AppActorBridge.setIntegrationIdentifier(AppActorIntegrationIdentifier.AppsFlyerId, "af-user-123", () -> { }, error -> { });
+        Runnable bridgeMediaSource = () -> AppActorBridge.setMediaSource("facebook", () -> { }, error -> { });
+        Runnable bridgeCampaign = () -> AppActorBridge.setCampaign("spring_sale", () -> { }, error -> { });
         AppActorBridge.appUserId();
         AppActorBridge.isAnonymous();
         AppActorBridge.getCachedOfferings();
@@ -99,13 +106,15 @@ public final class AppActorJavaApiSmokeTest {
             javaExperiment == null || javaStorefront == null || javaStoreCapabilities == null ||
             javaCanMakePurchases == null || javaCanMakePurchasesWithCapabilities == null ||
             javaRestore == null || javaSync == null || javaQuietSync == null ||
-            javaDrain == null || bridgeCustomerListener == null ||
+            javaDrain == null || javaIntegrationId == null || javaMediaSource == null ||
+            javaCampaign == null || bridgeCustomerListener == null ||
             bridgeReceiptListener == null || bridgeConfigure == null || bridgeReset == null ||
             bridgeLogIn == null || bridgeLogOut == null || bridgeOfferings == null ||
             bridgeCustomerInfo == null || bridgeRemoteConfigs == null || bridgeExperiment == null ||
             bridgeStorefront == null || bridgeStoreCapabilities == null || bridgePurchase == null ||
             bridgeRestore == null || bridgeSync == null || bridgeQuietSync == null ||
-            bridgeDrain == null || bridgeClearListeners == null) {
+            bridgeDrain == null || bridgeIntegrationId == null || bridgeMediaSource == null ||
+            bridgeCampaign == null || bridgeClearListeners == null) {
             throw new AssertionError("unreachable");
         }
 

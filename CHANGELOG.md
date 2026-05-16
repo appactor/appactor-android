@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.4
+
+- Added customer attribute polish for RevenueCat-style migration helpers, stricter null/unset handling, profile validation, and typed date payload parity.
+- Expanded Android system attributes with platform and timezone metadata while keeping explicit helpers for sensitive identifiers.
+- Updated the Android plugin bridge to reject null attribute values and decode typed date envelopes from Flutter.
+
 ## 0.1.3
 
 - Classified background purchase updates as queued source intent while preserving explicit foreground purchases for backend billing classification.
