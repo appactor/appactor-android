@@ -57,9 +57,17 @@ class AppActorIdentityTransitionTests {
                 }
                 "/v1/payment/offerings" -> jsonResponse("""{"requestId":"req_off","data":{"offerings":[],"productEntitlements":{}}}""")
                 "/v1/remote-config" -> {
-                    val callNumber = remoteConfigCalls.incrementAndGet()
+                    remoteConfigCalls.incrementAndGet()
                     val appUserId = request.requestUrl?.queryParameter("app_user_id")
-                    if (callNumber == 1) {
+                    if (appUserId == null) {
+                        jsonResponse(
+                            remoteConfigEnvelope(
+                                requestId = "req_remote_public_probe",
+                                key = "audience",
+                                value = "public",
+                            ),
+                        ).addHeader("X-AppActor-Remote-Config-Requires-User-Context", "true")
+                    } else if (appUserId == "user_a") {
                         assertEquals("user_a", appUserId)
                         firstRemoteConfigSeen.countDown()
                         assertTrue(releaseFirstRemoteConfig.await(5, TimeUnit.SECONDS))
@@ -69,7 +77,7 @@ class AppActorIdentityTransitionTests {
                                 key = "audience",
                                 value = "user_a",
                             ),
-                        )
+                        ).addHeader("X-AppActor-Remote-Config-Requires-User-Context", "true")
                     } else {
                         assertTrue(appUserId?.startsWith("appactor-anon-") == true)
                         jsonResponse(
@@ -78,7 +86,7 @@ class AppActorIdentityTransitionTests {
                                 key = "audience",
                                 value = "anonymous",
                             ),
-                        )
+                        ).addHeader("X-AppActor-Remote-Config-Requires-User-Context", "true")
                     }
                 }
 
@@ -163,7 +171,17 @@ class AppActorIdentityTransitionTests {
             when (request.path?.substringBefore("?")) {
                 "/v1/remote-config" -> {
                     remoteConfigCalls.incrementAndGet()
-                    assertEquals("user_a", request.requestUrl?.queryParameter("app_user_id"))
+                    val appUserId = request.requestUrl?.queryParameter("app_user_id")
+                    if (appUserId == null) {
+                        return@TestBackendServer jsonResponse(
+                            remoteConfigEnvelope(
+                                requestId = "req_remote_public_probe",
+                                key = "audience",
+                                value = "public",
+                            ),
+                        ).addHeader("X-AppActor-Remote-Config-Requires-User-Context", "true")
+                    }
+                    assertEquals("user_a", appUserId)
                     firstRemoteConfigSeen.countDown()
                     assertTrue(releaseRemoteConfig.await(5, TimeUnit.SECONDS))
                     jsonResponse(
@@ -172,7 +190,7 @@ class AppActorIdentityTransitionTests {
                             key = "audience",
                             value = "user_a",
                         ),
-                    )
+                    ).addHeader("X-AppActor-Remote-Config-Requires-User-Context", "true")
                 }
 
                 "/v1/payment/identify" -> jsonResponse(
@@ -213,7 +231,7 @@ class AppActorIdentityTransitionTests {
             releaseRemoteConfig.countDown()
             val configs = remoteConfigsDeferred.await()
 
-            assertEquals(1, remoteConfigCalls.get())
+            assertEquals(2, remoteConfigCalls.get())
             assertEquals("user_a", configs["audience"]?.stringValue)
             assertEquals("user_a", AppActor.appUserId)
         }
@@ -330,14 +348,24 @@ class AppActorIdentityTransitionTests {
                 )
 
                 "/v1/remote-config" -> {
-                    assertEquals("user_b", request.requestUrl?.queryParameter("app_user_id"))
+                    val appUserId = request.requestUrl?.queryParameter("app_user_id")
+                    if (appUserId == null) {
+                        return@TestBackendServer jsonResponse(
+                            remoteConfigEnvelope(
+                                requestId = "req_remote_callback_public_probe",
+                                key = "audience",
+                                value = "public",
+                            ),
+                        ).addHeader("X-AppActor-Remote-Config-Requires-User-Context", "true")
+                    }
+                    assertEquals("user_b", appUserId)
                     jsonResponse(
                         remoteConfigEnvelope(
                             requestId = "req_remote_callback_user_b",
                             key = "audience",
                             value = "user_b",
                         ),
-                    )
+                    ).addHeader("X-AppActor-Remote-Config-Requires-User-Context", "true")
                 }
 
                 else -> {

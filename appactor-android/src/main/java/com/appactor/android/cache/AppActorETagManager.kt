@@ -92,6 +92,10 @@ internal class AppActorETagManager(
         diskStore.clear(resource)
     }
 
+    fun clearPrefix(prefix: String) {
+        diskStore.clearPrefix(prefix)
+    }
+
     fun clearAll() {
         diskStore.clearAll()
     }

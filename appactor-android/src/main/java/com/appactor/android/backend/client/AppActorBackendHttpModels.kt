@@ -44,6 +44,7 @@ internal data class AppActorBackendHttpResponse<T>(
     val isNotModified: Boolean = false,
     val signatureHeaders: AppActorResponseSignatureHeaders? = null,
     val signatureVerified: Boolean = false,
+    val remoteConfigRequiresUserContext: Boolean? = null,
 )
 
 internal sealed class AppActorBackendException(

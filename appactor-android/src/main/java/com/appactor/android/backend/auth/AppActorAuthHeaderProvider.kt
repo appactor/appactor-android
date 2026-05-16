@@ -28,6 +28,7 @@ internal object AppActorAuthHeaderProvider {
         }
 
         if (!AppActorEndpointSigningPolicy.forPath(path).needsNonce) {
+            builder.header("X-AppActor-Signature-Target", "path-query")
             return null
         }
 

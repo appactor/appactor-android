@@ -40,6 +40,8 @@ internal class AppActorHttpBackendClient(
         const val maxRetries: Int = 3
         const val maxRetryAfterSeconds: Double = 3600.0
         const val maxRetryDelaySeconds: Double = 120.0
+        const val signatureTargetPathQuery: String = "path-query"
+        const val remoteConfigRequiresUserContextHeader: String = "X-AppActor-Remote-Config-Requires-User-Context"
     }
 
     override suspend fun identify(request: AppActorIdentifyRequestDTO): AppActorBackendHttpResponse<AppActorCustomerEnvelopeDTO> {
@@ -263,6 +265,7 @@ internal class AppActorHttpBackendClient(
                             isNotModified = true,
                             signatureHeaders = rawResponse.signatureHeaders,
                             signatureVerified = rawResponse.signatureVerified,
+                            remoteConfigRequiresUserContext = rawResponse.remoteConfigRequiresUserContext,
                         )
                     }
 
@@ -289,6 +292,7 @@ internal class AppActorHttpBackendClient(
                             isNotModified = false,
                             signatureHeaders = rawResponse.signatureHeaders,
                             signatureVerified = rawResponse.signatureVerified,
+                            remoteConfigRequiresUserContext = rawResponse.remoteConfigRequiresUserContext,
                         )
                     }
 
@@ -420,7 +424,10 @@ internal class AppActorHttpBackendClient(
                 val signatureHeaders = AppActorResponseSignatureHeaders.fromHeaders(response.headers)
                 val retryAfterHeader = response.header("Retry-After")
                 val sentNonce: String? = request.header("X-AppActor-Nonce")
-                val requestPath = request.url.encodedPath
+                val requestPath = signatureRequestTarget(request)
+                val remoteConfigRequiresUserContext = parseBooleanHeader(
+                    response.header(remoteConfigRequiresUserContextHeader),
+                )
                 val signatureVerified = verifyResponseSignature(
                     statusCode = statusCode,
                     signatureHeaders = signatureHeaders,
@@ -439,6 +446,7 @@ internal class AppActorHttpBackendClient(
                     signatureHeaders = signatureHeaders,
                     signatureVerified = signatureVerified,
                     retryAfterHeader = retryAfterHeader,
+                    remoteConfigRequiresUserContext = remoteConfigRequiresUserContext,
                 )
             }
         } catch (backendException: AppActorBackendException) {
@@ -462,7 +470,7 @@ internal class AppActorHttpBackendClient(
         eTag: String?,
         requestId: String?,
     ): Boolean {
-        if (statusCode !in 200..299 || !configuration.options.verifyResponseSignatures) {
+        if ((statusCode !in 200..299 && statusCode != 304) || !configuration.options.verifyResponseSignatures) {
             return false
         }
 
@@ -492,6 +500,23 @@ internal class AppActorHttpBackendClient(
                 result = result,
                 requestId = requestId,
             )
+        }
+    }
+
+    private fun signatureRequestTarget(request: Request): String {
+        val path = request.url.encodedPath
+        if (request.header("X-AppActor-Signature-Target") != signatureTargetPathQuery) {
+            return path
+        }
+        val query = request.url.encodedQuery
+        return if (query.isNullOrBlank()) path else "$path?$query"
+    }
+
+    private fun parseBooleanHeader(value: String?): Boolean? {
+        return when (value?.trim()?.lowercase()) {
+            "true", "1", "yes" -> true
+            "false", "0", "no" -> false
+            else -> null
         }
     }
 }
@@ -531,4 +556,5 @@ private data class RawBackendResponse(
     val signatureHeaders: AppActorResponseSignatureHeaders?,
     val signatureVerified: Boolean,
     val retryAfterHeader: String?,
+    val remoteConfigRequiresUserContext: Boolean?,
 )
