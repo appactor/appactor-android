@@ -788,34 +788,41 @@ public object AppActor {
     }
 
     public suspend fun setMediaSource(mediaSource: String) {
-        updateAttribution(
-            AppActorAttribution(
-                provider = "custom",
-                providerName = mediaSource,
-                network = mediaSource,
-                source = mediaSource,
-            ),
-        )
+        updateCustomAttribution(AppActorAttribution(
+            provider = "custom",
+            providerName = mediaSource,
+            network = mediaSource,
+            source = mediaSource,
+        ))
     }
 
     public suspend fun setCampaign(campaign: String) {
-        updateAttribution(AppActorAttribution(provider = "custom", campaignName = campaign, campaign = campaign))
+        updateCustomAttribution(AppActorAttribution(provider = "custom", campaignName = campaign, campaign = campaign))
     }
 
     public suspend fun setAdGroup(adGroup: String) {
-        updateAttribution(AppActorAttribution(provider = "custom", adGroupName = adGroup, adGroup = adGroup))
+        updateCustomAttribution(AppActorAttribution(provider = "custom", adGroupName = adGroup, adGroup = adGroup))
     }
 
     public suspend fun setAd(ad: String) {
-        updateAttribution(AppActorAttribution(provider = "custom", adName = ad, ad = ad))
+        updateCustomAttribution(AppActorAttribution(provider = "custom", adName = ad, ad = ad))
     }
 
     public suspend fun setKeyword(keyword: String) {
-        updateAttribution(AppActorAttribution(provider = "custom", keyword = keyword))
+        updateCustomAttribution(AppActorAttribution(provider = "custom", keyword = keyword))
     }
 
     public suspend fun setCreative(creative: String) {
-        updateAttribution(AppActorAttribution(provider = "custom", creativeName = creative, creative = creative))
+        updateCustomAttribution(AppActorAttribution(provider = "custom", creativeName = creative, creative = creative))
+    }
+
+    private suspend fun updateCustomAttribution(attribution: AppActorAttribution) {
+        executeGuardedRead(resolveAppUserId = true) { snapshot ->
+            snapshot.runtime.attributesManager.updateCustomAttribution(
+                appUserId = snapshot.appUserId,
+                patch = attribution,
+            )
+        }
     }
 
     public suspend fun getRemoteConfigs(): AppActorRemoteConfigs {
