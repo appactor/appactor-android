@@ -15,9 +15,11 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -239,7 +241,9 @@ internal class UpdateAttributionRequest private constructor(
     companion object : PluginRequestFactory {
         override val method: String = "update_attribution"
         override fun create(json: String): PluginRequest {
-            val p = PluginCoder.json.decodeFromString(Params.serializer(), json)
+            val root = PluginCoder.json.parseToJsonElement(json).jsonObject
+            val payload = root["attribution"]?.jsonObject ?: root
+            val p = PluginCoder.json.decodeFromJsonElement(Params.serializer(), payload)
             return UpdateAttributionRequest(
                 AppActorAttribution(
                     provider = p.provider,
@@ -299,6 +303,117 @@ internal class UpdateAttributionRequest private constructor(
             @SerialName("attributed_at") val attributedAt: String? = null,
             @SerialName("observed_at") val observedAt: String? = null,
         )
+    }
+}
+
+@Serializable
+private data class AttributionHelperParams(val value: String)
+
+internal class SetMediaSourceRequest private constructor(
+    private val value: String,
+) : PluginRequest {
+
+    override suspend fun execute(): PluginResult {
+        AppActor.setMediaSource(value)
+        return PluginResult.successVoid
+    }
+
+    companion object : PluginRequestFactory {
+        override val method: String = "set_media_source"
+        override fun create(json: String): PluginRequest {
+            val p = PluginCoder.json.decodeFromString(AttributionHelperParams.serializer(), json)
+            return SetMediaSourceRequest(p.value)
+        }
+    }
+}
+
+internal class SetCampaignRequest private constructor(
+    private val value: String,
+) : PluginRequest {
+
+    override suspend fun execute(): PluginResult {
+        AppActor.setCampaign(value)
+        return PluginResult.successVoid
+    }
+
+    companion object : PluginRequestFactory {
+        override val method: String = "set_campaign"
+        override fun create(json: String): PluginRequest {
+            val p = PluginCoder.json.decodeFromString(AttributionHelperParams.serializer(), json)
+            return SetCampaignRequest(p.value)
+        }
+    }
+}
+
+internal class SetAdGroupRequest private constructor(
+    private val value: String,
+) : PluginRequest {
+
+    override suspend fun execute(): PluginResult {
+        AppActor.setAdGroup(value)
+        return PluginResult.successVoid
+    }
+
+    companion object : PluginRequestFactory {
+        override val method: String = "set_ad_group"
+        override fun create(json: String): PluginRequest {
+            val p = PluginCoder.json.decodeFromString(AttributionHelperParams.serializer(), json)
+            return SetAdGroupRequest(p.value)
+        }
+    }
+}
+
+internal class SetAdRequest private constructor(
+    private val value: String,
+) : PluginRequest {
+
+    override suspend fun execute(): PluginResult {
+        AppActor.setAd(value)
+        return PluginResult.successVoid
+    }
+
+    companion object : PluginRequestFactory {
+        override val method: String = "set_ad"
+        override fun create(json: String): PluginRequest {
+            val p = PluginCoder.json.decodeFromString(AttributionHelperParams.serializer(), json)
+            return SetAdRequest(p.value)
+        }
+    }
+}
+
+internal class SetKeywordRequest private constructor(
+    private val value: String,
+) : PluginRequest {
+
+    override suspend fun execute(): PluginResult {
+        AppActor.setKeyword(value)
+        return PluginResult.successVoid
+    }
+
+    companion object : PluginRequestFactory {
+        override val method: String = "set_keyword"
+        override fun create(json: String): PluginRequest {
+            val p = PluginCoder.json.decodeFromString(AttributionHelperParams.serializer(), json)
+            return SetKeywordRequest(p.value)
+        }
+    }
+}
+
+internal class SetCreativeRequest private constructor(
+    private val value: String,
+) : PluginRequest {
+
+    override suspend fun execute(): PluginResult {
+        AppActor.setCreative(value)
+        return PluginResult.successVoid
+    }
+
+    companion object : PluginRequestFactory {
+        override val method: String = "set_creative"
+        override fun create(json: String): PluginRequest {
+            val p = PluginCoder.json.decodeFromString(AttributionHelperParams.serializer(), json)
+            return SetCreativeRequest(p.value)
+        }
     }
 }
 

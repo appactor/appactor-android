@@ -214,6 +214,38 @@ class AppActorAttributesManagerTests {
     }
 
     @Test
+    fun `custom attribution helper reloads snapshot after successful flush`() = runBlocking {
+        val backend = FakeAttributesBackendClient()
+        val store = InMemoryAttributeQueueStore()
+        val manager = manager(backend, store)
+
+        manager.updateCustomAttribution(
+            "user_a",
+            AppActorAttribution(
+                provider = "custom",
+                providerName = "facebook",
+                network = "facebook",
+                source = "facebook",
+            ),
+        )
+        assertNull(store.load("user_a"))
+
+        val relaunchedManager = manager(backend, store)
+        relaunchedManager.updateCustomAttribution(
+            "user_a",
+            AppActorAttribution(provider = "custom", campaignName = "spring_sale", campaign = "spring_sale"),
+        )
+
+        val request = backend.attributionRequests.last().second
+        assertEquals("custom", request.provider)
+        assertEquals("facebook", request.providerName)
+        assertEquals("facebook", request.network)
+        assertEquals("facebook", request.source)
+        assertEquals("spring_sale", request.campaignName)
+        assertEquals("spring_sale", request.campaign)
+    }
+
+    @Test
     fun `custom attribution helper state is isolated per app user id`() = runBlocking {
         val backend = FakeAttributesBackendClient()
         val manager = manager(backend, InMemoryAttributeQueueStore())
@@ -271,6 +303,23 @@ class AppActorAttributesManagerTests {
         assertNull(store.load("user_a"))
     }
 
+    @Test
+    fun `flushPendingForAllUsers drains previous identity buckets`() = runBlocking {
+        val backend = FakeAttributesBackendClient(failMutations = true)
+        val store = InMemoryAttributeQueueStore()
+        val manager = manager(backend, store)
+
+        manager.setAttribute("user_old", "tier", AppActorAttributeValue.string("gold"))
+        manager.setAttribute("user_new", "tier", AppActorAttributeValue.string("silver"))
+
+        backend.failMutations = false
+        manager.flushPendingForAllUsers()
+
+        assertEquals(listOf("user_new", "user_old"), backend.patchRequests.map { it.first }.sorted())
+        assertNull(store.load("user_old"))
+        assertNull(store.load("user_new"))
+    }
+
     private fun manager(
         backend: FakeAttributesBackendClient,
         store: InMemoryAttributeQueueStore,
@@ -303,9 +352,28 @@ class AppActorAttributesManagerTests {
             }
         }
 
+        override fun pendingAppUserIds(): List<String> = mutations.keys.sorted()
+
+        override fun loadAttributionSnapshot(appUserId: String): AppActorAttributionRequestDTO? =
+            snapshots[appUserId]
+
+        override fun saveAttributionSnapshot(
+            appUserId: String,
+            attribution: AppActorAttributionRequestDTO?,
+        ) {
+            if (attribution == null) {
+                snapshots.remove(appUserId)
+            } else {
+                snapshots[appUserId] = attribution
+            }
+        }
+
         override fun clearAll() {
             mutations.clear()
+            snapshots.clear()
         }
+
+        private val snapshots = linkedMapOf<String, AppActorAttributionRequestDTO>()
     }
 
     private class FakeAttributesBackendClient(

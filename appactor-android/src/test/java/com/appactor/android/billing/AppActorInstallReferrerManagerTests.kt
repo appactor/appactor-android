@@ -145,6 +145,15 @@ class AppActorInstallReferrerManagerTests {
             mutation: AppActorQueuedAttributeMutation?,
         ) = Unit
 
+        override fun pendingAppUserIds(): List<String> = emptyList()
+
+        override fun loadAttributionSnapshot(appUserId: String): com.appactor.android.backend.dto.AppActorAttributionRequestDTO? = null
+
+        override fun saveAttributionSnapshot(
+            appUserId: String,
+            attribution: com.appactor.android.backend.dto.AppActorAttributionRequestDTO?,
+        ) = Unit
+
         override fun clearAll() = Unit
     }
 }
