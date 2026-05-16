@@ -2,6 +2,8 @@ package com.appactor.android.api
 
 import android.app.Activity
 import android.content.Context
+import com.appactor.android.models.AppActorAttributeValue
+import com.appactor.android.models.AppActorAttribution
 import com.appactor.android.models.AppActorCompletionCallback
 import com.appactor.android.models.AppActorCustomerInfo
 import com.appactor.android.models.AppActorErrorCallback
@@ -169,6 +171,117 @@ public object AppActorJava {
     ): Unit = AppActor.launchAsync(
         operation = { AppActor.drainReceiptQueueAndRefreshCustomer() },
         onSuccess = onSuccess,
+        onError = onError,
+    )
+
+    @JvmStatic
+    public fun setAttributesAsync(
+        attributes: Map<String, AppActorAttributeValue?>,
+        onComplete: AppActorCompletionCallback? = null,
+        onError: AppActorErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.setAttributes(attributes) },
+        onComplete = onComplete,
+        onError = onError,
+    )
+
+    @JvmStatic
+    public fun setAttributeAsync(
+        key: String,
+        value: AppActorAttributeValue,
+        onComplete: AppActorCompletionCallback? = null,
+        onError: AppActorErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.setAttribute(key, value) },
+        onComplete = onComplete,
+        onError = onError,
+    )
+
+    @JvmStatic
+    public fun unsetAttributeAsync(
+        key: String,
+        onComplete: AppActorCompletionCallback? = null,
+        onError: AppActorErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.unsetAttribute(key) },
+        onComplete = onComplete,
+        onError = onError,
+    )
+
+    @JvmStatic
+    public fun setEmailAsync(
+        email: String?,
+        onComplete: AppActorCompletionCallback? = null,
+        onError: AppActorErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.setEmail(email) },
+        onComplete = onComplete,
+        onError = onError,
+    )
+
+    @JvmStatic
+    public fun setDisplayNameAsync(
+        displayName: String?,
+        onComplete: AppActorCompletionCallback? = null,
+        onError: AppActorErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.setDisplayName(displayName) },
+        onComplete = onComplete,
+        onError = onError,
+    )
+
+    @JvmStatic
+    public fun setPhoneNumberAsync(
+        phoneNumber: String?,
+        onComplete: AppActorCompletionCallback? = null,
+        onError: AppActorErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.setPhoneNumber(phoneNumber) },
+        onComplete = onComplete,
+        onError = onError,
+    )
+
+    @JvmStatic
+    public fun setPushTokenAsync(
+        pushToken: String?,
+        onComplete: AppActorCompletionCallback? = null,
+        onError: AppActorErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.setPushToken(pushToken) },
+        onComplete = onComplete,
+        onError = onError,
+    )
+
+    @JvmStatic
+    public fun collectDeviceIdentifiersAsync(
+        onComplete: AppActorCompletionCallback? = null,
+        onError: AppActorErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.collectDeviceIdentifiers() },
+        onComplete = onComplete,
+        onError = onError,
+    )
+
+    @JvmStatic
+    public fun setIntegrationIdentifierAsync(
+        type: String,
+        value: String,
+        onComplete: AppActorCompletionCallback? = null,
+        onError: AppActorErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.setIntegrationIdentifier(type, value) },
+        onComplete = onComplete,
+        onError = onError,
+    )
+
+    @JvmStatic
+    public fun updateAttributionAsync(
+        attribution: AppActorAttribution,
+        onComplete: AppActorCompletionCallback? = null,
+        onError: AppActorErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.updateAttribution(attribution) },
+        onComplete = onComplete,
         onError = onError,
     )
 

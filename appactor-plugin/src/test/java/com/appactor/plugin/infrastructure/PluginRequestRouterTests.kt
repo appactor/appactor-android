@@ -3,6 +3,8 @@ package com.appactor.plugin.infrastructure
 import android.content.Context
 import com.appactor.android.api.AppActor
 import com.appactor.android.models.AppActorError
+import com.appactor.android.models.AppActorAttributeValue
+import com.appactor.android.models.AppActorAttribution
 import com.appactor.android.models.AppActorLogLevel
 import com.appactor.android.models.AppActorOfferings
 import com.appactor.android.models.AppActorOfferingsFetchPolicy
@@ -37,6 +39,8 @@ class PluginRequestRouterTests {
 
         assertTrue(methods.contains("quiet_sync_purchases"))
         assertTrue(methods.contains("drain_receipt_queue_and_refresh_customer"))
+        assertTrue(methods.contains("set_attributes"))
+        assertTrue(methods.contains("update_attribution"))
     }
 
     @Test
@@ -250,6 +254,103 @@ class PluginRequestRouterTests {
             assertTrue(result is PluginResult.Success)
             coVerify(exactly = 1) {
                 AppActor.offerings(AppActorOfferingsFetchPolicy.CacheOnly)
+            }
+        } finally {
+            unmockkObject(AppActor)
+        }
+    }
+
+    @Test
+    fun `set attributes request converts json values to native attribute values`() = runBlocking {
+        mockkObject(AppActor)
+        try {
+            coEvery { AppActor.setAttributes(any()) } returns Unit
+
+            val result = PluginRequestRouter.route(
+                "set_attributes",
+                """
+                {
+                  "attributes": {
+                    "favorite_color": "blue",
+                    "age": 42,
+                    "subscriber": true,
+                    "tags": ["alpha", "beta"],
+                    "old_key": null
+                  }
+                }
+                """.trimIndent(),
+            )
+
+            assertTrue(result is PluginResult.Success)
+            coVerify(exactly = 1) {
+                AppActor.setAttributes(
+                    withArg<Map<String, AppActorAttributeValue?>> { attributes ->
+                        assertEquals(AppActorAttributeValue.string("blue"), attributes["favorite_color"])
+                        assertEquals(AppActorAttributeValue.number(42.0), attributes["age"])
+                        assertEquals(AppActorAttributeValue.bool(true), attributes["subscriber"])
+                        assertEquals(AppActorAttributeValue.stringArray(listOf("alpha", "beta")), attributes["tags"])
+                        assertEquals(null, attributes["old_key"])
+                    },
+                )
+            }
+        } finally {
+            unmockkObject(AppActor)
+        }
+    }
+
+    @Test
+    fun `update attribution request forwards native attribution model`() = runBlocking {
+        mockkObject(AppActor)
+        try {
+            coEvery { AppActor.updateAttribution(any()) } returns Unit
+
+            val result = PluginRequestRouter.route(
+                "update_attribution",
+                """
+                {
+                  "provider": "adjust",
+                  "status": "non_organic",
+                  "campaign_name": "spring",
+                  "ad_group_id": "ag_123",
+                  "identifiers": { "adid": "id_123" },
+                  "metadata": { "network": "search" }
+                }
+                """.trimIndent(),
+            )
+
+            assertTrue(result is PluginResult.Success)
+            coVerify(exactly = 1) {
+                AppActor.updateAttribution(
+                    withArg<AppActorAttribution> { attribution ->
+                        assertEquals("adjust", attribution.provider)
+                        assertEquals("non_organic", attribution.status)
+                        assertEquals("spring", attribution.campaignName)
+                        assertEquals("spring", attribution.campaign)
+                        assertEquals("ag_123", attribution.adGroupId)
+                        assertEquals("id_123", attribution.identifiers["adid"])
+                        assertEquals(AppActorAttributeValue.string("search"), attribution.metadata["network"])
+                    },
+                )
+            }
+        } finally {
+            unmockkObject(AppActor)
+        }
+    }
+
+    @Test
+    fun `reserved attribute helper requests accept named bridge fields`() = runBlocking {
+        mockkObject(AppActor)
+        try {
+            coEvery { AppActor.setEmail(any()) } returns Unit
+
+            val result = PluginRequestRouter.route(
+                "set_email",
+                """{"email":"hello@appactor.com"}""",
+            )
+
+            assertTrue(result is PluginResult.Success)
+            coVerify(exactly = 1) {
+                AppActor.setEmail("hello@appactor.com")
             }
         } finally {
             unmockkObject(AppActor)

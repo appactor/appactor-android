@@ -2,12 +2,15 @@ package com.appactor.android.backend.client
 
 import com.appactor.android.backend.dto.AppActorCustomerEnvelopeDTO
 import com.appactor.android.backend.dto.AppActorExperimentAssignmentEnvelopeDTO
+import com.appactor.android.backend.dto.AppActorAttributionRequestDTO
+import com.appactor.android.backend.dto.AppActorAttributesPatchRequestDTO
 import com.appactor.android.backend.dto.AppActorGoogleReceiptRequestDTO
 import com.appactor.android.backend.dto.AppActorGoogleReceiptResponseDTO
 import com.appactor.android.backend.dto.AppActorGoogleRestoreRequestDTO
 import com.appactor.android.backend.dto.AppActorGoogleRestoreResponseDTO
 import com.appactor.android.backend.dto.AppActorGoogleSyncRequestDTO
 import com.appactor.android.backend.dto.AppActorGoogleSyncResponseDTO
+import com.appactor.android.backend.dto.AppActorIntegrationIdentifierRequestDTO
 import com.appactor.android.backend.dto.toRestoreRequest
 import com.appactor.android.backend.dto.toSyncResponse
 import com.appactor.android.backend.dto.AppActorIdentifyRequestDTO
@@ -41,6 +44,31 @@ internal interface AppActorBackendClient {
         appVersion: String?,
         country: String?,
     ): AppActorBackendHttpResponse<AppActorExperimentAssignmentEnvelopeDTO>
+
+    suspend fun postUserAttributes(
+        appUserId: String,
+        request: AppActorAttributesPatchRequestDTO,
+    ): AppActorBackendHttpResponse<Unit>
+
+    suspend fun patchUserAttributes(
+        appUserId: String,
+        request: AppActorAttributesPatchRequestDTO,
+    ): AppActorBackendHttpResponse<Unit>
+
+    suspend fun deleteUserAttribute(
+        appUserId: String,
+        key: String,
+    ): AppActorBackendHttpResponse<Unit>
+
+    suspend fun postIntegrationIdentifier(
+        appUserId: String,
+        request: AppActorIntegrationIdentifierRequestDTO,
+    ): AppActorBackendHttpResponse<Unit>
+
+    suspend fun postAttribution(
+        appUserId: String,
+        request: AppActorAttributionRequestDTO,
+    ): AppActorBackendHttpResponse<Unit>
 
     suspend fun postGoogleReceipt(
         request: AppActorGoogleReceiptRequestDTO,

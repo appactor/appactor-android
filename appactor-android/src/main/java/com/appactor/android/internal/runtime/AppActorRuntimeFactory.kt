@@ -11,6 +11,7 @@ import com.appactor.android.cache.AppActorOfflineProductCatalogStore
 import com.appactor.android.cache.AppActorOfferingsCacheStore
 import com.appactor.android.cache.AppActorRemoteConfigsCacheStore
 import com.appactor.android.managers.AppActorCustomerManager
+import com.appactor.android.managers.AppActorAttributesManager
 import com.appactor.android.managers.AppActorExperimentManager
 import com.appactor.android.managers.AppActorOfferingsManager
 import com.appactor.android.managers.AppActorRemoteConfigManager
@@ -20,6 +21,7 @@ import com.appactor.android.models.AppActorReceiptPipelineEvent
 import com.appactor.android.pipeline.AppActorPaymentProcessor
 import com.appactor.android.storage.AppActorAtomicJsonPostedLedgerStore
 import com.appactor.android.storage.AppActorAtomicJsonReceiptQueueStore
+import com.appactor.android.storage.AppActorSharedPrefsAttributeQueueStore
 import com.appactor.android.storage.AppActorSharedPrefsIdentityStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -58,6 +60,7 @@ internal class AppActorRuntimeFactory(
         val customerCacheStore = AppActorCustomerCacheStore(eTagManager)
         val remoteConfigsCacheStore = AppActorRemoteConfigsCacheStore(eTagManager)
         val experimentCacheStore = AppActorExperimentCacheStore(eTagManager)
+        val attributeQueueStore = AppActorSharedPrefsAttributeQueueStore(configuration.applicationContext)
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val offeringsManager = AppActorOfferingsManager(
             backendClient = backendClient,
@@ -89,6 +92,14 @@ internal class AppActorRuntimeFactory(
         )
         val receiptQueueStore = AppActorAtomicJsonReceiptQueueStore(configuration.applicationContext)
         val postedLedgerStore = AppActorAtomicJsonPostedLedgerStore(configuration.applicationContext)
+        val attributesManager = AppActorAttributesManager(
+            backendClient = backendClient,
+            queueStore = attributeQueueStore,
+            identityStore = identityStore,
+            packageName = configuration.applicationContext.packageName,
+            appVersionProvider = { appVersionProvider(configuration.applicationContext) },
+            countryProvider = countryProvider,
+        )
         val cachedCustomerInfo = identityStore.currentAppUserId
             ?.let(customerManager::cachedInfo)
             ?: AppActorCustomerInfo.empty
@@ -107,6 +118,7 @@ internal class AppActorRuntimeFactory(
             postedLedgerStore = postedLedgerStore,
             offeringsManager = offeringsManager,
             customerManager = customerManager,
+            attributesManager = attributesManager,
             paymentProcessor = AppActorPaymentProcessor(
                 configuration = configuration,
                 backendClient = backendClient,

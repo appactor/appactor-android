@@ -24,6 +24,9 @@ import com.appactor.android.internal.runtime.AppActorStartupCoordinator
 import com.appactor.android.internal.runtime.AppActorStartupCoordinatorHost
 import com.appactor.android.internal.logging.AppActorLogger
 import com.appactor.android.managers.AppActorCustomerManager
+import com.appactor.android.models.AppActorAttributeReservedKeys
+import com.appactor.android.models.AppActorAttributeValue
+import com.appactor.android.models.AppActorAttribution
 import com.appactor.android.models.AppActorCompletionCallback
 import com.appactor.android.models.AppActorConfigValue
 import com.appactor.android.models.AppActorConfiguration
@@ -354,6 +357,7 @@ public object AppActor {
                 val manager = com.appactor.android.billing.AppActorInstallReferrerManager(
                     context = currentRuntime.configuration.applicationContext,
                     identityStore = currentRuntime.identityStore,
+                    attributesManager = currentRuntime.attributesManager,
                 )
                 manager.fetchReferrerOnce()
             } catch (throwable: Throwable) {
@@ -431,6 +435,7 @@ public object AppActor {
             currentRuntime.scope.coroutineContext[Job]?.join()
             currentRuntime.remoteConfigManager.clearCache(currentAppUserId)
             currentRuntime.experimentManager.clearCache(currentAppUserId)
+            currentRuntime.attributesManager.clearQueue()
             currentRuntime.identityStore.clearIdentity()
             currentRuntime.eTagManager.clearAll()
             installReferrerEnabled.set(false)
@@ -666,6 +671,81 @@ public object AppActor {
         return snapshot.runtime.customerManager.activeEntitlementKeysOffline(snapshot.appUserId)
     }
 
+    public suspend fun setAttributes(attributes: Map<String, AppActorAttributeValue?>) {
+        executeGuardedRead(resolveAppUserId = true) { snapshot ->
+            snapshot.runtime.attributesManager.setAttributes(
+                appUserId = snapshot.appUserId,
+                attributes = attributes,
+            )
+        }
+    }
+
+    public suspend fun setAttribute(
+        key: String,
+        value: AppActorAttributeValue,
+    ) {
+        executeGuardedRead(resolveAppUserId = true) { snapshot ->
+            snapshot.runtime.attributesManager.setAttribute(
+                appUserId = snapshot.appUserId,
+                key = key,
+                value = value,
+            )
+        }
+    }
+
+    public suspend fun unsetAttribute(key: String) {
+        executeGuardedRead(resolveAppUserId = true) { snapshot ->
+            snapshot.runtime.attributesManager.unsetAttribute(
+                appUserId = snapshot.appUserId,
+                key = key,
+            )
+        }
+    }
+
+    public suspend fun setEmail(email: String?) {
+        setReservedString(AppActorAttributeReservedKeys.email, email)
+    }
+
+    public suspend fun setDisplayName(displayName: String?) {
+        setReservedString(AppActorAttributeReservedKeys.displayName, displayName)
+    }
+
+    public suspend fun setPhoneNumber(phoneNumber: String?) {
+        setReservedString(AppActorAttributeReservedKeys.phoneNumber, phoneNumber)
+    }
+
+    public suspend fun setPushToken(pushToken: String?) {
+        setReservedString(AppActorAttributeReservedKeys.fcmToken, pushToken)
+    }
+
+    public suspend fun collectDeviceIdentifiers() {
+        executeGuardedRead(resolveAppUserId = true) { snapshot ->
+            snapshot.runtime.attributesManager.collectDeviceIdentifiers(snapshot.appUserId)
+        }
+    }
+
+    public suspend fun setIntegrationIdentifier(
+        type: String,
+        value: String,
+    ) {
+        executeGuardedRead(resolveAppUserId = true) { snapshot ->
+            snapshot.runtime.attributesManager.setIntegrationIdentifier(
+                appUserId = snapshot.appUserId,
+                type = type,
+                value = value,
+            )
+        }
+    }
+
+    public suspend fun updateAttribution(attribution: AppActorAttribution) {
+        executeGuardedRead(resolveAppUserId = true) { snapshot ->
+            snapshot.runtime.attributesManager.updateAttribution(
+                appUserId = snapshot.appUserId,
+                attribution = attribution,
+            )
+        }
+    }
+
     public suspend fun getRemoteConfigs(): AppActorRemoteConfigs {
         return executeGuardedRead(resolveAppUserId = true) { snapshot ->
             val configs = snapshot.runtime.remoteConfigManager.getRemoteConfigs(appUserId = snapshot.appUserId)
@@ -869,6 +949,25 @@ public object AppActor {
             purchaseUpdatesJob = startupHandles.purchaseUpdatesJob,
         )
         runtime = newRuntime
+        val flushRuntime = newRuntime
+        flushRuntime.scope.launch {
+            val currentAppUserId = flushRuntime.identityStore.currentAppUserId
+                ?: flushRuntime.identityStore.ensureAppUserId()
+            flushRuntime.attributesManager.flushPending(currentAppUserId)
+        }
+    }
+
+    private suspend fun setReservedString(
+        key: String,
+        value: String?,
+    ) {
+        executeGuardedRead(resolveAppUserId = true) { snapshot ->
+            snapshot.runtime.attributesManager.setReservedString(
+                appUserId = snapshot.appUserId,
+                key = key,
+                value = value,
+            )
+        }
     }
 
     private suspend fun refreshCustomerInfoOnForeground(runtimeState: AppActorRuntimeState) {
