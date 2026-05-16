@@ -4,11 +4,15 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.appactor.android.backend.client.AppActorBackendException
 import com.appactor.android.backend.client.AppActorHttpBackendClient
+import com.appactor.android.backend.dto.AppActorAttributionRequestDTO
+import com.appactor.android.backend.dto.AppActorAttributesPatchRequestDTO
 import com.appactor.android.backend.dto.AppActorIdentifyRequestDTO
 import com.appactor.android.backend.dto.AppActorGoogleReceiptRequestDTO
+import com.appactor.android.backend.dto.AppActorIntegrationIdentifierRequestDTO
 import com.appactor.android.models.AppActorConfiguration
 import com.appactor.android.models.AppActorPlatformInfo
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.JsonPrimitive
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -364,6 +368,109 @@ class AppActorHttpBackendClientTests {
         assertNotNull("Identify request MUST include X-AppActor-Nonce", capturedNonce)
     }
 
+    @Test
+    fun `attributes client patches attributes route with typed json body`() = runBlocking {
+        var capturedMethod = ""
+        var capturedPath = ""
+        var capturedBody = ""
+        val client = backendClient(
+            okHttpClient = OkHttpClient.Builder()
+                .addInterceptor { chain ->
+                    capturedMethod = chain.request().method
+                    capturedPath = chain.request().url.encodedPath
+                    capturedBody = chain.request().bodyToString()
+                    response(chain = chain, code = 204, body = "")
+                }
+                .build(),
+            options = AppActorConfiguration.Options(
+                verifyResponseSignatures = false,
+                requireResponseSignatures = false,
+            ),
+        )
+
+        client.patchUserAttributes(
+            appUserId = "user_android_123",
+            request = AppActorAttributesPatchRequestDTO(
+                attributes = mapOf("favorite_color" to JsonPrimitive("blue")),
+                unsetAttributes = listOf("old_key"),
+            ),
+        )
+
+        assertEquals("PATCH", capturedMethod)
+        assertEquals("/v1/payment/users/user_android_123/attributes", capturedPath)
+        assertTrue(capturedBody.contains("\"favorite_color\":\"blue\""))
+        assertTrue(capturedBody.contains("\"unset_attributes\":[\"old_key\"]"))
+    }
+
+    @Test
+    fun `attributes client deletes encoded attribute key`() = runBlocking {
+        var capturedMethod = ""
+        var capturedPath = ""
+        val client = backendClient(
+            okHttpClient = OkHttpClient.Builder()
+                .addInterceptor { chain ->
+                    capturedMethod = chain.request().method
+                    capturedPath = chain.request().url.encodedPath
+                    response(chain = chain, code = 204, body = "")
+                }
+                .build(),
+            options = AppActorConfiguration.Options(
+                verifyResponseSignatures = false,
+                requireResponseSignatures = false,
+            ),
+        )
+
+        client.deleteUserAttribute(appUserId = "user_android_123", key = "\$email")
+
+        assertEquals("DELETE", capturedMethod)
+        assertEquals("/v1/payment/users/user_android_123/attributes/\$email", capturedPath)
+    }
+
+    @Test
+    fun `integration and attribution clients post planned user routes`() = runBlocking {
+        val captured = mutableListOf<Triple<String, String, String>>()
+        val client = backendClient(
+            okHttpClient = OkHttpClient.Builder()
+                .addInterceptor { chain ->
+                    captured += Triple(
+                        chain.request().method,
+                        chain.request().url.encodedPath,
+                        chain.request().bodyToString(),
+                    )
+                    response(chain = chain, code = 204, body = "")
+                }
+                .build(),
+            options = AppActorConfiguration.Options(
+                verifyResponseSignatures = false,
+                requireResponseSignatures = false,
+            ),
+        )
+
+        client.postIntegrationIdentifier(
+            appUserId = "user_android_123",
+            request = AppActorIntegrationIdentifierRequestDTO(type = "firebase_app_instance_id", value = "fid_123"),
+        )
+        client.postAttribution(
+            appUserId = "user_android_123",
+            request = AppActorAttributionRequestDTO(
+                provider = "adjust",
+                status = "non_organic",
+                campaignName = "spring",
+                adGroupId = "ag_123",
+            ),
+        )
+
+        assertEquals("POST", captured[0].first)
+        assertEquals("/v1/payment/users/user_android_123/integration-identifiers", captured[0].second)
+        assertTrue(captured[0].third.contains("\"type\":\"firebase_app_instance_id\""))
+        assertEquals("POST", captured[1].first)
+        assertEquals("/v1/payment/users/user_android_123/attribution", captured[1].second)
+        assertTrue(captured[1].third.contains("\"provider\":\"adjust\""))
+        assertTrue(captured[1].third.contains("\"status\":\"non_organic\""))
+        assertTrue(captured[1].third.contains("\"campaign_name\":\"spring\""))
+        assertTrue(captured[1].third.contains("\"ad_group_id\":\"ag_123\""))
+    }
+
     private fun backendClient(
         okHttpClient: OkHttpClient,
         options: AppActorConfiguration.Options,
@@ -398,6 +505,12 @@ class AppActorHttpBackendClientTests {
         }
 
         return responseBuilder.build()
+    }
+
+    private fun okhttp3.Request.bodyToString(): String {
+        val buffer = okio.Buffer()
+        body?.writeTo(buffer)
+        return buffer.readUtf8()
     }
 
     private fun fixture(path: String): String {

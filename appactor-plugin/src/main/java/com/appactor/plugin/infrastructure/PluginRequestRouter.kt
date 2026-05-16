@@ -36,6 +36,16 @@ internal object PluginRequestRouter {
             CanMakePurchasesRequest,
             GetStorefrontRequest,
             GetStoreCapabilitiesRequest,
+            SetAttributesRequest,
+            SetAttributeRequest,
+            UnsetAttributeRequest,
+            SetEmailRequest,
+            SetDisplayNameRequest,
+            SetPhoneNumberRequest,
+            SetPushTokenRequest,
+            CollectDeviceIdentifiersRequest,
+            SetIntegrationIdentifierRequest,
+            UpdateAttributionRequest,
         )
         defaults.forEach { registry[it.method] = it }
     }

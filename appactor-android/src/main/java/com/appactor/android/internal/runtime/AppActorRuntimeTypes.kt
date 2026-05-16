@@ -10,6 +10,7 @@ import com.appactor.android.cache.AppActorOfflineProductCatalogStore
 import com.appactor.android.cache.AppActorOfferingsCacheStore
 import com.appactor.android.cache.AppActorRemoteConfigsCacheStore
 import com.appactor.android.managers.AppActorCustomerManager
+import com.appactor.android.managers.AppActorAttributesManager
 import com.appactor.android.managers.AppActorExperimentManager
 import com.appactor.android.managers.AppActorOfferingsManager
 import com.appactor.android.managers.AppActorRemoteConfigManager
@@ -38,6 +39,7 @@ internal data class AppActorRuntimeState(
     val postedLedgerStore: AppActorPostedLedgerStore,
     val offeringsManager: AppActorOfferingsManager,
     val customerManager: AppActorCustomerManager,
+    val attributesManager: AppActorAttributesManager,
     val paymentProcessor: AppActorPaymentProcessor,
     val scope: CoroutineScope,
     val bootstrapCompletionJob: kotlinx.coroutines.Job? = null,

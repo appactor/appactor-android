@@ -1,6 +1,8 @@
 package com.appactor.android.backend.client
 
 import com.appactor.android.backend.auth.AppActorAuthHeaderProvider
+import com.appactor.android.backend.dto.AppActorAttributionRequestDTO
+import com.appactor.android.backend.dto.AppActorAttributesPatchRequestDTO
 import com.appactor.android.backend.dto.AppActorBackendErrorEnvelopeDTO
 import com.appactor.android.backend.dto.AppActorCustomerEnvelopeDTO
 import com.appactor.android.backend.dto.AppActorExperimentAssignmentEnvelopeDTO
@@ -11,6 +13,7 @@ import com.appactor.android.backend.dto.AppActorGoogleRestoreResponseDTO
 import com.appactor.android.backend.dto.AppActorGoogleSyncRequestDTO
 import com.appactor.android.backend.dto.AppActorGoogleSyncResponseDTO
 import com.appactor.android.backend.dto.AppActorIdentifyRequestDTO
+import com.appactor.android.backend.dto.AppActorIntegrationIdentifierRequestDTO
 import com.appactor.android.backend.dto.AppActorLoginRequestDTO
 import com.appactor.android.backend.dto.AppActorLoginResponseDTO
 import com.appactor.android.backend.dto.AppActorOfferingsEnvelopeDTO
@@ -135,6 +138,74 @@ internal class AppActorHttpBackendClient(
             .newBuilder()
             .also { builder -> AppActorAuthHeaderProvider.apply(builder, configuration, path) }
             .build()
+        return executeRetryable(httpRequest)
+    }
+
+    override suspend fun postUserAttributes(
+        appUserId: String,
+        request: AppActorAttributesPatchRequestDTO,
+    ): AppActorBackendHttpResponse<Unit> {
+        val httpRequest = buildJsonRequest(
+            url = buildAppActorUrl(configuration.baseUrl, "v1", "payment", "users", appUserId, "attributes"),
+            method = "POST",
+            body = request,
+        )
+        return executeRetryable(httpRequest)
+    }
+
+    override suspend fun patchUserAttributes(
+        appUserId: String,
+        request: AppActorAttributesPatchRequestDTO,
+    ): AppActorBackendHttpResponse<Unit> {
+        val httpRequest = buildJsonRequest(
+            url = buildAppActorUrl(configuration.baseUrl, "v1", "payment", "users", appUserId, "attributes"),
+            method = "PATCH",
+            body = request,
+        )
+        return executeRetryable(httpRequest)
+    }
+
+    override suspend fun deleteUserAttribute(
+        appUserId: String,
+        key: String,
+    ): AppActorBackendHttpResponse<Unit> {
+        val path = buildAppActorUrl(configuration.baseUrl, "v1", "payment", "users", appUserId, "attributes", key)
+        val builder = Request.Builder()
+            .url(path)
+            .delete()
+            .header("Accept", "application/json")
+        AppActorAuthHeaderProvider.apply(builder, configuration, extractPath(path))
+        return executeRetryable(builder.build())
+    }
+
+    override suspend fun postIntegrationIdentifier(
+        appUserId: String,
+        request: AppActorIntegrationIdentifierRequestDTO,
+    ): AppActorBackendHttpResponse<Unit> {
+        val httpRequest = buildJsonRequest(
+            url = buildAppActorUrl(
+                configuration.baseUrl,
+                "v1",
+                "payment",
+                "users",
+                appUserId,
+                "integration-identifiers",
+            ),
+            method = "POST",
+            body = request,
+        )
+        return executeRetryable(httpRequest)
+    }
+
+    override suspend fun postAttribution(
+        appUserId: String,
+        request: AppActorAttributionRequestDTO,
+    ): AppActorBackendHttpResponse<Unit> {
+        val httpRequest = buildJsonRequest(
+            url = buildAppActorUrl(configuration.baseUrl, "v1", "payment", "users", appUserId, "attribution"),
+            method = "POST",
+            body = request,
+        )
         return executeRetryable(httpRequest)
     }
 
@@ -270,19 +341,7 @@ internal class AppActorHttpBackendClient(
                     }
 
                     in 200..299 -> {
-                        val bodyString = rawResponse.rawBody ?: throw AppActorBackendException.Decoding(
-                            description = "Response body was null.",
-                            requestId = resolvedRequestId,
-                        )
-                        val decoded = runCatching {
-                            AppActorBackendJson.instance.decodeFromString<T>(bodyString)
-                        }.getOrElse { throwable ->
-                            throw AppActorBackendException.Decoding(
-                                description = "Failed to decode backend response.",
-                                requestId = resolvedRequestId,
-                                throwable = throwable,
-                            )
-                        }
+                        val decoded = decodeSuccessBody<T>(rawResponse.rawBody, resolvedRequestId)
 
                         return@withContext AppActorBackendHttpResponse(
                             body = decoded,
@@ -389,6 +448,29 @@ internal class AppActorHttpBackendClient(
                     AppActorBackendJson.instance.decodeFromString<AppActorBackendErrorEnvelopeDTO>(it)
                 }.getOrNull()
             }
+    }
+
+    private inline fun <reified T> decodeSuccessBody(
+        rawBody: String?,
+        requestId: String?,
+    ): T {
+        if (T::class == Unit::class) {
+            @Suppress("UNCHECKED_CAST")
+            return Unit as T
+        }
+        val bodyString = rawBody ?: throw AppActorBackendException.Decoding(
+            description = "Response body was null.",
+            requestId = requestId,
+        )
+        return runCatching {
+            AppActorBackendJson.instance.decodeFromString<T>(bodyString)
+        }.getOrElse { throwable ->
+            throw AppActorBackendException.Decoding(
+                description = "Failed to decode backend response.",
+                requestId = requestId,
+                throwable = throwable,
+            )
+        }
     }
 
     private fun parseRetryAfterHeader(value: String?): Double? {

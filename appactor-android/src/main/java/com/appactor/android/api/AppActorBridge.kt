@@ -2,6 +2,8 @@ package com.appactor.android.api
 
 import android.app.Activity
 import android.content.Context
+import com.appactor.android.models.AppActorAttributeValue
+import com.appactor.android.models.AppActorAttribution
 import com.appactor.android.models.AppActorBridgeError
 import com.appactor.android.models.AppActorBridgeErrorCallback
 import com.appactor.android.models.AppActorError
@@ -304,6 +306,127 @@ public object AppActorBridge {
     ): Unit = AppActor.launchAsync(
         operation = { AppActor.activeEntitlementKeysOffline() },
         onSuccess = onSuccess,
+        onError = onError.asSdkErrorCallback(),
+    )
+
+    @JvmStatic
+    @JvmOverloads
+    public fun setAttributes(
+        attributes: Map<String, AppActorAttributeValue?>,
+        onComplete: AppActorCompletionCallback? = null,
+        onError: AppActorBridgeErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.setAttributes(attributes) },
+        onComplete = onComplete,
+        onError = onError.asSdkErrorCallback(),
+    )
+
+    @JvmStatic
+    @JvmOverloads
+    public fun setAttribute(
+        key: String,
+        value: AppActorAttributeValue,
+        onComplete: AppActorCompletionCallback? = null,
+        onError: AppActorBridgeErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.setAttribute(key, value) },
+        onComplete = onComplete,
+        onError = onError.asSdkErrorCallback(),
+    )
+
+    @JvmStatic
+    @JvmOverloads
+    public fun unsetAttribute(
+        key: String,
+        onComplete: AppActorCompletionCallback? = null,
+        onError: AppActorBridgeErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.unsetAttribute(key) },
+        onComplete = onComplete,
+        onError = onError.asSdkErrorCallback(),
+    )
+
+    @JvmStatic
+    @JvmOverloads
+    public fun setEmail(
+        email: String?,
+        onComplete: AppActorCompletionCallback? = null,
+        onError: AppActorBridgeErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.setEmail(email) },
+        onComplete = onComplete,
+        onError = onError.asSdkErrorCallback(),
+    )
+
+    @JvmStatic
+    @JvmOverloads
+    public fun setDisplayName(
+        displayName: String?,
+        onComplete: AppActorCompletionCallback? = null,
+        onError: AppActorBridgeErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.setDisplayName(displayName) },
+        onComplete = onComplete,
+        onError = onError.asSdkErrorCallback(),
+    )
+
+    @JvmStatic
+    @JvmOverloads
+    public fun setPhoneNumber(
+        phoneNumber: String?,
+        onComplete: AppActorCompletionCallback? = null,
+        onError: AppActorBridgeErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.setPhoneNumber(phoneNumber) },
+        onComplete = onComplete,
+        onError = onError.asSdkErrorCallback(),
+    )
+
+    @JvmStatic
+    @JvmOverloads
+    public fun setPushToken(
+        pushToken: String?,
+        onComplete: AppActorCompletionCallback? = null,
+        onError: AppActorBridgeErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.setPushToken(pushToken) },
+        onComplete = onComplete,
+        onError = onError.asSdkErrorCallback(),
+    )
+
+    @JvmStatic
+    @JvmOverloads
+    public fun collectDeviceIdentifiers(
+        onComplete: AppActorCompletionCallback? = null,
+        onError: AppActorBridgeErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.collectDeviceIdentifiers() },
+        onComplete = onComplete,
+        onError = onError.asSdkErrorCallback(),
+    )
+
+    @JvmStatic
+    @JvmOverloads
+    public fun setIntegrationIdentifier(
+        type: String,
+        value: String,
+        onComplete: AppActorCompletionCallback? = null,
+        onError: AppActorBridgeErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.setIntegrationIdentifier(type, value) },
+        onComplete = onComplete,
+        onError = onError.asSdkErrorCallback(),
+    )
+
+    @JvmStatic
+    @JvmOverloads
+    public fun updateAttribution(
+        attribution: AppActorAttribution,
+        onComplete: AppActorCompletionCallback? = null,
+        onError: AppActorBridgeErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.updateAttribution(attribution) },
+        onComplete = onComplete,
         onError = onError.asSdkErrorCallback(),
     )
 
