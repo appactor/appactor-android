@@ -62,6 +62,7 @@ internal interface AppActorBackendClient {
             isNotModified = restore.isNotModified,
             signatureHeaders = restore.signatureHeaders,
             signatureVerified = restore.signatureVerified,
+            remoteConfigRequiresUserContext = restore.remoteConfigRequiresUserContext,
         )
     }
 }

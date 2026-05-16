@@ -12,6 +12,7 @@ import com.appactor.android.models.AppActorDiagnosticsDataSource
 import com.appactor.android.models.AppActorRemoteConfigItem
 import com.appactor.android.models.AppActorRemoteConfigs
 import java.io.IOException
+import java.util.Locale
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 import kotlinx.coroutines.CancellationException
@@ -26,30 +27,115 @@ internal class AppActorRemoteConfigManager(
 ) {
 
     private val stateLock = ReentrantLock()
-    @Volatile
-    private var cachedConfigs: AppActorRemoteConfigs? = null
-    @Volatile
-    private var cachedAtMillis: Long? = null
+    private val cachedConfigs = mutableMapOf<RemoteConfigContext, AppActorRemoteConfigs>()
+    private val cachedAtMillis = mutableMapOf<RemoteConfigContext, Long>()
+    private val inFlight = mutableMapOf<RemoteConfigContext, CompletableDeferred<AppActorRemoteConfigs>>()
+    private val inFlightGenerations = mutableMapOf<RemoteConfigContext, Long>()
+    private val requiresUserContextByContext = mutableMapOf<RemoteConfigContext, Boolean>()
+    private val modeDecisions = mutableMapOf<ModeContext, ModeDecision>()
+
     @Volatile
     private var lastRequestId: String? = null
-    @Volatile
-    private var inFlight: CompletableDeferred<AppActorRemoteConfigs>? = null
-    @Volatile
-    private var cacheGeneration: Long = 0
+    private var nextInFlightGeneration: Long = 0
     @Volatile
     private var lastLoadSource: AppActorDiagnosticsDataSource? = null
     @Volatile
-    private var lastCacheUserId: String? = null
+    private var lastCacheContext: RemoteConfigContext? = null
 
     suspend fun getRemoteConfigs(appUserId: String): AppActorRemoteConfigs {
+        val appVersion = normalizeOptional(appVersionProvider())
+        val country = normalizeOptional(countryProvider())?.uppercase(Locale.US)
+        val userContext = RemoteConfigContext(
+            appUserId = normalizeOptional(appUserId),
+            appVersion = appVersion,
+            country = country,
+        )
+        val publicContext = userContext.copy(appUserId = null)
+        val modeContext = ModeContext(appVersion = appVersion, country = country)
+
+        val preferredContext = stateLock.withLock {
+            preferredContextLocked(
+                userContext = userContext,
+                publicContext = publicContext,
+                modeContext = modeContext,
+            )
+        }
+        val configs = resolveContext(preferredContext)
+
+        if (preferredContext.appUserId == null) {
+            val requiresUserContext = stateLock.withLock {
+                requiresUserContextByContext[preferredContext]
+            }
+            return if (shouldRefetchPublicResultWithUser(requiresUserContext, userContext)) {
+                refetchWithUserContext(
+                    userContext = userContext,
+                    publicContext = preferredContext,
+                    modeContext = modeContext,
+                )
+            } else {
+                updateModeDecision(modeContext, requiresUserContext)
+                configs
+            }
+        }
+
+        val requiresUserContext = stateLock.withLock {
+            requiresUserContextByContext[preferredContext]
+        }
+        updateModeDecision(modeContext, requiresUserContext)
+        return configs
+    }
+
+    fun cached(): AppActorRemoteConfigs? = stateLock.withLock {
+        lastCacheContext?.let(cachedConfigs::get)
+    }
+
+    fun requestId(): String? = lastRequestId
+
+    fun lastLoadSource(): AppActorDiagnosticsDataSource? = lastLoadSource
+
+    fun clearCache(appUserId: String? = null) {
+        val normalized = normalizeOptional(appUserId)
+        val appUserIdsToClear = appUserIdsToClear(normalized)
+        val shouldClearAllRemoteConfigs = normalized == null
+        val cancelled = stateLock.withLock {
+            val matching = inFlight
+                .filterKeys { context -> shouldClearAllRemoteConfigs || context.appUserId in appUserIdsToClear }
+                .values
+                .toList()
+            inFlight.keys.removeIf { context -> shouldClearAllRemoteConfigs || context.appUserId in appUserIdsToClear }
+            inFlightGenerations.keys.removeIf { context -> shouldClearAllRemoteConfigs || context.appUserId in appUserIdsToClear }
+            cachedConfigs.keys.removeIf { context -> shouldClearAllRemoteConfigs || context.appUserId in appUserIdsToClear }
+            cachedAtMillis.keys.removeIf { context -> shouldClearAllRemoteConfigs || context.appUserId in appUserIdsToClear }
+            requiresUserContextByContext.keys.removeIf { context -> shouldClearAllRemoteConfigs || context.appUserId in appUserIdsToClear }
+            lastRequestId = null
+            lastLoadSource = null
+            if (shouldClearAllRemoteConfigs || lastCacheContext?.appUserId in appUserIdsToClear) {
+                lastCacheContext = null
+            }
+            if (shouldClearAllRemoteConfigs) {
+                modeDecisions.clear()
+            }
+            matching
+        }
+        cancelled.forEach { deferred ->
+            deferred.cancel(CancellationException("Remote config cache cleared."))
+        }
+        if (shouldClearAllRemoteConfigs) {
+            cacheStore.clearAll()
+        } else {
+            appUserIdsToClear.forEach(cacheStore::clear)
+        }
+    }
+
+    private suspend fun resolveContext(context: RemoteConfigContext): AppActorRemoteConfigs {
         val request = CompletableDeferred<AppActorRemoteConfigs>()
-        return when (val requestState = prepareRequest(appUserId, request)) {
+        return when (val requestState = prepareRequest(context, request)) {
             is RemoteConfigRequestState.Cached -> requestState.configs
             is RemoteConfigRequestState.Await -> requestState.deferred.await()
             is RemoteConfigRequestState.Execute -> {
                 try {
                     val result = fetchRemoteConfigs(
-                        appUserId = appUserId,
+                        context = context,
                         requestGeneration = requestState.generation,
                     )
                     request.complete(result)
@@ -59,8 +145,9 @@ internal class AppActorRemoteConfigManager(
                     throw throwable
                 } finally {
                     stateLock.withLock {
-                        if (inFlight === request) {
-                            inFlight = null
+                        if (inFlight[context] === request) {
+                            inFlight.remove(context)
+                            inFlightGenerations.remove(context)
                         }
                     }
                 }
@@ -68,76 +155,74 @@ internal class AppActorRemoteConfigManager(
         }
     }
 
-    fun cached(): AppActorRemoteConfigs? = cachedConfigs
-
-    fun requestId(): String? = lastRequestId
-
-    fun lastLoadSource(): AppActorDiagnosticsDataSource? = lastLoadSource
-
-    fun clearCache(appUserId: String? = null) {
-        val cancelled = stateLock.withLock {
-            cacheGeneration += 1
-            val current = inFlight
-            inFlight = null
-            cachedConfigs = null
-            cachedAtMillis = null
-            lastRequestId = null
-            lastLoadSource = null
-            lastCacheUserId = null
-            current
-        }
-        cancelled?.cancel(CancellationException("Remote config cache cleared."))
-        appUserId?.let(cacheStore::clear)
-    }
-
     private fun prepareRequest(
-        appUserId: String,
+        context: RemoteConfigContext,
         request: CompletableDeferred<AppActorRemoteConfigs>,
     ): RemoteConfigRequestState {
         return stateLock.withLock {
-            if (isMemoryCacheFreshLocked() && lastCacheUserId == appUserId) {
+            val cached = cachedConfigs[context]
+            if (cached != null && isMemoryCacheFreshLocked(context)) {
                 lastLoadSource = AppActorDiagnosticsDataSource.Cache
-                return@withLock RemoteConfigRequestState.Cached(requireNotNull(cachedConfigs))
+                lastCacheContext = context
+                return@withLock RemoteConfigRequestState.Cached(cached)
             }
-            inFlight?.let { existing ->
+            inFlight[context]?.let { existing ->
                 return@withLock RemoteConfigRequestState.Await(existing)
             }
-            inFlight = request
-            RemoteConfigRequestState.Execute(cacheGeneration)
+            nextInFlightGeneration += 1
+            val generation = nextInFlightGeneration
+            inFlight[context] = request
+            inFlightGenerations[context] = generation
+            RemoteConfigRequestState.Execute(generation)
         }
     }
 
     private suspend fun fetchRemoteConfigs(
-        appUserId: String,
+        context: RemoteConfigContext,
         requestGeneration: Long,
     ): AppActorRemoteConfigs {
         return try {
             val response = backendClient.getRemoteConfigs(
-                appUserId = appUserId,
-                appVersion = appVersionProvider(),
-                country = countryProvider(),
-                eTag = cacheStore.eTag(appUserId = appUserId, forceRefresh = false),
+                appUserId = context.appUserId,
+                appVersion = context.appVersion,
+                country = context.country,
+                eTag = cacheStore.eTag(
+                    appUserId = context.appUserId,
+                    appVersion = context.appVersion,
+                    country = context.country,
+                    forceRefresh = false,
+                ),
             )
-            ensureGeneration(requestGeneration)
+            ensureGeneration(context, requestGeneration)
+            recordRequiresUserContext(context, response.remoteConfigRequiresUserContext)
             when {
                 response.isNotModified -> {
                     val cached = stateLock.withLock {
-                        ensureGenerationLocked(requestGeneration)
-                        cachedConfigs?.also {
-                            cachedAtMillis = dateProviderMillis()
+                        ensureGenerationLocked(context, requestGeneration)
+                        cachedConfigs[context]?.also {
+                            cachedAtMillis[context] = dateProviderMillis()
                             lastRequestId = response.requestId
                             lastLoadSource = AppActorDiagnosticsDataSource.Cache
+                            lastCacheContext = context
                         }
                     }
                     cached ?: run {
-                        val cachedValue = cacheStore.handleNotModified(appUserId, response.eTag) ?: cacheStore.load(appUserId)
-                            ?: throw IllegalStateException("Remote config cache missing for 304 response.")
+                        val cachedValue = cacheStore.handleNotModified(
+                            appUserId = context.appUserId,
+                            appVersion = context.appVersion,
+                            country = context.country,
+                            rotatedETag = response.eTag,
+                        ) ?: cacheStore.load(
+                            appUserId = context.appUserId,
+                            appVersion = context.appVersion,
+                            country = context.country,
+                        ) ?: throw IllegalStateException("Remote config cache missing for 304 response.")
                         decodeCached(
                             payload = cachedValue.payload,
                             cachedAtMillis = cachedValue.cachedAtMillis,
                             requestId = response.requestId,
                             requestGeneration = requestGeneration,
-                            appUserId = appUserId,
+                            context = context,
                         )
                     }
                 }
@@ -150,15 +235,19 @@ internal class AppActorRemoteConfigManager(
                         cachedAtMillis = dateProviderMillis(),
                         requestId = response.requestId ?: body.requestId,
                         requestGeneration = requestGeneration,
-                        appUserId = appUserId,
+                        context = context,
                         eTag = response.eTag,
                         verified = response.signatureVerified,
                     )
                 }
             }
         } catch (throwable: Throwable) {
-            ensureGeneration(requestGeneration)
-            val cachedValue = cacheStore.load(appUserId)
+            ensureGeneration(context, requestGeneration)
+            val cachedValue = cacheStore.load(
+                appUserId = context.appUserId,
+                appVersion = context.appVersion,
+                country = context.country,
+            )
             if (cachedValue != null && shouldFallbackToCache(throwable)) {
                 lastLoadSource = AppActorDiagnosticsDataSource.Cache
                 decodeCached(
@@ -166,7 +255,7 @@ internal class AppActorRemoteConfigManager(
                     cachedAtMillis = cachedValue.cachedAtMillis,
                     requestId = null,
                     requestGeneration = requestGeneration,
-                    appUserId = appUserId,
+                    context = context,
                 )
             } else {
                 throw throwable.toAppActorError("Failed to fetch remote configs.")
@@ -179,17 +268,17 @@ internal class AppActorRemoteConfigManager(
         cachedAtMillis: Long,
         requestId: String?,
         requestGeneration: Long,
-        appUserId: String,
+        context: RemoteConfigContext,
     ): AppActorRemoteConfigs {
         val decoded = AppActorBackendJson.instance.decodeFromString<AppActorRemoteConfigsEnvelopeDTO>(payload)
         val configs = decoded.toModel()
         return stateLock.withLock {
-            ensureGenerationLocked(requestGeneration)
-            cachedConfigs = configs
-            this.cachedAtMillis = cachedAtMillis
+            ensureGenerationLocked(context, requestGeneration)
+            cachedConfigs[context] = configs
+            this.cachedAtMillis[context] = cachedAtMillis
             this.lastRequestId = requestId ?: decoded.requestId
             lastLoadSource = AppActorDiagnosticsDataSource.Cache
-            lastCacheUserId = appUserId
+            lastCacheContext = context
             configs
         }
     }
@@ -199,32 +288,111 @@ internal class AppActorRemoteConfigManager(
         cachedAtMillis: Long,
         requestId: String?,
         requestGeneration: Long,
-        appUserId: String,
+        context: RemoteConfigContext,
         eTag: String?,
         verified: Boolean,
     ): AppActorRemoteConfigs {
         val decoded = AppActorBackendJson.instance.decodeFromString<AppActorRemoteConfigsEnvelopeDTO>(payload)
         val configs = decoded.toModel()
         return stateLock.withLock {
-            ensureGenerationLocked(requestGeneration)
+            ensureGenerationLocked(context, requestGeneration)
             cacheStore.save(
-                appUserId = appUserId,
+                appUserId = context.appUserId,
+                appVersion = context.appVersion,
+                country = context.country,
                 payload = payload,
                 eTag = eTag,
                 verified = verified,
             )
-            ensureGenerationLocked(requestGeneration)
-            cachedConfigs = configs
-            this.cachedAtMillis = cachedAtMillis
+            ensureGenerationLocked(context, requestGeneration)
+            cachedConfigs[context] = configs
+            this.cachedAtMillis[context] = cachedAtMillis
             this.lastRequestId = requestId ?: decoded.requestId
             lastLoadSource = AppActorDiagnosticsDataSource.Network
-            lastCacheUserId = appUserId
+            lastCacheContext = context
             configs
         }
     }
 
-    private fun isMemoryCacheFreshLocked(): Boolean {
-        val cachedAt = cachedAtMillis ?: return false
+    private fun preferredContextLocked(
+        userContext: RemoteConfigContext,
+        publicContext: RemoteConfigContext,
+        modeContext: ModeContext,
+    ): RemoteConfigContext {
+        val decision = freshModeDecisionLocked(modeContext)
+        return if (userContext.appUserId != null && decision == FetchMode.RequiresUser) {
+            userContext
+        } else {
+            publicContext
+        }
+    }
+
+    private fun freshModeDecisionLocked(context: ModeContext): FetchMode? {
+        val decision = modeDecisions[context] ?: return null
+        if (dateProviderMillis() - decision.decidedAtMillis >= CACHE_TTL_MILLIS) {
+            modeDecisions.remove(context)
+            return null
+        }
+        return decision.mode
+    }
+
+    private fun updateModeDecision(
+        context: ModeContext,
+        requiresUserContext: Boolean?,
+    ) {
+        if (requiresUserContext == null) return
+        stateLock.withLock {
+            modeDecisions[context] = ModeDecision(
+                mode = if (requiresUserContext) FetchMode.RequiresUser else FetchMode.PublicOnly,
+                decidedAtMillis = dateProviderMillis(),
+            )
+        }
+    }
+
+    private fun shouldRefetchPublicResultWithUser(
+        requiresUserContext: Boolean?,
+        userContext: RemoteConfigContext,
+    ): Boolean {
+        return userContext.appUserId != null && requiresUserContext != false
+    }
+
+    private suspend fun refetchWithUserContext(
+        userContext: RemoteConfigContext,
+        publicContext: RemoteConfigContext,
+        modeContext: ModeContext,
+    ): AppActorRemoteConfigs {
+        updateModeDecision(modeContext, true)
+        discardPublicProbeCache(publicContext)
+        return resolveContext(userContext)
+    }
+
+    private fun recordRequiresUserContext(
+        context: RemoteConfigContext,
+        requiresUserContext: Boolean?,
+    ) {
+        if (requiresUserContext == null) return
+        stateLock.withLock {
+            requiresUserContextByContext[context] = requiresUserContext
+        }
+    }
+
+    private fun discardPublicProbeCache(context: RemoteConfigContext) {
+        stateLock.withLock {
+            cachedConfigs.remove(context)
+            cachedAtMillis.remove(context)
+            if (lastCacheContext == context) {
+                lastCacheContext = null
+            }
+        }
+        cacheStore.clearContext(
+            appUserId = context.appUserId,
+            appVersion = context.appVersion,
+            country = context.country,
+        )
+    }
+
+    private fun isMemoryCacheFreshLocked(context: RemoteConfigContext): Boolean {
+        val cachedAt = cachedAtMillis[context] ?: return false
         return dateProviderMillis() - cachedAt < CACHE_TTL_MILLIS
     }
 
@@ -238,15 +406,33 @@ internal class AppActorRemoteConfigManager(
         }
     }
 
-    private fun ensureGeneration(expected: Long) {
+    private fun ensureGeneration(
+        context: RemoteConfigContext,
+        expected: Long,
+    ) {
         stateLock.withLock {
-            ensureGenerationLocked(expected)
+            ensureGenerationLocked(context, expected)
         }
     }
 
-    private fun ensureGenerationLocked(expected: Long) {
-        if (cacheGeneration != expected) {
+    private fun ensureGenerationLocked(
+        context: RemoteConfigContext,
+        expected: Long,
+    ) {
+        if (inFlightGenerations[context] != expected) {
             throw CancellationException("Remote config request invalidated by cache clear.")
+        }
+    }
+
+    private fun normalizeOptional(value: String?): String? {
+        return value?.trim()?.takeIf { it.isNotEmpty() }
+    }
+
+    private fun appUserIdsToClear(appUserId: String?): Set<String?> {
+        return if (appUserId == null) {
+            setOf(null)
+        } else {
+            setOf(appUserId, null)
         }
     }
 
@@ -265,6 +451,27 @@ internal class AppActorRemoteConfigManager(
     private companion object {
         const val CACHE_TTL_MILLIS: Long = 5 * 60 * 1_000
     }
+
+    private data class RemoteConfigContext(
+        val appUserId: String?,
+        val appVersion: String?,
+        val country: String?,
+    )
+
+    private data class ModeContext(
+        val appVersion: String?,
+        val country: String?,
+    )
+
+    private enum class FetchMode {
+        PublicOnly,
+        RequiresUser,
+    }
+
+    private data class ModeDecision(
+        val mode: FetchMode,
+        val decidedAtMillis: Long,
+    )
 
     private sealed interface RemoteConfigRequestState {
         data class Cached(

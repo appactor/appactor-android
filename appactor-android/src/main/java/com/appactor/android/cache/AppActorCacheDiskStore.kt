@@ -83,6 +83,12 @@ internal class AppActorCacheDiskStore(
         fileFor(resource).delete()
     }
 
+    fun clearPrefix(prefix: String) = lock.withLock {
+        directory.listFiles().orEmpty()
+            .filter { file -> file.extension == "json" && file.name.startsWith(prefix) }
+            .forEach { file -> file.delete() }
+    }
+
     fun clearAll() = lock.withLock {
         directory.deleteRecursively()
     }

@@ -168,6 +168,7 @@ class AppActorHttpBackendClientTests {
                               ]
                             }
                         """.trimIndent(),
+                        headers = mapOf("X-AppActor-Remote-Config-Requires-User-Context" to "false"),
                     )
                 }
                 .build(),
@@ -189,6 +190,7 @@ class AppActorHttpBackendClientTests {
         assertTrue(capturedQuery.contains("app_version=1.2.3"))
         assertTrue(capturedQuery.contains("country=TR"))
         assertEquals("has_rating", result.body?.data?.single()?.key)
+        assertEquals(false, result.remoteConfigRequiresUserContext)
     }
 
     @Test
@@ -307,10 +309,12 @@ class AppActorHttpBackendClientTests {
     @Test
     fun `remote config request does not include nonce header`() = runBlocking {
         var capturedNonce: String? = "UNSET"
+        var capturedSignatureTarget: String? = null
         val client = backendClient(
             okHttpClient = OkHttpClient.Builder()
                 .addInterceptor { chain ->
                     capturedNonce = chain.request().header("X-AppActor-Nonce")
+                    capturedSignatureTarget = chain.request().header("X-AppActor-Signature-Target")
                     response(
                         chain = chain,
                         code = 200,
@@ -332,6 +336,7 @@ class AppActorHttpBackendClientTests {
         client.getRemoteConfigs(appUserId = null, appVersion = null, country = null, eTag = null)
 
         assertNull("Remote config request should NOT include X-AppActor-Nonce", capturedNonce)
+        assertEquals("path-query", capturedSignatureTarget)
     }
 
     @Test
