@@ -233,6 +233,10 @@ public object AppActor {
                     runtimeState.paymentProcessor.drainAll()
                 }
 
+                override suspend fun flushPendingAttributes(runtimeState: AppActorRuntimeState) {
+                    runtimeState.attributesManager.flushPendingForAllUsers()
+                }
+
                 override suspend fun refreshCustomerInfoIfNeeded(runtimeState: AppActorRuntimeState) {
                     this@AppActor.refreshCustomerInfoOnForeground(runtimeState)
                 }
@@ -491,6 +495,7 @@ public object AppActor {
             currentRuntime.paymentProcessor.beginIdentityTransition()
             val info = try {
                 currentRuntime.paymentProcessor.drainAll()
+                currentRuntime.attributesManager.flushPending(currentAppUserId)
                 if (currentAppUserId != newAppUserId) {
                     currentRuntime.customerManager.clearCache(currentAppUserId)
                 }
@@ -540,6 +545,7 @@ public object AppActor {
             currentRuntime.paymentProcessor.beginIdentityTransition()
             val callbacks = try {
                 currentRuntime.paymentProcessor.drainAll()
+                currentRuntime.attributesManager.flushPending(currentAppUserId)
                 currentRuntime.customerManager.clearCache(currentAppUserId)
                 currentRuntime.remoteConfigManager.clearCache(currentAppUserId)
                 currentRuntime.experimentManager.clearCache(currentAppUserId)
@@ -1030,9 +1036,7 @@ public object AppActor {
         runtime = newRuntime
         val flushRuntime = newRuntime
         flushRuntime.scope.launch {
-            val currentAppUserId = flushRuntime.identityStore.currentAppUserId
-                ?: flushRuntime.identityStore.ensureAppUserId()
-            flushRuntime.attributesManager.flushPending(currentAppUserId)
+            flushRuntime.attributesManager.flushPendingForAllUsers()
         }
     }
 

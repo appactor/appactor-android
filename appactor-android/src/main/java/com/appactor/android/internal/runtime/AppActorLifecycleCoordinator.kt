@@ -18,6 +18,8 @@ internal interface AppActorLifecycleCoordinatorHost {
 
     suspend fun drainReceipts(runtimeState: AppActorRuntimeState)
 
+    suspend fun flushPendingAttributes(runtimeState: AppActorRuntimeState)
+
     suspend fun refreshCustomerInfoIfNeeded(runtimeState: AppActorRuntimeState)
 
     fun emitDebugEvent(
@@ -84,6 +86,20 @@ internal class AppActorLifecycleCoordinator(
                     level = AppActorLogLevel.Warn,
                     name = "foreground_drain_failed",
                     message = "Foreground receipt drain failed.",
+                    attributes = debugAttributes("reason" to throwable.message),
+                )
+            }
+            try {
+                host.flushPendingAttributes(currentRuntime)
+            } catch (throwable: Throwable) {
+                throwIfCancellation(throwable)
+                AppActorLogger.debug("Foreground attribute flush failed: ${throwable.message}")
+                host.emitDebugEvent(
+                    runtimeSessionId = currentRuntime.sessionId,
+                    category = AppActorDebugCategory.Network,
+                    level = AppActorLogLevel.Warn,
+                    name = "foreground_attribute_flush_failed",
+                    message = "Foreground customer attribute flush failed.",
                     attributes = debugAttributes("reason" to throwable.message),
                 )
             }

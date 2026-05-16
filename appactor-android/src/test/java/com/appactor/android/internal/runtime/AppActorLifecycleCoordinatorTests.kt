@@ -25,12 +25,12 @@ class AppActorLifecycleCoordinatorTests {
     }
 
     @Test
-    fun `foreground drains before refresh`() {
+    fun `foreground drains attributes before refresh`() {
         val runtime = createRuntimeState(
             options = runtimeTestOptions(),
         )
         val host = RecordingLifecycleHost(runtime).apply {
-            operationsExpected = CountDownLatch(2)
+            operationsExpected = CountDownLatch(3)
         }
         val coordinator = AppActorLifecycleCoordinator(host)
 
@@ -40,7 +40,7 @@ class AppActorLifecycleCoordinatorTests {
         callbacks!!.onActivityStarted(Activity())
 
         assertTrue(host.operationsExpected!!.await(5, TimeUnit.SECONDS))
-        assertEquals(listOf("drain", "refresh"), host.operationOrder.toList())
+        assertEquals(listOf("drain", "attributes", "refresh"), host.operationOrder.toList())
         runtime.scope.cancel()
     }
 
@@ -50,7 +50,7 @@ class AppActorLifecycleCoordinatorTests {
             options = runtimeTestOptions(),
         )
         val host = RecordingLifecycleHost(runtime).apply {
-            operationsExpected = CountDownLatch(2)
+            operationsExpected = CountDownLatch(3)
         }
         // Use a short interval for testing by verifying the timer starts
         val coordinator = AppActorLifecycleCoordinator(host)
@@ -81,6 +81,7 @@ class AppActorLifecycleCoordinatorTests {
 
         val operationOrder = Collections.synchronizedList(mutableListOf<String>())
         val drainCount = AtomicInteger(0)
+        val attributeFlushCount = AtomicInteger(0)
         val refreshCount = AtomicInteger(0)
 
         var operationsExpected: CountDownLatch? = null
@@ -94,6 +95,12 @@ class AppActorLifecycleCoordinatorTests {
             drainCount.incrementAndGet()
             operationOrder += "drain"
             drainCompleted?.countDown()
+            operationsExpected?.countDown()
+        }
+
+        override suspend fun flushPendingAttributes(runtimeState: AppActorRuntimeState) {
+            attributeFlushCount.incrementAndGet()
+            operationOrder += "attributes"
             operationsExpected?.countDown()
         }
 

@@ -46,6 +46,12 @@ internal object PluginRequestRouter {
             CollectDeviceIdentifiersRequest,
             SetIntegrationIdentifierRequest,
             UpdateAttributionRequest,
+            SetMediaSourceRequest,
+            SetCampaignRequest,
+            SetAdGroupRequest,
+            SetAdRequest,
+            SetKeywordRequest,
+            SetCreativeRequest,
         )
         defaults.forEach { registry[it.method] = it }
     }

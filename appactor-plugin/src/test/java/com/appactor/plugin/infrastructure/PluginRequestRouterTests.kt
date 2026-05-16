@@ -42,6 +42,8 @@ class PluginRequestRouterTests {
         assertTrue(methods.contains("drain_receipt_queue_and_refresh_customer"))
         assertTrue(methods.contains("set_attributes"))
         assertTrue(methods.contains("update_attribution"))
+        assertTrue(methods.contains("set_media_source"))
+        assertTrue(methods.contains("set_campaign"))
     }
 
     @Test
@@ -345,6 +347,66 @@ class PluginRequestRouterTests {
                     },
                 )
             }
+        } finally {
+            unmockkObject(AppActor)
+        }
+    }
+
+    @Test
+    fun `update attribution request accepts nested attribution payload`() = runBlocking {
+        mockkObject(AppActor)
+        try {
+            coEvery { AppActor.updateAttribution(any()) } returns Unit
+
+            val result = PluginRequestRouter.route(
+                "update_attribution",
+                """
+                {
+                  "attribution": {
+                    "provider": "custom",
+                    "provider_name": "facebook",
+                    "campaign_id": "cmp_123",
+                    "campaign_name": "spring",
+                    "ad_group": "retargeting",
+                    "click_id": "click_123"
+                  }
+                }
+                """.trimIndent(),
+            )
+
+            assertTrue(result is PluginResult.Success)
+            coVerify(exactly = 1) {
+                AppActor.updateAttribution(
+                    withArg<AppActorAttribution> { attribution ->
+                        assertEquals("custom", attribution.provider)
+                        assertEquals("facebook", attribution.providerName)
+                        assertEquals("cmp_123", attribution.campaignId)
+                        assertEquals("spring", attribution.campaignName)
+                        assertEquals("spring", attribution.campaign)
+                        assertEquals("retargeting", attribution.adGroup)
+                        assertEquals("click_123", attribution.clickId)
+                    },
+                )
+            }
+        } finally {
+            unmockkObject(AppActor)
+        }
+    }
+
+    @Test
+    fun `attribution helper requests route to native helper methods`() = runBlocking {
+        mockkObject(AppActor)
+        try {
+            coEvery { AppActor.setMediaSource(any()) } returns Unit
+            coEvery { AppActor.setCampaign(any()) } returns Unit
+
+            val mediaSource = PluginRequestRouter.route("set_media_source", """{"value":"facebook"}""")
+            val campaign = PluginRequestRouter.route("set_campaign", """{"value":"spring_sale"}""")
+
+            assertTrue(mediaSource is PluginResult.Success)
+            assertTrue(campaign is PluginResult.Success)
+            coVerify(exactly = 1) { AppActor.setMediaSource("facebook") }
+            coVerify(exactly = 1) { AppActor.setCampaign("spring_sale") }
         } finally {
             unmockkObject(AppActor)
         }

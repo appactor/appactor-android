@@ -156,6 +156,7 @@ internal class AppActorAttributesManager(
         val request = attribution.toRequestDTO()
         enqueue(appUserId) { existing ->
             customAttributionSnapshots[appUserId] = request
+            queueStore.saveAttributionSnapshot(appUserId, request)
             existing.copy(attribution = request)
         }
         flushPending(appUserId)
@@ -169,6 +170,7 @@ internal class AppActorAttributesManager(
         enqueue(appUserId) { existing ->
             val merged = mergeCustomAttribution(appUserId, existing.attribution, patchRequest)
             customAttributionSnapshots[appUserId] = merged
+            queueStore.saveAttributionSnapshot(appUserId, merged)
             existing.copy(attribution = merged)
         }
         flushPending(appUserId)
@@ -230,6 +232,13 @@ internal class AppActorAttributesManager(
         } catch (throwable: Throwable) {
             if (throwable is CancellationException) throw throwable
             AppActorLogger.debug("Attribute flush failed; pending mutations remain queued.")
+        }
+    }
+
+    suspend fun flushPendingForAllUsers() {
+        val appUserIds = queueMutex.withLock { queueStore.pendingAppUserIds() }
+        appUserIds.forEach { appUserId ->
+            flushPending(appUserId)
         }
     }
 
@@ -333,7 +342,9 @@ internal class AppActorAttributesManager(
         queuedAttribution: AppActorAttributionRequestDTO?,
         patch: AppActorAttributionRequestDTO,
     ): AppActorAttributionRequestDTO {
-        val existing = customAttributionSnapshots[appUserId] ?: queuedAttribution
+        val existing = customAttributionSnapshots[appUserId]
+            ?: queueStore.loadAttributionSnapshot(appUserId)
+            ?: queuedAttribution
         return AppActorAttributionRequestDTO(
             provider = patch.provider,
             status = patch.status ?: existing?.status,
