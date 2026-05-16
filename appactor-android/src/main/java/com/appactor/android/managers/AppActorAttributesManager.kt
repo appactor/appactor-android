@@ -155,6 +155,7 @@ internal class AppActorAttributesManager(
     ) {
         val request = attribution.toRequestDTO()
         enqueue(appUserId) { existing ->
+            customAttributionSnapshots[appUserId] = request
             existing.copy(attribution = request)
         }
         flushPending(appUserId)

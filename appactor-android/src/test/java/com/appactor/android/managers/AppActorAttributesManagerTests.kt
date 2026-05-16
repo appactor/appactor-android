@@ -177,6 +177,43 @@ class AppActorAttributesManagerTests {
     }
 
     @Test
+    fun `direct attribution update refreshes custom helper snapshot`() = runBlocking {
+        val backend = FakeAttributesBackendClient()
+        val manager = manager(backend, InMemoryAttributeQueueStore())
+
+        manager.updateCustomAttribution(
+            "user_a",
+            AppActorAttribution(
+                provider = "custom",
+                providerName = "facebook",
+                network = "facebook",
+                source = "facebook",
+            ),
+        )
+        manager.updateAttribution(
+            "user_a",
+            AppActorAttribution(
+                provider = "custom",
+                providerName = "tiktok",
+                network = "tiktok",
+                source = "tiktok",
+            ),
+        )
+        manager.updateCustomAttribution(
+            "user_a",
+            AppActorAttribution(provider = "custom", campaignName = "spring_sale", campaign = "spring_sale"),
+        )
+
+        val request = backend.attributionRequests.last().second
+        assertEquals("custom", request.provider)
+        assertEquals("tiktok", request.providerName)
+        assertEquals("tiktok", request.network)
+        assertEquals("tiktok", request.source)
+        assertEquals("spring_sale", request.campaignName)
+        assertEquals("spring_sale", request.campaign)
+    }
+
+    @Test
     fun `custom attribution helper state is isolated per app user id`() = runBlocking {
         val backend = FakeAttributesBackendClient()
         val manager = manager(backend, InMemoryAttributeQueueStore())
