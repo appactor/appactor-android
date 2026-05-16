@@ -176,18 +176,16 @@ internal class AppActorAttributesManager(
         flushPending(appUserId)
     }
 
-    suspend fun postAttributionBestEffort(
+    suspend fun enqueueAttributionRequest(
         appUserId: String,
         request: AppActorAttributionRequestDTO,
-    ): Boolean {
-        return try {
-            backendClient.postAttribution(appUserId, request)
-            true
-        } catch (throwable: Throwable) {
-            if (throwable is CancellationException) throw throwable
-            AppActorLogger.debug("Attribution update failed; payload was not logged.")
-            false
+    ) {
+        enqueue(appUserId) { existing ->
+            customAttributionSnapshots[appUserId] = request
+            queueStore.saveAttributionSnapshot(appUserId, request)
+            existing.copy(attribution = request)
         }
+        flushPending(appUserId)
     }
 
     suspend fun flushPending(appUserId: String) {
