@@ -15,7 +15,6 @@ import io.mockk.mockk
 import io.mockk.verify
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -24,9 +23,9 @@ import org.robolectric.RobolectricTestRunner
 class AppActorInstallReferrerManagerTests {
 
     @Test
-    fun `fetchReferrerOnce returns cached referrer without connecting`() = runBlocking {
+    fun `fetchReferrerOnce returns hashed cached referrer without connecting`() = runBlocking {
         val store = mockk<AppActorIdentityStore>(relaxed = true)
-        every { store.installReferrer } returns "utm_source=google&utm_medium=cpc"
+        every { store.installReferrer } returns "sha256:existing"
         every { store.currentAppUserId } returns "user_123"
         every { store.installId } returns "install_123"
 
@@ -37,25 +36,40 @@ class AppActorInstallReferrerManagerTests {
 
         val result = manager.fetchReferrerOnce()
 
-        assertEquals("utm_source=google&utm_medium=cpc", result)
+        assertEquals("sha256:existing", result)
         verify(exactly = 0) { store.setInstallReferrer(any()) }
     }
 
     @Test
-    fun `fetchReferrerOnce skips fetch when referrer already persisted`() = runBlocking {
+    fun `fetchReferrerOnce upgrades legacy raw cached referrer into queued attribution`() = runBlocking {
         val store = mockk<AppActorIdentityStore>(relaxed = true)
-        every { store.installReferrer } returns "existing_referrer"
+        every { store.installReferrer } returns "utm_source=google&utm_campaign=spring"
         every { store.currentAppUserId } returns "user_123"
         every { store.installId } returns "install_123"
+        val backend = mockk<AppActorBackendClient>(relaxed = true)
+        coEvery { backend.postAttribution(any(), any()) } throws AppActorBackendException.Network("offline")
+        val queueStore = InMemoryAttributeQueueStore()
+        val attributesManager = AppActorAttributesManager(
+            backendClient = backend,
+            queueStore = queueStore,
+            identityStore = store,
+            packageName = "com.appactor.test",
+            appVersionProvider = { "1.0.0" },
+            countryProvider = { "TR" },
+        )
 
         val manager = AppActorInstallReferrerManager(
             context = androidx.test.core.app.ApplicationProvider.getApplicationContext(),
             identityStore = store,
+            attributesManager = attributesManager,
         )
 
         val result = manager.fetchReferrerOnce()
 
-        assertEquals("existing_referrer", result)
+        assertEquals(true, result?.startsWith("sha256:"))
+        assertEquals("google", queueStore.load("user_123")?.attribution?.source)
+        assertEquals("spring", queueStore.load("user_123")?.attribution?.campaign)
+        verify { store.setInstallReferrer(match { it.startsWith("sha256:") }) }
     }
 
     @Test
@@ -104,14 +118,15 @@ class AppActorInstallReferrerManagerTests {
     }
 
     @Test
-    fun `persistAndSendReferrer does not cache referrer when attribution delivery fails`() = runBlocking {
+    fun `persistAndSendReferrer queues attribution and caches hash when delivery fails`() = runBlocking {
         val store = mockk<AppActorIdentityStore>(relaxed = true)
         every { store.installId } returns "install_123"
         val backend = mockk<AppActorBackendClient>(relaxed = true)
         coEvery { backend.postAttribution(any(), any()) } throws AppActorBackendException.Network("offline")
+        val queueStore = InMemoryAttributeQueueStore()
         val attributesManager = AppActorAttributesManager(
             backendClient = backend,
-            queueStore = InMemoryAttributeQueueStore(),
+            queueStore = queueStore,
             identityStore = store,
             packageName = "com.appactor.test",
             appVersionProvider = { "1.0.0" },
@@ -133,27 +148,48 @@ class AppActorInstallReferrerManagerTests {
             ),
         )
 
-        assertNull(persisted)
-        verify(exactly = 0) { store.setInstallReferrer(any()) }
+        assertEquals(true, persisted?.startsWith("sha256:"))
+        assertEquals("google", queueStore.load("user_123")?.attribution?.source)
+        assertEquals("spring", queueStore.load("user_123")?.attribution?.campaign)
+        verify { store.setInstallReferrer(match { it.startsWith("sha256:") }) }
     }
 
     private class InMemoryAttributeQueueStore : AppActorAttributeQueueStore {
-        override fun load(appUserId: String): AppActorQueuedAttributeMutation? = null
+        private val mutations = linkedMapOf<String, AppActorQueuedAttributeMutation>()
+        private val snapshots = linkedMapOf<String, AppActorAttributionRequestDTO>()
+
+        override fun load(appUserId: String): AppActorQueuedAttributeMutation? = mutations[appUserId]
 
         override fun save(
             appUserId: String,
             mutation: AppActorQueuedAttributeMutation?,
-        ) = Unit
+        ) {
+            if (mutation == null || mutation.isEmpty()) {
+                mutations.remove(appUserId)
+            } else {
+                mutations[appUserId] = mutation
+            }
+        }
 
-        override fun pendingAppUserIds(): List<String> = emptyList()
+        override fun pendingAppUserIds(): List<String> = mutations.keys.sorted()
 
-        override fun loadAttributionSnapshot(appUserId: String): com.appactor.android.backend.dto.AppActorAttributionRequestDTO? = null
+        override fun loadAttributionSnapshot(appUserId: String): com.appactor.android.backend.dto.AppActorAttributionRequestDTO? =
+            snapshots[appUserId]
 
         override fun saveAttributionSnapshot(
             appUserId: String,
             attribution: com.appactor.android.backend.dto.AppActorAttributionRequestDTO?,
-        ) = Unit
+        ) {
+            if (attribution == null) {
+                snapshots.remove(appUserId)
+            } else {
+                snapshots[appUserId] = attribution
+            }
+        }
 
-        override fun clearAll() = Unit
+        override fun clearAll() {
+            mutations.clear()
+            snapshots.clear()
+        }
     }
 }

@@ -24,8 +24,16 @@ internal class AppActorInstallReferrerManager(
 ) {
 
     suspend fun fetchReferrerOnce(): String? {
-        if (!identityStore.installReferrer.isNullOrBlank()) {
-            return identityStore.installReferrer
+        val cachedReferrer = identityStore.installReferrer
+        if (!cachedReferrer.isNullOrBlank()) {
+            if (cachedReferrer.startsWith(PERSISTED_REFERRER_HASH_PREFIX)) {
+                return cachedReferrer
+            }
+            val appUserId = identityStore.currentAppUserId ?: identityStore.ensureAppUserId()
+            return persistAndSendReferrer(
+                appUserId = appUserId,
+                details = AppActorInstallReferrerDetails(installReferrer = cachedReferrer),
+            )
         }
 
         val appUserId = identityStore.currentAppUserId ?: identityStore.ensureAppUserId()
@@ -42,12 +50,11 @@ internal class AppActorInstallReferrerManager(
     ): String? {
         val rawReferrer = details.installReferrer.takeIf { it.isNotBlank() } ?: return null
         val referrerHash = sha256(rawReferrer)
-        val persistedValue = "sha256:$referrerHash"
-        val delivered = attributesManager?.postAttributionBestEffort(
+        val persistedValue = "$PERSISTED_REFERRER_HASH_PREFIX$referrerHash"
+        attributesManager?.enqueueAttributionRequest(
             appUserId = appUserId,
             request = details.toAttributionRequest(referrerHash),
-        ) ?: true
-        if (!delivered) return null
+        )
         identityStore.setInstallReferrer(persistedValue)
         return persistedValue
     }
@@ -157,6 +164,7 @@ internal class AppActorInstallReferrerManager(
     }
 
     private companion object {
+        const val PERSISTED_REFERRER_HASH_PREFIX = "sha256:"
         const val MAX_REFERRER_METADATA_LENGTH = 256
         val REFERRER_METADATA_KEYS = setOf(
             "utm_source",
