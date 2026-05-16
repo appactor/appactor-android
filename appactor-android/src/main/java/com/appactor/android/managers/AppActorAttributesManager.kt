@@ -31,6 +31,7 @@ internal class AppActorAttributesManager(
     private val countryProvider: () -> String?,
 ) {
     private val queueMutex = Mutex()
+    private var customAttributionSnapshots: MutableMap<String, AppActorAttributionRequestDTO> = mutableMapOf()
 
     suspend fun setAttributes(
         appUserId: String,
@@ -159,6 +160,19 @@ internal class AppActorAttributesManager(
         flushPending(appUserId)
     }
 
+    suspend fun updateCustomAttribution(
+        appUserId: String,
+        patch: AppActorAttribution,
+    ) {
+        val patchRequest = patch.toRequestDTO()
+        enqueue(appUserId) { existing ->
+            val merged = mergeCustomAttribution(appUserId, existing.attribution, patchRequest)
+            customAttributionSnapshots[appUserId] = merged
+            existing.copy(attribution = merged)
+        }
+        flushPending(appUserId)
+    }
+
     suspend fun postAttributionBestEffort(
         appUserId: String,
         request: AppActorAttributionRequestDTO,
@@ -219,6 +233,7 @@ internal class AppActorAttributesManager(
     }
 
     fun clearQueue() {
+        customAttributionSnapshots.clear()
         queueStore.clearAll()
     }
 
@@ -310,6 +325,42 @@ internal class AppActorAttributesManager(
     private fun <K, V> Map<K, V>.takeLastBounded(max: Int): Map<K, V> {
         if (size <= max) return this
         return entries.toList().takeLast(max).associate { it.key to it.value }
+    }
+
+    private fun mergeCustomAttribution(
+        appUserId: String,
+        queuedAttribution: AppActorAttributionRequestDTO?,
+        patch: AppActorAttributionRequestDTO,
+    ): AppActorAttributionRequestDTO {
+        val existing = customAttributionSnapshots[appUserId] ?: queuedAttribution
+        return AppActorAttributionRequestDTO(
+            provider = patch.provider,
+            status = patch.status ?: existing?.status,
+            providerName = patch.providerName ?: existing?.providerName,
+            campaignId = patch.campaignId ?: existing?.campaignId,
+            campaignName = patch.campaignName ?: existing?.campaignName,
+            adGroupId = patch.adGroupId ?: existing?.adGroupId,
+            adGroupName = patch.adGroupName ?: existing?.adGroupName,
+            adId = patch.adId ?: existing?.adId,
+            adName = patch.adName ?: existing?.adName,
+            creativeId = patch.creativeId ?: existing?.creativeId,
+            creativeName = patch.creativeName ?: existing?.creativeName,
+            keywordId = patch.keywordId ?: existing?.keywordId,
+            network = patch.network ?: existing?.network,
+            campaign = patch.campaign ?: existing?.campaign,
+            adGroup = patch.adGroup ?: existing?.adGroup,
+            ad = patch.ad ?: existing?.ad,
+            creative = patch.creative ?: existing?.creative,
+            keyword = patch.keyword ?: existing?.keyword,
+            source = patch.source ?: existing?.source,
+            medium = patch.medium ?: existing?.medium,
+            clickId = patch.clickId ?: existing?.clickId,
+            identifiers = (existing?.identifiers ?: emptyMap()) + patch.identifiers,
+            metadata = (existing?.metadata ?: emptyMap()) + patch.metadata,
+            attributedAt = patch.attributedAt ?: existing?.attributedAt,
+            observedAt = patch.observedAt ?: existing?.observedAt,
+            sdkVersion = patch.sdkVersion ?: existing?.sdkVersion,
+        )
     }
 
     private fun <T> Iterable<T>.takeLastBounded(max: Int): List<T> {

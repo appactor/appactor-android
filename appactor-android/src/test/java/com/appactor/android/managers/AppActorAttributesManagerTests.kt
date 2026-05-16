@@ -149,6 +149,62 @@ class AppActorAttributesManagerTests {
     }
 
     @Test
+    fun `custom attribution helper updates merge into the current payload`() = runBlocking {
+        val backend = FakeAttributesBackendClient()
+        val manager = manager(backend, InMemoryAttributeQueueStore())
+
+        manager.updateCustomAttribution(
+            "user_a",
+            AppActorAttribution(
+                provider = "custom",
+                providerName = "facebook",
+                network = "facebook",
+                source = "facebook",
+            ),
+        )
+        manager.updateCustomAttribution(
+            "user_a",
+            AppActorAttribution(provider = "custom", campaignName = "spring_sale", campaign = "spring_sale"),
+        )
+
+        val request = backend.attributionRequests.last().second
+        assertEquals("custom", request.provider)
+        assertEquals("facebook", request.providerName)
+        assertEquals("facebook", request.network)
+        assertEquals("facebook", request.source)
+        assertEquals("spring_sale", request.campaignName)
+        assertEquals("spring_sale", request.campaign)
+    }
+
+    @Test
+    fun `custom attribution helper state is isolated per app user id`() = runBlocking {
+        val backend = FakeAttributesBackendClient()
+        val manager = manager(backend, InMemoryAttributeQueueStore())
+
+        manager.updateCustomAttribution(
+            "user_a",
+            AppActorAttribution(
+                provider = "custom",
+                providerName = "facebook",
+                network = "facebook",
+                source = "facebook",
+            ),
+        )
+        manager.updateCustomAttribution(
+            "user_b",
+            AppActorAttribution(provider = "custom", campaignName = "spring_sale", campaign = "spring_sale"),
+        )
+
+        val request = backend.attributionRequests.last().second
+        assertEquals("custom", request.provider)
+        assertNull(request.providerName)
+        assertNull(request.network)
+        assertNull(request.source)
+        assertEquals("spring_sale", request.campaignName)
+        assertEquals("spring_sale", request.campaign)
+    }
+
+    @Test
     fun `attribution updates remain queued when offline and flush later`() = runBlocking {
         val backend = FakeAttributesBackendClient(failMutations = true)
         val store = InMemoryAttributeQueueStore()
