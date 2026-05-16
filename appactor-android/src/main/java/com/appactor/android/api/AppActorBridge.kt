@@ -12,6 +12,7 @@ import com.appactor.android.models.AppActorConfigValue
 import com.appactor.android.models.AppActorCompletionCallback
 import com.appactor.android.models.AppActorCustomerInfo
 import com.appactor.android.models.AppActorExperimentAssignment
+import com.appactor.android.models.AppActorIntegrationIdentifier
 import com.appactor.android.models.AppActorOfferings
 import com.appactor.android.models.AppActorOfferingsFetchPolicy
 import com.appactor.android.models.AppActorOptions
@@ -312,7 +313,7 @@ public object AppActorBridge {
     @JvmStatic
     @JvmOverloads
     public fun setAttributes(
-        attributes: Map<String, AppActorAttributeValue?>,
+        attributes: Map<String, AppActorAttributeValue>,
         onComplete: AppActorCompletionCallback? = null,
         onError: AppActorBridgeErrorCallback? = null,
     ): Unit = AppActor.launchAsync(
@@ -420,12 +421,169 @@ public object AppActorBridge {
 
     @JvmStatic
     @JvmOverloads
+    public fun setIntegrationIdentifier(
+        type: AppActorIntegrationIdentifier,
+        value: String,
+        onComplete: AppActorCompletionCallback? = null,
+        onError: AppActorBridgeErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.setIntegrationIdentifier(type, value) },
+        onComplete = onComplete,
+        onError = onError.asSdkErrorCallback(),
+    )
+
+    @JvmStatic
+    @JvmOverloads
+    public fun setAppsflyerID(
+        appsflyerID: String,
+        onComplete: AppActorCompletionCallback? = null,
+        onError: AppActorBridgeErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.setAppsflyerID(appsflyerID) },
+        onComplete = onComplete,
+        onError = onError.asSdkErrorCallback(),
+    )
+
+    @JvmStatic
+    @JvmOverloads
+    public fun setAppsFlyerID(
+        appsFlyerID: String,
+        onComplete: AppActorCompletionCallback? = null,
+        onError: AppActorBridgeErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.setAppsFlyerID(appsFlyerID) },
+        onComplete = onComplete,
+        onError = onError.asSdkErrorCallback(),
+    )
+
+    @JvmStatic
+    @JvmOverloads
+    public fun setAdjustID(
+        adjustID: String,
+        onComplete: AppActorCompletionCallback? = null,
+        onError: AppActorBridgeErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.setAdjustID(adjustID) },
+        onComplete = onComplete,
+        onError = onError.asSdkErrorCallback(),
+    )
+
+    @JvmStatic
+    @JvmOverloads
+    public fun setBranchID(
+        branchID: String,
+        onComplete: AppActorCompletionCallback? = null,
+        onError: AppActorBridgeErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.setBranchID(branchID) },
+        onComplete = onComplete,
+        onError = onError.asSdkErrorCallback(),
+    )
+
+    @JvmStatic
+    @JvmOverloads
+    public fun setFirebaseAppInstanceID(
+        firebaseAppInstanceID: String,
+        onComplete: AppActorCompletionCallback? = null,
+        onError: AppActorBridgeErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.setFirebaseAppInstanceID(firebaseAppInstanceID) },
+        onComplete = onComplete,
+        onError = onError.asSdkErrorCallback(),
+    )
+
+    @JvmStatic
+    @JvmOverloads
+    public fun setOneSignalID(
+        oneSignalID: String,
+        onComplete: AppActorCompletionCallback? = null,
+        onError: AppActorBridgeErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.setOneSignalID(oneSignalID) },
+        onComplete = onComplete,
+        onError = onError.asSdkErrorCallback(),
+    )
+
+    @JvmStatic
+    @JvmOverloads
     public fun updateAttribution(
         attribution: AppActorAttribution,
         onComplete: AppActorCompletionCallback? = null,
         onError: AppActorBridgeErrorCallback? = null,
     ): Unit = AppActor.launchAsync(
         operation = { AppActor.updateAttribution(attribution) },
+        onComplete = onComplete,
+        onError = onError.asSdkErrorCallback(),
+    )
+
+    @JvmStatic
+    @JvmOverloads
+    public fun setMediaSource(
+        mediaSource: String,
+        onComplete: AppActorCompletionCallback? = null,
+        onError: AppActorBridgeErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.setMediaSource(mediaSource) },
+        onComplete = onComplete,
+        onError = onError.asSdkErrorCallback(),
+    )
+
+    @JvmStatic
+    @JvmOverloads
+    public fun setCampaign(
+        campaign: String,
+        onComplete: AppActorCompletionCallback? = null,
+        onError: AppActorBridgeErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.setCampaign(campaign) },
+        onComplete = onComplete,
+        onError = onError.asSdkErrorCallback(),
+    )
+
+    @JvmStatic
+    @JvmOverloads
+    public fun setAdGroup(
+        adGroup: String,
+        onComplete: AppActorCompletionCallback? = null,
+        onError: AppActorBridgeErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.setAdGroup(adGroup) },
+        onComplete = onComplete,
+        onError = onError.asSdkErrorCallback(),
+    )
+
+    @JvmStatic
+    @JvmOverloads
+    public fun setAd(
+        ad: String,
+        onComplete: AppActorCompletionCallback? = null,
+        onError: AppActorBridgeErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.setAd(ad) },
+        onComplete = onComplete,
+        onError = onError.asSdkErrorCallback(),
+    )
+
+    @JvmStatic
+    @JvmOverloads
+    public fun setKeyword(
+        keyword: String,
+        onComplete: AppActorCompletionCallback? = null,
+        onError: AppActorBridgeErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.setKeyword(keyword) },
+        onComplete = onComplete,
+        onError = onError.asSdkErrorCallback(),
+    )
+
+    @JvmStatic
+    @JvmOverloads
+    public fun setCreative(
+        creative: String,
+        onComplete: AppActorCompletionCallback? = null,
+        onError: AppActorBridgeErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.setCreative(creative) },
         onComplete = onComplete,
         onError = onError.asSdkErrorCallback(),
     )

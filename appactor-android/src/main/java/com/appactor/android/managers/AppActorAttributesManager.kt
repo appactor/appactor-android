@@ -20,6 +20,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.util.Locale
+import java.util.TimeZone
 
 internal class AppActorAttributesManager(
     private val backendClient: AppActorBackendClient,
@@ -109,10 +110,7 @@ internal class AppActorAttributesManager(
         value: String,
     ) {
         val normalizedType = AppActorAttributesValidation.normalizeIntegrationIdentifierType(type)
-        require(value.isNotBlank()) { "Integration identifier value must not be blank." }
-        require(value.length <= MAX_IDENTIFIER_VALUE_LENGTH) {
-            "Integration identifier value must be at most $MAX_IDENTIFIER_VALUE_LENGTH characters."
-        }
+        AppActorAttributesValidation.validateIntegrationIdentifierValue(value)
         enqueue(appUserId) { existing ->
             existing.copy(
                 integrationIdentifiers = (existing.integrationIdentifiers + (normalizedType to value))
@@ -126,6 +124,8 @@ internal class AppActorAttributesManager(
         val attributes = buildMap<String, AppActorAttributeValue> {
             put(AppActorAttributeReservedKeys.bundleId, AppActorAttributeValue.string(packageName))
             put(AppActorAttributeReservedKeys.locale, AppActorAttributeValue.string(Locale.getDefault().toLanguageTag()))
+            put(AppActorAttributeReservedKeys.timezone, AppActorAttributeValue.string(TimeZone.getDefault().id))
+            put(AppActorAttributeReservedKeys.platform, AppActorAttributeValue.string("android"))
             Build.MODEL?.takeIf { it.isNotBlank() }?.let {
                 put(AppActorAttributeReservedKeys.deviceModel, AppActorAttributeValue.string(it))
             }
@@ -153,7 +153,10 @@ internal class AppActorAttributesManager(
         attribution: AppActorAttribution,
     ) {
         val request = attribution.toRequestDTO()
-        backendClient.postAttribution(appUserId, request)
+        enqueue(appUserId) { existing ->
+            existing.copy(attribution = request)
+        }
+        flushPending(appUserId)
     }
 
     suspend fun postAttributionBestEffort(
@@ -201,6 +204,9 @@ internal class AppActorAttributesManager(
                         observedAt = AppActorIso8601.format(java.util.Date()),
                     ),
                 )
+            }
+            pending.attribution?.let { request ->
+                backendClient.postAttribution(appUserId, request)
             }
             queueMutex.withLock {
                 val current = queueStore.load(appUserId)
@@ -285,6 +291,7 @@ internal class AppActorAttributesManager(
             attributes = attributes.takeLastBounded(MAX_PENDING_ATTRIBUTES),
             unsetAttributes = unsetAttributes.takeLastBounded(MAX_PENDING_ATTRIBUTES),
             integrationIdentifiers = integrationIdentifiers.takeLastBounded(MAX_PENDING_INTEGRATION_IDENTIFIERS),
+            attribution = attribution,
         )
     }
 
@@ -297,6 +304,7 @@ internal class AppActorAttributesManager(
             integrationIdentifiers = integrationIdentifiers.filterNot { (type, value) ->
                 flushed.integrationIdentifiers[type] == value
             },
+            attribution = attribution.takeUnless { attribution == flushed.attribution },
         ).takeBounded()
 
     private fun <K, V> Map<K, V>.takeLastBounded(max: Int): Map<K, V> {
@@ -313,6 +321,5 @@ internal class AppActorAttributesManager(
     private companion object {
         const val MAX_PENDING_ATTRIBUTES = 100
         const val MAX_PENDING_INTEGRATION_IDENTIFIERS = 50
-        const val MAX_IDENTIFIER_VALUE_LENGTH = 1_024
     }
 }

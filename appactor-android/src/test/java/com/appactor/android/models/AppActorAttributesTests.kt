@@ -76,5 +76,67 @@ class AppActorAttributesTests {
             AppActorAttributesValidation.validateValue(AppActorAttributeValue.stringArray(List(21) { "v$it" }))
         }.exceptionOrNull()
         assertTrue(longArrayFailure is IllegalArgumentException)
+
+        @Suppress("DEPRECATION")
+        val dateArrayFailure = runCatching {
+            AppActorAttributesValidation.validateValue(AppActorAttributeValue.dateArray(listOf(Date(0))))
+        }.exceptionOrNull()
+        assertTrue(dateArrayFailure is IllegalArgumentException)
+    }
+
+    @Test
+    fun `integration identifiers validate type and value shape`() {
+        assertEquals("appsflyer_id", AppActorAttributesValidation.normalizeIntegrationIdentifierType("appsflyer_id"))
+        assertTrue(
+            runCatching { AppActorAttributesValidation.normalizeIntegrationIdentifierType("bad key") }.exceptionOrNull()
+                is IllegalArgumentException,
+        )
+        assertTrue(
+            runCatching { AppActorAttributesValidation.validateIntegrationIdentifierValue(" padded") }.exceptionOrNull()
+                is IllegalArgumentException,
+        )
+        assertTrue(
+            runCatching { AppActorAttributesValidation.validateIntegrationIdentifierValue("x".repeat(1_025)) }
+                .exceptionOrNull() is IllegalArgumentException,
+        )
+    }
+
+    @Test
+    fun `attribution canonical fields validate before sending`() {
+        assertTrue(
+            runCatching { AppActorAttribution(provider = "custom", providerName = " facebook") }.exceptionOrNull()
+                is IllegalArgumentException,
+        )
+        assertTrue(
+            runCatching { AppActorAttribution(provider = "x".repeat(65), campaignName = "spring") }.exceptionOrNull()
+                is IllegalArgumentException,
+        )
+        assertTrue(
+            runCatching { AppActorAttribution(provider = "custom", campaignName = "x".repeat(1_025)) }
+                .exceptionOrNull() is IllegalArgumentException,
+        )
+        assertTrue(
+            runCatching {
+                AppActorAttribution(
+                    provider = "custom",
+                    metadata = mapOf("appactor.private" to AppActorAttributeValue.string("x")),
+                )
+            }.exceptionOrNull() is IllegalArgumentException,
+        )
+    }
+
+    @Test
+    fun `profile helpers validate email and phone formats`() {
+        assertEquals(Unit, AppActorAttributesValidation.validateEmail("user@example.com"))
+        assertEquals(Unit, AppActorAttributesValidation.validatePhoneNumber("+15551234567"))
+
+        assertTrue(
+            runCatching { AppActorAttributesValidation.validateEmail("bad-email") }.exceptionOrNull()
+                is IllegalArgumentException,
+        )
+        assertTrue(
+            runCatching { AppActorAttributesValidation.validatePhoneNumber("abc") }.exceptionOrNull()
+                is IllegalArgumentException,
+        )
     }
 }

@@ -22,6 +22,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import java.util.Date
 
 class PluginRequestRouterTests {
 
@@ -271,11 +272,12 @@ class PluginRequestRouterTests {
                 """
                 {
                   "attributes": {
-                    "favorite_color": "blue",
-                    "age": 42,
-                    "subscriber": true,
-                    "tags": ["alpha", "beta"],
-                    "old_key": null
+                  "favorite_color": "blue",
+                  "age": 42,
+                  "subscriber": true,
+                  "tags": ["alpha", "beta"],
+                  "flags": [true, false],
+                  "last_seen": { "value": "1970-01-01T00:00:00.123456Z", "valueType": "date" }
                   }
                 }
                 """.trimIndent(),
@@ -284,18 +286,29 @@ class PluginRequestRouterTests {
             assertTrue(result is PluginResult.Success)
             coVerify(exactly = 1) {
                 AppActor.setAttributes(
-                    withArg<Map<String, AppActorAttributeValue?>> { attributes ->
+                    withArg<Map<String, AppActorAttributeValue>> { attributes ->
                         assertEquals(AppActorAttributeValue.string("blue"), attributes["favorite_color"])
                         assertEquals(AppActorAttributeValue.number(42.0), attributes["age"])
                         assertEquals(AppActorAttributeValue.bool(true), attributes["subscriber"])
                         assertEquals(AppActorAttributeValue.stringArray(listOf("alpha", "beta")), attributes["tags"])
-                        assertEquals(null, attributes["old_key"])
+                        assertEquals(AppActorAttributeValue.boolArray(listOf(true, false)), attributes["flags"])
+                        assertEquals(AppActorAttributeValue.date(Date(123)), attributes["last_seen"])
                     },
                 )
             }
         } finally {
             unmockkObject(AppActor)
         }
+    }
+
+    @Test
+    fun `set attributes rejects null values because unset has a dedicated method`() = runBlocking {
+        val result = PluginRequestRouter.route(
+            "set_attributes",
+            """{"attributes":{"old_key":null}}""",
+        )
+
+        assertTrue(result is PluginResult.Error)
     }
 
     @Test

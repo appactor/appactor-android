@@ -8,6 +8,7 @@ import com.appactor.android.models.AppActorCompletionCallback
 import com.appactor.android.models.AppActorCustomerInfo
 import com.appactor.android.models.AppActorErrorCallback
 import com.appactor.android.models.AppActorExperimentAssignment
+import com.appactor.android.models.AppActorIntegrationIdentifier
 import com.appactor.android.models.AppActorOfferings
 import com.appactor.android.models.AppActorOptions
 import com.appactor.android.models.AppActorPackage
@@ -176,7 +177,7 @@ public object AppActorJava {
 
     @JvmStatic
     public fun setAttributesAsync(
-        attributes: Map<String, AppActorAttributeValue?>,
+        attributes: Map<String, AppActorAttributeValue>,
         onComplete: AppActorCompletionCallback? = null,
         onError: AppActorErrorCallback? = null,
     ): Unit = AppActor.launchAsync(
@@ -275,12 +276,156 @@ public object AppActorJava {
     )
 
     @JvmStatic
+    public fun setIntegrationIdentifierAsync(
+        type: AppActorIntegrationIdentifier,
+        value: String,
+        onComplete: AppActorCompletionCallback? = null,
+        onError: AppActorErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.setIntegrationIdentifier(type, value) },
+        onComplete = onComplete,
+        onError = onError,
+    )
+
+    @JvmStatic
+    public fun setAppsflyerIDAsync(
+        appsflyerID: String,
+        onComplete: AppActorCompletionCallback? = null,
+        onError: AppActorErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.setAppsflyerID(appsflyerID) },
+        onComplete = onComplete,
+        onError = onError,
+    )
+
+    @JvmStatic
+    public fun setAppsFlyerIDAsync(
+        appsFlyerID: String,
+        onComplete: AppActorCompletionCallback? = null,
+        onError: AppActorErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.setAppsFlyerID(appsFlyerID) },
+        onComplete = onComplete,
+        onError = onError,
+    )
+
+    @JvmStatic
+    public fun setAdjustIDAsync(
+        adjustID: String,
+        onComplete: AppActorCompletionCallback? = null,
+        onError: AppActorErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.setAdjustID(adjustID) },
+        onComplete = onComplete,
+        onError = onError,
+    )
+
+    @JvmStatic
+    public fun setBranchIDAsync(
+        branchID: String,
+        onComplete: AppActorCompletionCallback? = null,
+        onError: AppActorErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.setBranchID(branchID) },
+        onComplete = onComplete,
+        onError = onError,
+    )
+
+    @JvmStatic
+    public fun setFirebaseAppInstanceIDAsync(
+        firebaseAppInstanceID: String,
+        onComplete: AppActorCompletionCallback? = null,
+        onError: AppActorErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.setFirebaseAppInstanceID(firebaseAppInstanceID) },
+        onComplete = onComplete,
+        onError = onError,
+    )
+
+    @JvmStatic
+    public fun setOneSignalIDAsync(
+        oneSignalID: String,
+        onComplete: AppActorCompletionCallback? = null,
+        onError: AppActorErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.setOneSignalID(oneSignalID) },
+        onComplete = onComplete,
+        onError = onError,
+    )
+
+    @JvmStatic
     public fun updateAttributionAsync(
         attribution: AppActorAttribution,
         onComplete: AppActorCompletionCallback? = null,
         onError: AppActorErrorCallback? = null,
     ): Unit = AppActor.launchAsync(
         operation = { AppActor.updateAttribution(attribution) },
+        onComplete = onComplete,
+        onError = onError,
+    )
+
+    @JvmStatic
+    public fun setMediaSourceAsync(
+        mediaSource: String,
+        onComplete: AppActorCompletionCallback? = null,
+        onError: AppActorErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.setMediaSource(mediaSource) },
+        onComplete = onComplete,
+        onError = onError,
+    )
+
+    @JvmStatic
+    public fun setCampaignAsync(
+        campaign: String,
+        onComplete: AppActorCompletionCallback? = null,
+        onError: AppActorErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.setCampaign(campaign) },
+        onComplete = onComplete,
+        onError = onError,
+    )
+
+    @JvmStatic
+    public fun setAdGroupAsync(
+        adGroup: String,
+        onComplete: AppActorCompletionCallback? = null,
+        onError: AppActorErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.setAdGroup(adGroup) },
+        onComplete = onComplete,
+        onError = onError,
+    )
+
+    @JvmStatic
+    public fun setAdAsync(
+        ad: String,
+        onComplete: AppActorCompletionCallback? = null,
+        onError: AppActorErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.setAd(ad) },
+        onComplete = onComplete,
+        onError = onError,
+    )
+
+    @JvmStatic
+    public fun setKeywordAsync(
+        keyword: String,
+        onComplete: AppActorCompletionCallback? = null,
+        onError: AppActorErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.setKeyword(keyword) },
+        onComplete = onComplete,
+        onError = onError,
+    )
+
+    @JvmStatic
+    public fun setCreativeAsync(
+        creative: String,
+        onComplete: AppActorCompletionCallback? = null,
+        onError: AppActorErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.setCreative(creative) },
         onComplete = onComplete,
         onError = onError,
     )

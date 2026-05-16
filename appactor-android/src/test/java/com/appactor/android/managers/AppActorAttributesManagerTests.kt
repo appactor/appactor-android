@@ -21,6 +21,7 @@ import com.appactor.android.backend.dto.AppActorOfferingsEnvelopeDTO
 import com.appactor.android.backend.dto.AppActorRemoteConfigsEnvelopeDTO
 import com.appactor.android.models.AppActorAttributeReservedKeys
 import com.appactor.android.models.AppActorAttributeValue
+import com.appactor.android.models.AppActorAttribution
 import com.appactor.android.storage.AppActorAttributeQueueStore
 import com.appactor.android.storage.AppActorIdentityStore
 import com.appactor.android.storage.AppActorQueuedAttributeMutation
@@ -88,6 +89,21 @@ class AppActorAttributesManagerTests {
     }
 
     @Test
+    fun `reserved helper rejects unknown dollar keys before queueing`() = runBlocking {
+        val backend = FakeAttributesBackendClient()
+        val store = InMemoryAttributeQueueStore()
+        val manager = manager(backend, store)
+
+        val error = runCatching {
+            manager.setReservedString("user_a", "\$notARealReservedKey", "value")
+        }.exceptionOrNull()
+
+        assertEquals(IllegalArgumentException::class.java, error?.javaClass)
+        assertNull(store.load("user_a"))
+        assertEquals(0, backend.patchRequests.size)
+    }
+
+    @Test
     fun `collectDeviceIdentifiers writes backend canonical system keys and integration id`() = runBlocking {
         val backend = FakeAttributesBackendClient()
         val manager = manager(backend, InMemoryAttributeQueueStore())
@@ -97,11 +113,69 @@ class AppActorAttributesManagerTests {
         val attributes = backend.patchRequests.single().second.attributes
         assertEquals(JsonPrimitive("com.appactor.test"), attributes["\$bundleId"])
         assertNotNull(attributes["\$locale"])
+        assertEquals(JsonPrimitive("android"), attributes["\$platform"])
+        assertNotNull(attributes["\$timezone"])
         assertEquals(JsonPrimitive("1.2.3"), attributes["\$appVersion"])
         assertEquals(JsonPrimitive("TR"), attributes["\$storefrontCountry"])
         assertEquals(null, attributes["\$appactorInstallId"])
         assertEquals(null, attributes["\$androidPackageName"])
         assertEquals("appactor_install_id", backend.integrationRequests.single().second.type)
+    }
+
+    @Test
+    fun `attribution request keeps custom provider with canonical acquisition fields`() = runBlocking {
+        val backend = FakeAttributesBackendClient()
+        val manager = manager(backend, InMemoryAttributeQueueStore())
+
+        manager.updateAttribution(
+            "user_a",
+            AppActorAttribution(
+                provider = "custom",
+                providerName = "facebook",
+                network = "facebook",
+                source = "facebook",
+                campaignName = "spring_sale",
+                campaign = "spring_sale",
+            ),
+        )
+
+        val request = backend.attributionRequests.single().second
+        assertEquals("custom", request.provider)
+        assertEquals("facebook", request.providerName)
+        assertEquals("facebook", request.network)
+        assertEquals("facebook", request.source)
+        assertEquals("spring_sale", request.campaignName)
+        assertEquals("spring_sale", request.campaign)
+    }
+
+    @Test
+    fun `attribution updates remain queued when offline and flush later`() = runBlocking {
+        val backend = FakeAttributesBackendClient(failMutations = true)
+        val store = InMemoryAttributeQueueStore()
+        val manager = manager(backend, store)
+
+        manager.updateAttribution(
+            "user_a",
+            AppActorAttribution(
+                provider = "custom",
+                source = "facebook",
+                campaign = "spring_sale",
+            ),
+        )
+
+        val queued = store.load("user_a")
+        assertNotNull(queued)
+        assertEquals("custom", queued?.attribution?.provider)
+        assertEquals(0, backend.attributionRequests.size)
+
+        backend.failMutations = false
+        manager.flushPending("user_a")
+
+        val request = backend.attributionRequests.single().second
+        assertEquals("custom", request.provider)
+        assertEquals("facebook", request.source)
+        assertEquals("spring_sale", request.campaign)
+        assertNull(store.load("user_a"))
     }
 
     private fun manager(

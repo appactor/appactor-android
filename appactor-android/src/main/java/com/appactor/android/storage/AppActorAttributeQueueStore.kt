@@ -3,6 +3,7 @@ package com.appactor.android.storage
 import android.content.Context
 import android.content.SharedPreferences
 import com.appactor.android.backend.client.AppActorBackendJson
+import com.appactor.android.backend.dto.AppActorAttributionRequestDTO
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 
@@ -17,9 +18,13 @@ internal data class AppActorQueuedAttributeMutation(
     val attributes: Map<String, JsonElement> = emptyMap(),
     val unsetAttributes: List<String> = emptyList(),
     val integrationIdentifiers: Map<String, String> = emptyMap(),
+    val attribution: AppActorAttributionRequestDTO? = null,
 ) {
     fun isEmpty(): Boolean =
-        attributes.isEmpty() && unsetAttributes.isEmpty() && integrationIdentifiers.isEmpty()
+        attributes.isEmpty() &&
+            unsetAttributes.isEmpty() &&
+            integrationIdentifiers.isEmpty() &&
+            attribution == null
 }
 
 internal class AppActorSharedPrefsAttributeQueueStore(

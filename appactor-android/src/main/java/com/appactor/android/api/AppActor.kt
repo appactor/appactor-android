@@ -26,6 +26,7 @@ import com.appactor.android.internal.logging.AppActorLogger
 import com.appactor.android.managers.AppActorCustomerManager
 import com.appactor.android.models.AppActorAttributeReservedKeys
 import com.appactor.android.models.AppActorAttributeValue
+import com.appactor.android.models.AppActorAttributesValidation
 import com.appactor.android.models.AppActorAttribution
 import com.appactor.android.models.AppActorCompletionCallback
 import com.appactor.android.models.AppActorConfigValue
@@ -37,6 +38,7 @@ import com.appactor.android.models.AppActorEntitlementInfo
 import com.appactor.android.models.AppActorError
 import com.appactor.android.models.AppActorExperimentAssignment
 import com.appactor.android.models.AppActorErrorCallback
+import com.appactor.android.models.AppActorIntegrationIdentifier
 import com.appactor.android.models.AppActorOfferings
 import com.appactor.android.models.AppActorOfferingsFetchPolicy
 import com.appactor.android.models.AppActorOptions
@@ -671,7 +673,13 @@ public object AppActor {
         return snapshot.runtime.customerManager.activeEntitlementKeysOffline(snapshot.appUserId)
     }
 
-    public suspend fun setAttributes(attributes: Map<String, AppActorAttributeValue?>) {
+    public suspend fun setAttributes(attributes: Map<String, AppActorAttributeValue>) {
+        @Suppress("SENSELESS_COMPARISON")
+        attributes.forEach { (key, value) ->
+            require(value != null) {
+                "Attribute '$key' value cannot be null. Use unsetAttribute(key) to remove an attribute."
+            }
+        }
         executeGuardedRead(resolveAppUserId = true) { snapshot ->
             snapshot.runtime.attributesManager.setAttributes(
                 appUserId = snapshot.appUserId,
@@ -703,6 +711,7 @@ public object AppActor {
     }
 
     public suspend fun setEmail(email: String?) {
+        email?.let(AppActorAttributesValidation::validateEmail)
         setReservedString(AppActorAttributeReservedKeys.email, email)
     }
 
@@ -711,6 +720,7 @@ public object AppActor {
     }
 
     public suspend fun setPhoneNumber(phoneNumber: String?) {
+        phoneNumber?.let(AppActorAttributesValidation::validatePhoneNumber)
         setReservedString(AppActorAttributeReservedKeys.phoneNumber, phoneNumber)
     }
 
@@ -737,6 +747,37 @@ public object AppActor {
         }
     }
 
+    public suspend fun setIntegrationIdentifier(
+        type: AppActorIntegrationIdentifier,
+        value: String,
+    ) {
+        setIntegrationIdentifier(type.wireValue, value)
+    }
+
+    public suspend fun setAppsflyerID(appsflyerID: String) {
+        setIntegrationIdentifier(AppActorIntegrationIdentifier.AppsFlyerId, appsflyerID)
+    }
+
+    public suspend fun setAppsFlyerID(appsFlyerID: String) {
+        setAppsflyerID(appsFlyerID)
+    }
+
+    public suspend fun setAdjustID(adjustID: String) {
+        setIntegrationIdentifier(AppActorIntegrationIdentifier.AdjustId, adjustID)
+    }
+
+    public suspend fun setBranchID(branchID: String) {
+        setIntegrationIdentifier(AppActorIntegrationIdentifier.BranchId, branchID)
+    }
+
+    public suspend fun setFirebaseAppInstanceID(firebaseAppInstanceID: String) {
+        setIntegrationIdentifier(AppActorIntegrationIdentifier.FirebaseAppInstanceId, firebaseAppInstanceID)
+    }
+
+    public suspend fun setOneSignalID(oneSignalID: String) {
+        setIntegrationIdentifier(AppActorIntegrationIdentifier.OneSignalId, oneSignalID)
+    }
+
     public suspend fun updateAttribution(attribution: AppActorAttribution) {
         executeGuardedRead(resolveAppUserId = true) { snapshot ->
             snapshot.runtime.attributesManager.updateAttribution(
@@ -744,6 +785,37 @@ public object AppActor {
                 attribution = attribution,
             )
         }
+    }
+
+    public suspend fun setMediaSource(mediaSource: String) {
+        updateAttribution(
+            AppActorAttribution(
+                provider = "custom",
+                providerName = mediaSource,
+                network = mediaSource,
+                source = mediaSource,
+            ),
+        )
+    }
+
+    public suspend fun setCampaign(campaign: String) {
+        updateAttribution(AppActorAttribution(provider = "custom", campaignName = campaign, campaign = campaign))
+    }
+
+    public suspend fun setAdGroup(adGroup: String) {
+        updateAttribution(AppActorAttribution(provider = "custom", adGroupName = adGroup, adGroup = adGroup))
+    }
+
+    public suspend fun setAd(ad: String) {
+        updateAttribution(AppActorAttribution(provider = "custom", adName = ad, ad = ad))
+    }
+
+    public suspend fun setKeyword(keyword: String) {
+        updateAttribution(AppActorAttribution(provider = "custom", keyword = keyword))
+    }
+
+    public suspend fun setCreative(creative: String) {
+        updateAttribution(AppActorAttribution(provider = "custom", creativeName = creative, creative = creative))
     }
 
     public suspend fun getRemoteConfigs(): AppActorRemoteConfigs {
