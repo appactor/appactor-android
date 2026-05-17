@@ -241,6 +241,26 @@ internal object AppActorAttributesValidation {
     private const val maxStringLength = 1_024
     private const val maxArrayLength = 20
     private val keyRegex = Regex("^[A-Za-z0-9_.:-]+$")
+    private val legacyProfileCurrentAliases = setOf(
+        "appVersion",
+        "appBuild",
+        "sdkVersion",
+        "platform",
+        "platformFlavor",
+        "platformVersion",
+        "osVersion",
+        "deviceModel",
+        "bundleId",
+        "locale",
+        "timezone",
+        "storefrontCountry",
+        "ipCountry",
+        "localeCountry",
+        "attConsentStatus",
+        "deviceLocale",
+        "userCountry",
+        "userCountrySource",
+    )
 
     fun normalizeCustomKey(key: String): String {
         val normalized = key.trim()
@@ -257,6 +277,9 @@ internal object AppActorAttributesValidation {
         }
         require(!normalized.startsWith("integration.", ignoreCase = true)) {
             "Custom attribute keys must not start with 'integration.'. Use setIntegrationIdentifier() instead."
+        }
+        require(!legacyProfileCurrentAliases.contains(normalized)) {
+            "Custom attribute key '$normalized' is reserved for profile context. Use collectDeviceIdentifiers() or the reserved '$' helper key instead."
         }
         return normalized
     }
