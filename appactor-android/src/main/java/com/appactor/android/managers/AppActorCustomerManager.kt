@@ -60,6 +60,8 @@ internal class AppActorCustomerManager(
                 deviceLocale = Locale.getDefault().toLanguageTag(),
                 deviceModel = Build.MODEL,
                 osVersion = Build.VERSION.RELEASE,
+                platformFlavor = configuration.options.platformInfo?.flavor?.trim()?.takeIf { it.isNotEmpty() },
+                platformVersion = configuration.options.platformInfo?.version?.trim()?.takeIf { it.isNotEmpty() },
             )
         )
         val body = requireNotNull(response.body) { "Identify response body was null." }

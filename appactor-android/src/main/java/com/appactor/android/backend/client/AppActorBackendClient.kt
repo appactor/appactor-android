@@ -65,6 +65,11 @@ internal interface AppActorBackendClient {
         request: AppActorIntegrationIdentifierRequestDTO,
     ): AppActorBackendHttpResponse<Unit>
 
+    suspend fun deleteIntegrationIdentifier(
+        appUserId: String,
+        type: String,
+    ): AppActorBackendHttpResponse<Unit>
+
     suspend fun postAttribution(
         appUserId: String,
         request: AppActorAttributionRequestDTO,

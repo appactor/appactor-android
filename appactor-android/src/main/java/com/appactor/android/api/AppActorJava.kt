@@ -177,7 +177,7 @@ public object AppActorJava {
 
     @JvmStatic
     public fun setAttributesAsync(
-        attributes: Map<String, AppActorAttributeValue>,
+        attributes: Map<String, AppActorAttributeValue?>,
         onComplete: AppActorCompletionCallback? = null,
         onError: AppActorErrorCallback? = null,
     ): Unit = AppActor.launchAsync(
@@ -266,7 +266,7 @@ public object AppActorJava {
     @JvmStatic
     public fun setIntegrationIdentifierAsync(
         type: String,
-        value: String,
+        value: String?,
         onComplete: AppActorCompletionCallback? = null,
         onError: AppActorErrorCallback? = null,
     ): Unit = AppActor.launchAsync(
@@ -278,7 +278,7 @@ public object AppActorJava {
     @JvmStatic
     public fun setIntegrationIdentifierAsync(
         type: AppActorIntegrationIdentifier,
-        value: String,
+        value: String?,
         onComplete: AppActorCompletionCallback? = null,
         onError: AppActorErrorCallback? = null,
     ): Unit = AppActor.launchAsync(
@@ -288,8 +288,30 @@ public object AppActorJava {
     )
 
     @JvmStatic
+    public fun unsetIntegrationIdentifierAsync(
+        type: String,
+        onComplete: AppActorCompletionCallback? = null,
+        onError: AppActorErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.unsetIntegrationIdentifier(type) },
+        onComplete = onComplete,
+        onError = onError,
+    )
+
+    @JvmStatic
+    public fun unsetIntegrationIdentifierAsync(
+        type: AppActorIntegrationIdentifier,
+        onComplete: AppActorCompletionCallback? = null,
+        onError: AppActorErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.unsetIntegrationIdentifier(type) },
+        onComplete = onComplete,
+        onError = onError,
+    )
+
+    @JvmStatic
     public fun setAppsflyerIDAsync(
-        appsflyerID: String,
+        appsflyerID: String?,
         onComplete: AppActorCompletionCallback? = null,
         onError: AppActorErrorCallback? = null,
     ): Unit = AppActor.launchAsync(
@@ -300,7 +322,7 @@ public object AppActorJava {
 
     @JvmStatic
     public fun setAppsFlyerIDAsync(
-        appsFlyerID: String,
+        appsFlyerID: String?,
         onComplete: AppActorCompletionCallback? = null,
         onError: AppActorErrorCallback? = null,
     ): Unit = AppActor.launchAsync(
@@ -311,7 +333,7 @@ public object AppActorJava {
 
     @JvmStatic
     public fun setAdjustIDAsync(
-        adjustID: String,
+        adjustID: String?,
         onComplete: AppActorCompletionCallback? = null,
         onError: AppActorErrorCallback? = null,
     ): Unit = AppActor.launchAsync(
@@ -322,7 +344,7 @@ public object AppActorJava {
 
     @JvmStatic
     public fun setBranchIDAsync(
-        branchID: String,
+        branchID: String?,
         onComplete: AppActorCompletionCallback? = null,
         onError: AppActorErrorCallback? = null,
     ): Unit = AppActor.launchAsync(
@@ -333,7 +355,7 @@ public object AppActorJava {
 
     @JvmStatic
     public fun setFirebaseAppInstanceIDAsync(
-        firebaseAppInstanceID: String,
+        firebaseAppInstanceID: String?,
         onComplete: AppActorCompletionCallback? = null,
         onError: AppActorErrorCallback? = null,
     ): Unit = AppActor.launchAsync(
@@ -344,7 +366,7 @@ public object AppActorJava {
 
     @JvmStatic
     public fun setOneSignalIDAsync(
-        oneSignalID: String,
+        oneSignalID: String?,
         onComplete: AppActorCompletionCallback? = null,
         onError: AppActorErrorCallback? = null,
     ): Unit = AppActor.launchAsync(

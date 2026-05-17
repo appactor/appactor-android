@@ -2,6 +2,7 @@ package com.appactor.android.managers
 
 import android.os.Build
 import com.appactor.android.backend.client.AppActorBackendClient
+import com.appactor.android.backend.client.toAppActorError
 import com.appactor.android.backend.dto.AppActorAttributionRequestDTO
 import com.appactor.android.backend.dto.AppActorAttributesPatchRequestDTO
 import com.appactor.android.backend.dto.AppActorIntegrationIdentifierRequestDTO
@@ -28,6 +29,7 @@ internal class AppActorAttributesManager(
     private val identityStore: AppActorIdentityStore,
     private val packageName: String,
     private val appVersionProvider: () -> String?,
+    private val platformInfoProvider: () -> AppActorPlatformInfo? = { null },
     private val countryProvider: () -> String?,
 ) {
     private val queueMutex = Mutex()
@@ -108,13 +110,34 @@ internal class AppActorAttributesManager(
     suspend fun setIntegrationIdentifier(
         appUserId: String,
         type: String,
-        value: String,
+        value: String?,
     ) {
         val normalizedType = AppActorAttributesValidation.normalizeIntegrationIdentifierType(type)
+        if (value == null || value.isEmpty()) {
+            unsetIntegrationIdentifier(appUserId = appUserId, type = normalizedType)
+            return
+        }
         AppActorAttributesValidation.validateIntegrationIdentifierValue(value)
         enqueue(appUserId) { existing ->
             existing.copy(
                 integrationIdentifiers = (existing.integrationIdentifiers + (normalizedType to value))
+                    .takeLastBounded(MAX_PENDING_INTEGRATION_IDENTIFIERS),
+                unsetIntegrationIdentifiers = existing.unsetIntegrationIdentifiers - normalizedType,
+            )
+        }
+        flushPending(appUserId)
+    }
+
+    suspend fun unsetIntegrationIdentifier(
+        appUserId: String,
+        type: String,
+    ) {
+        val normalizedType = AppActorAttributesValidation.normalizeIntegrationIdentifierType(type)
+        enqueue(appUserId) { existing ->
+            existing.copy(
+                integrationIdentifiers = existing.integrationIdentifiers - normalizedType,
+                unsetIntegrationIdentifiers = (existing.unsetIntegrationIdentifiers + normalizedType)
+                    .distinct()
                     .takeLastBounded(MAX_PENDING_INTEGRATION_IDENTIFIERS),
             )
         }
@@ -127,6 +150,14 @@ internal class AppActorAttributesManager(
             put(AppActorAttributeReservedKeys.locale, AppActorAttributeValue.string(Locale.getDefault().toLanguageTag()))
             put(AppActorAttributeReservedKeys.timezone, AppActorAttributeValue.string(TimeZone.getDefault().id))
             put(AppActorAttributeReservedKeys.platform, AppActorAttributeValue.string("android"))
+            platformInfoProvider()?.let { platformInfo ->
+                platformInfo.flavor.trim().takeIf { it.isNotEmpty() }?.let {
+                    put(AppActorAttributeReservedKeys.platformFlavor, AppActorAttributeValue.string(it))
+                }
+                platformInfo.version?.trim()?.takeIf { it.isNotEmpty() }?.let {
+                    put(AppActorAttributeReservedKeys.platformVersion, AppActorAttributeValue.string(it))
+                }
+            }
             Build.MODEL?.takeIf { it.isNotBlank() }?.let {
                 put(AppActorAttributeReservedKeys.deviceModel, AppActorAttributeValue.string(it))
             }
@@ -220,6 +251,9 @@ internal class AppActorAttributesManager(
                     ),
                 )
             }
+            pending.unsetIntegrationIdentifiers.forEach { type ->
+                backendClient.deleteIntegrationIdentifier(appUserId = appUserId, type = type)
+            }
             pending.attribution?.let { request ->
                 backendClient.postAttribution(appUserId, request)
             }
@@ -229,7 +263,12 @@ internal class AppActorAttributesManager(
             }
         } catch (throwable: Throwable) {
             if (throwable is CancellationException) throw throwable
-            AppActorLogger.debug("Attribute flush failed; pending mutations remain queued.")
+            val error = throwable.toAppActorError(defaultMessage = "Attribute flush failed.")
+            if (error.isTransient) {
+                AppActorLogger.debug("Attribute flush failed; pending mutations remain queued.")
+                return
+            }
+            throw error
         }
     }
 
@@ -314,6 +353,7 @@ internal class AppActorAttributesManager(
             attributes = attributes.takeLastBounded(MAX_PENDING_ATTRIBUTES),
             unsetAttributes = unsetAttributes.takeLastBounded(MAX_PENDING_ATTRIBUTES),
             integrationIdentifiers = integrationIdentifiers.takeLastBounded(MAX_PENDING_INTEGRATION_IDENTIFIERS),
+            unsetIntegrationIdentifiers = unsetIntegrationIdentifiers.takeLastBounded(MAX_PENDING_INTEGRATION_IDENTIFIERS),
             attribution = attribution,
         )
     }
@@ -326,6 +366,9 @@ internal class AppActorAttributesManager(
             unsetAttributes = unsetAttributes.filterNot { key -> key in flushed.unsetAttributes },
             integrationIdentifiers = integrationIdentifiers.filterNot { (type, value) ->
                 flushed.integrationIdentifiers[type] == value
+            },
+            unsetIntegrationIdentifiers = unsetIntegrationIdentifiers.filterNot { type ->
+                type in flushed.unsetIntegrationIdentifiers
             },
             attribution = attribution.takeUnless { attribution == flushed.attribution },
         ).takeBounded()

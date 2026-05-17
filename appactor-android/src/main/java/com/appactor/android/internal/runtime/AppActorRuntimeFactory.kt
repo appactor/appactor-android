@@ -98,6 +98,7 @@ internal class AppActorRuntimeFactory(
             identityStore = identityStore,
             packageName = configuration.applicationContext.packageName,
             appVersionProvider = { appVersionProvider(configuration.applicationContext) },
+            platformInfoProvider = { configuration.options.platformInfo },
             countryProvider = countryProvider,
         )
         val cachedCustomerInfo = identityStore.currentAppUserId

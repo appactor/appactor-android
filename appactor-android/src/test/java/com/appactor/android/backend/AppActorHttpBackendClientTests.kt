@@ -450,6 +450,10 @@ class AppActorHttpBackendClientTests {
             appUserId = "user_android_123",
             request = AppActorIntegrationIdentifierRequestDTO(type = "firebase_app_instance_id", value = "fid_123"),
         )
+        client.deleteIntegrationIdentifier(
+            appUserId = "user_android_123",
+            type = "firebase_app_instance_id",
+        )
         client.postAttribution(
             appUserId = "user_android_123",
             request = AppActorAttributionRequestDTO(
@@ -463,12 +467,15 @@ class AppActorHttpBackendClientTests {
         assertEquals("POST", captured[0].first)
         assertEquals("/v1/payment/users/user_android_123/integration-identifiers", captured[0].second)
         assertTrue(captured[0].third.contains("\"type\":\"firebase_app_instance_id\""))
-        assertEquals("POST", captured[1].first)
-        assertEquals("/v1/payment/users/user_android_123/attribution", captured[1].second)
-        assertTrue(captured[1].third.contains("\"provider\":\"adjust\""))
-        assertTrue(captured[1].third.contains("\"status\":\"non_organic\""))
-        assertTrue(captured[1].third.contains("\"campaign_name\":\"spring\""))
-        assertTrue(captured[1].third.contains("\"ad_group_id\":\"ag_123\""))
+        assertEquals("DELETE", captured[1].first)
+        assertEquals("/v1/payment/users/user_android_123/integration-identifiers/firebase_app_instance_id", captured[1].second)
+        assertEquals("", captured[1].third)
+        assertEquals("POST", captured[2].first)
+        assertEquals("/v1/payment/users/user_android_123/attribution", captured[2].second)
+        assertTrue(captured[2].third.contains("\"provider\":\"adjust\""))
+        assertTrue(captured[2].third.contains("\"status\":\"non_organic\""))
+        assertTrue(captured[2].third.contains("\"campaign_name\":\"spring\""))
+        assertTrue(captured[2].third.contains("\"ad_group_id\":\"ag_123\""))
     }
 
     private fun backendClient(

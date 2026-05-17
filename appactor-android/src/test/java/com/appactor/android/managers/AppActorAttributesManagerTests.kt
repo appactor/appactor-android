@@ -22,6 +22,7 @@ import com.appactor.android.backend.dto.AppActorRemoteConfigsEnvelopeDTO
 import com.appactor.android.models.AppActorAttributeReservedKeys
 import com.appactor.android.models.AppActorAttributeValue
 import com.appactor.android.models.AppActorAttribution
+import com.appactor.android.models.AppActorPlatformInfo
 import com.appactor.android.storage.AppActorAttributeQueueStore
 import com.appactor.android.storage.AppActorIdentityStore
 import com.appactor.android.storage.AppActorQueuedAttributeMutation
@@ -56,6 +57,23 @@ class AppActorAttributesManagerTests {
         assertEquals(JsonPrimitive("platinum"), backend.patchRequests.single().second.attributes["tier"])
         assertEquals(listOf("old_key"), backend.deleteRequests.map { it.second })
         assertNull(store.load("user_a"))
+    }
+
+    @Test
+    fun `nullable custom attribute values are routed as unsets`() = runBlocking {
+        val backend = FakeAttributesBackendClient()
+        val manager = manager(backend, InMemoryAttributeQueueStore())
+
+        manager.setAttributes(
+            appUserId = "user_a",
+            attributes = mapOf(
+                "tier" to AppActorAttributeValue.string("gold"),
+                "old_key" to null,
+            ),
+        )
+
+        assertEquals(JsonPrimitive("gold"), backend.patchRequests.single().second.attributes["tier"])
+        assertEquals(listOf("old_key"), backend.deleteRequests.map { it.second })
     }
 
     @Test
@@ -114,12 +132,26 @@ class AppActorAttributesManagerTests {
         assertEquals(JsonPrimitive("com.appactor.test"), attributes["\$bundleId"])
         assertNotNull(attributes["\$locale"])
         assertEquals(JsonPrimitive("android"), attributes["\$platform"])
+        assertEquals(JsonPrimitive("flutter"), attributes["\$platformFlavor"])
+        assertEquals(JsonPrimitive("0.0.8"), attributes["\$platformVersion"])
         assertNotNull(attributes["\$timezone"])
         assertEquals(JsonPrimitive("1.2.3"), attributes["\$appVersion"])
         assertEquals(JsonPrimitive("TR"), attributes["\$storefrontCountry"])
         assertEquals(null, attributes["\$appactorInstallId"])
         assertEquals(null, attributes["\$androidPackageName"])
         assertEquals("appactor_install_id", backend.integrationRequests.single().second.type)
+    }
+
+    @Test
+    fun `nullable integration identifier clears existing identifier`() = runBlocking {
+        val backend = FakeAttributesBackendClient()
+        val manager = manager(backend, InMemoryAttributeQueueStore())
+
+        manager.setIntegrationIdentifier("user_a", "firebase_app_instance_id", "fid-1")
+        manager.setIntegrationIdentifier("user_a", "firebase_app_instance_id", null)
+
+        assertEquals("fid-1", backend.integrationRequests.single().second.value)
+        assertEquals(listOf("firebase_app_instance_id"), backend.integrationDeleteRequests.map { it.second })
     }
 
     @Test
@@ -332,6 +364,7 @@ class AppActorAttributesManagerTests {
             identityStore = identityStore,
             packageName = "com.appactor.test",
             appVersionProvider = { "1.2.3" },
+            platformInfoProvider = { AppActorPlatformInfo("flutter", "0.0.8") },
             countryProvider = { "TR" },
         )
     }
@@ -382,6 +415,7 @@ class AppActorAttributesManagerTests {
         val patchRequests = mutableListOf<Pair<String, AppActorAttributesPatchRequestDTO>>()
         val deleteRequests = mutableListOf<Pair<String, String>>()
         val integrationRequests = mutableListOf<Pair<String, AppActorIntegrationIdentifierRequestDTO>>()
+        val integrationDeleteRequests = mutableListOf<Pair<String, String>>()
         val attributionRequests = mutableListOf<Pair<String, AppActorAttributionRequestDTO>>()
 
         override suspend fun postUserAttributes(
@@ -410,6 +444,13 @@ class AppActorAttributesManagerTests {
             request: AppActorIntegrationIdentifierRequestDTO,
         ): AppActorBackendHttpResponse<Unit> = mutation {
             integrationRequests += appUserId to request
+        }
+
+        override suspend fun deleteIntegrationIdentifier(
+            appUserId: String,
+            type: String,
+        ): AppActorBackendHttpResponse<Unit> = mutation {
+            integrationDeleteRequests += appUserId to type
         }
 
         override suspend fun postAttribution(

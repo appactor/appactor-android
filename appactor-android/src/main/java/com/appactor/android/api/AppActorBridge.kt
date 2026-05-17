@@ -313,7 +313,7 @@ public object AppActorBridge {
     @JvmStatic
     @JvmOverloads
     public fun setAttributes(
-        attributes: Map<String, AppActorAttributeValue>,
+        attributes: Map<String, AppActorAttributeValue?>,
         onComplete: AppActorCompletionCallback? = null,
         onError: AppActorBridgeErrorCallback? = null,
     ): Unit = AppActor.launchAsync(
@@ -410,7 +410,7 @@ public object AppActorBridge {
     @JvmOverloads
     public fun setIntegrationIdentifier(
         type: String,
-        value: String,
+        value: String?,
         onComplete: AppActorCompletionCallback? = null,
         onError: AppActorBridgeErrorCallback? = null,
     ): Unit = AppActor.launchAsync(
@@ -423,7 +423,7 @@ public object AppActorBridge {
     @JvmOverloads
     public fun setIntegrationIdentifier(
         type: AppActorIntegrationIdentifier,
-        value: String,
+        value: String?,
         onComplete: AppActorCompletionCallback? = null,
         onError: AppActorBridgeErrorCallback? = null,
     ): Unit = AppActor.launchAsync(
@@ -434,8 +434,32 @@ public object AppActorBridge {
 
     @JvmStatic
     @JvmOverloads
+    public fun unsetIntegrationIdentifier(
+        type: String,
+        onComplete: AppActorCompletionCallback? = null,
+        onError: AppActorBridgeErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.unsetIntegrationIdentifier(type) },
+        onComplete = onComplete,
+        onError = onError.asSdkErrorCallback(),
+    )
+
+    @JvmStatic
+    @JvmOverloads
+    public fun unsetIntegrationIdentifier(
+        type: AppActorIntegrationIdentifier,
+        onComplete: AppActorCompletionCallback? = null,
+        onError: AppActorBridgeErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.unsetIntegrationIdentifier(type) },
+        onComplete = onComplete,
+        onError = onError.asSdkErrorCallback(),
+    )
+
+    @JvmStatic
+    @JvmOverloads
     public fun setAppsflyerID(
-        appsflyerID: String,
+        appsflyerID: String?,
         onComplete: AppActorCompletionCallback? = null,
         onError: AppActorBridgeErrorCallback? = null,
     ): Unit = AppActor.launchAsync(
@@ -447,7 +471,7 @@ public object AppActorBridge {
     @JvmStatic
     @JvmOverloads
     public fun setAppsFlyerID(
-        appsFlyerID: String,
+        appsFlyerID: String?,
         onComplete: AppActorCompletionCallback? = null,
         onError: AppActorBridgeErrorCallback? = null,
     ): Unit = AppActor.launchAsync(
@@ -459,7 +483,7 @@ public object AppActorBridge {
     @JvmStatic
     @JvmOverloads
     public fun setAdjustID(
-        adjustID: String,
+        adjustID: String?,
         onComplete: AppActorCompletionCallback? = null,
         onError: AppActorBridgeErrorCallback? = null,
     ): Unit = AppActor.launchAsync(
@@ -471,7 +495,7 @@ public object AppActorBridge {
     @JvmStatic
     @JvmOverloads
     public fun setBranchID(
-        branchID: String,
+        branchID: String?,
         onComplete: AppActorCompletionCallback? = null,
         onError: AppActorBridgeErrorCallback? = null,
     ): Unit = AppActor.launchAsync(
@@ -483,7 +507,7 @@ public object AppActorBridge {
     @JvmStatic
     @JvmOverloads
     public fun setFirebaseAppInstanceID(
-        firebaseAppInstanceID: String,
+        firebaseAppInstanceID: String?,
         onComplete: AppActorCompletionCallback? = null,
         onError: AppActorBridgeErrorCallback? = null,
     ): Unit = AppActor.launchAsync(
@@ -495,7 +519,7 @@ public object AppActorBridge {
     @JvmStatic
     @JvmOverloads
     public fun setOneSignalID(
-        oneSignalID: String,
+        oneSignalID: String?,
         onComplete: AppActorCompletionCallback? = null,
         onError: AppActorBridgeErrorCallback? = null,
     ): Unit = AppActor.launchAsync(

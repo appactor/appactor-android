@@ -21,12 +21,14 @@ internal data class AppActorQueuedAttributeMutation(
     val attributes: Map<String, JsonElement> = emptyMap(),
     val unsetAttributes: List<String> = emptyList(),
     val integrationIdentifiers: Map<String, String> = emptyMap(),
+    val unsetIntegrationIdentifiers: List<String> = emptyList(),
     val attribution: AppActorAttributionRequestDTO? = null,
 ) {
     fun isEmpty(): Boolean =
         attributes.isEmpty() &&
             unsetAttributes.isEmpty() &&
             integrationIdentifiers.isEmpty() &&
+            unsetIntegrationIdentifiers.isEmpty() &&
             attribution == null
 }
 

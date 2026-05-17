@@ -206,7 +206,7 @@ internal class CollectDeviceIdentifiersRequest : PluginRequest {
 
 internal class SetIntegrationIdentifierRequest private constructor(
     private val type: String,
-    private val value: String,
+    private val value: String?,
 ) : PluginRequest {
 
     override suspend fun execute(): PluginResult {
@@ -224,7 +224,7 @@ internal class SetIntegrationIdentifierRequest private constructor(
         @Serializable
         private data class Params(
             val type: String,
-            val value: String,
+            val value: String? = null,
         )
     }
 }

@@ -506,7 +506,8 @@ internal class AppActorPaymentProcessor(
                     SOURCE_INTENT_SYNC,
                 )
                 latestCustomer = customerManager.cachedInfo(resolvedAppUserId)
-            } catch (_: Throwable) {
+            } catch (throwable: Throwable) {
+                if (throwable is CancellationException) throw throwable
                 syncCandidates.forEach { purchase ->
                     when (
                         val outcome = enqueueAndProcess(
@@ -646,6 +647,7 @@ internal class AppActorPaymentProcessor(
                 )
                 latestBatchCustomer = customerManager.cachedInfo(resolvedAppUserId)
             } catch (throwable: Throwable) {
+                if (throwable is CancellationException) throw throwable
                 val fallbackCustomer = runCatching {
                     syncCurrentPurchasesLocked(limit = batchSize, appUserIdOverride = currentAppUserId)
                     customerManager.getCustomerInfo(
@@ -699,7 +701,9 @@ internal class AppActorPaymentProcessor(
     }
 
     private suspend fun drainReadyQueueLocked(limit: Int = 20): AppActorCustomerInfo? {
-        val claimed = queueStore.claimReady(limit = limit, nowMillis = dateProviderMillis())
+        val now = dateProviderMillis()
+        if (activeRateLimitCooldown(now) != null) return null
+        val claimed = queueStore.claimReady(limit = limit, nowMillis = now)
         if (claimed.isEmpty()) return null
 
         val productEntitlements = ensureProductEntitlements()
@@ -1188,6 +1192,7 @@ internal class AppActorPaymentProcessor(
                 }
             }
         } catch (throwable: Throwable) {
+            if (throwable is CancellationException) throw throwable
             if (throwable is AppActorBackendException.Http && throwable.statusCode in 400..499) {
                 deadLetter(
                     item = normalizedItem,
@@ -1563,10 +1568,7 @@ internal class AppActorPaymentProcessor(
     }
 
     private fun hasReadyWork(nowMillis: Long = dateProviderMillis()): Boolean {
-        val rateLimitCooldown = queueStore.getRateLimitCooldownMillis()
-        if (rateLimitCooldown != null && rateLimitCooldown > nowMillis) {
-            return false
-        }
+        if (activeRateLimitCooldown(nowMillis) != null) return false
         val stalePostingThreshold = nowMillis - AppActorAtomicJsonReceiptQueueStore.STALE_CLAIM_THRESHOLD_MILLIS
         return queueStore.snapshot().any { item ->
             when (item.phase) {
@@ -1600,13 +1602,22 @@ internal class AppActorPaymentProcessor(
             }
             .minOrNull()
 
-        val cooldown = queueStore.getRateLimitCooldownMillis()
+        val cooldown = activeRateLimitCooldown(nowMillis)
         return when {
             itemNextReady == null -> cooldown
             cooldown == null -> itemNextReady
             cooldown > nowMillis && itemNextReady < cooldown -> cooldown
             else -> minOf(itemNextReady, cooldown)
         }
+    }
+
+    private fun activeRateLimitCooldown(nowMillis: Long = dateProviderMillis()): Long? {
+        val cooldown = queueStore.getRateLimitCooldownMillis() ?: return null
+        if (cooldown <= nowMillis) {
+            queueStore.setRateLimitCooldownMillis(null)
+            return null
+        }
+        return cooldown
     }
 
     private fun scheduleNextRetryWake(limit: Int = 20) {
