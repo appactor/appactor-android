@@ -50,6 +50,21 @@ class AppActorAttributesTests {
         }.exceptionOrNull()
         assertTrue(integrationFailure is IllegalArgumentException)
 
+        val appVersionFailure = runCatching {
+            AppActorAttributesValidation.normalizeCustomKey("appVersion")
+        }.exceptionOrNull()
+        assertTrue(appVersionFailure is IllegalArgumentException)
+
+        val platformFailure = runCatching {
+            AppActorAttributesValidation.normalizeCustomKey("platform")
+        }.exceptionOrNull()
+        assertTrue(platformFailure is IllegalArgumentException)
+
+        val userCountryFailure = runCatching {
+            AppActorAttributesValidation.normalizeCustomKey("userCountry")
+        }.exceptionOrNull()
+        assertTrue(userCountryFailure is IllegalArgumentException)
+
         val longKeyFailure = runCatching {
             AppActorAttributesValidation.normalizeCustomKey("a".repeat(65))
         }.exceptionOrNull()
