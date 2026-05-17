@@ -28,6 +28,8 @@ internal data class AppActorIdentifyRequestDTO(
     val deviceLocale: String? = null,
     val deviceModel: String? = null,
     val osVersion: String? = null,
+    val platformFlavor: String? = null,
+    val platformVersion: String? = null,
 )
 
 @Serializable

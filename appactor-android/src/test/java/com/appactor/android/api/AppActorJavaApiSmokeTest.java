@@ -54,6 +54,8 @@ public final class AppActorJavaApiSmokeTest {
         Runnable javaQuietSync = () -> AppActorJava.quietSyncPurchasesAsync(info -> { }, error -> { });
         Runnable javaDrain = () -> AppActorJava.drainReceiptQueueAndRefreshCustomerAsync(info -> { }, error -> { });
         Runnable javaIntegrationId = () -> AppActorJava.setIntegrationIdentifierAsync(AppActorIntegrationIdentifier.AppsFlyerId, "af-user-123", () -> { }, error -> { });
+        Runnable javaIntegrationIdClear = () -> AppActorJava.unsetIntegrationIdentifierAsync(AppActorIntegrationIdentifier.AppsFlyerId, () -> { }, error -> { });
+        Runnable javaIntegrationHelperClear = () -> AppActorJava.setAppsFlyerIDAsync(null, () -> { }, error -> { });
         Runnable javaMediaSource = () -> AppActorJava.setMediaSourceAsync("facebook", () -> { }, error -> { });
         Runnable javaCampaign = () -> AppActorJava.setCampaignAsync("spring_sale", () -> { }, error -> { });
 
@@ -89,6 +91,8 @@ public final class AppActorJavaApiSmokeTest {
         Runnable bridgeQuietSync = () -> AppActorBridge.quietSyncPurchases(info -> { }, error -> { });
         Runnable bridgeDrain = () -> AppActorBridge.drainReceiptQueueAndRefreshCustomer(info -> { }, error -> { });
         Runnable bridgeIntegrationId = () -> AppActorBridge.setIntegrationIdentifier(AppActorIntegrationIdentifier.AppsFlyerId, "af-user-123", () -> { }, error -> { });
+        Runnable bridgeIntegrationIdClear = () -> AppActorBridge.unsetIntegrationIdentifier(AppActorIntegrationIdentifier.AppsFlyerId, () -> { }, error -> { });
+        Runnable bridgeIntegrationHelperClear = () -> AppActorBridge.setAppsFlyerID(null, () -> { }, error -> { });
         Runnable bridgeMediaSource = () -> AppActorBridge.setMediaSource("facebook", () -> { }, error -> { });
         Runnable bridgeCampaign = () -> AppActorBridge.setCampaign("spring_sale", () -> { }, error -> { });
         AppActorBridge.appUserId();
@@ -106,14 +110,16 @@ public final class AppActorJavaApiSmokeTest {
             javaExperiment == null || javaStorefront == null || javaStoreCapabilities == null ||
             javaCanMakePurchases == null || javaCanMakePurchasesWithCapabilities == null ||
             javaRestore == null || javaSync == null || javaQuietSync == null ||
-            javaDrain == null || javaIntegrationId == null || javaMediaSource == null ||
+            javaDrain == null || javaIntegrationId == null || javaIntegrationIdClear == null ||
+            javaIntegrationHelperClear == null || javaMediaSource == null ||
             javaCampaign == null || bridgeCustomerListener == null ||
             bridgeReceiptListener == null || bridgeConfigure == null || bridgeReset == null ||
             bridgeLogIn == null || bridgeLogOut == null || bridgeOfferings == null ||
             bridgeCustomerInfo == null || bridgeRemoteConfigs == null || bridgeExperiment == null ||
             bridgeStorefront == null || bridgeStoreCapabilities == null || bridgePurchase == null ||
             bridgeRestore == null || bridgeSync == null || bridgeQuietSync == null ||
-            bridgeDrain == null || bridgeIntegrationId == null || bridgeMediaSource == null ||
+            bridgeDrain == null || bridgeIntegrationId == null || bridgeIntegrationIdClear == null ||
+            bridgeIntegrationHelperClear == null || bridgeMediaSource == null ||
             bridgeCampaign == null || bridgeClearListeners == null) {
             throw new AssertionError("unreachable");
         }

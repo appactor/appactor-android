@@ -22,6 +22,7 @@ import com.appactor.android.cache.AppActorOfferingsCacheStore
 import com.appactor.android.internal.AppActorSDK
 import com.appactor.android.models.AppActorConfiguration
 import com.appactor.android.models.AppActorEnvironment
+import com.appactor.android.models.AppActorPlatformInfo
 import com.appactor.android.models.AppActorProductType
 import com.appactor.android.storage.AppActorIdentityStore
 import io.mockk.coEvery
@@ -75,6 +76,25 @@ class AppActorCustomerManagerTests {
         manager.identify()
 
         assertEquals(AppActorSDK.version, identifyRequestSlot.captured.sdkVersion)
+    }
+
+    @Test
+    fun `identify sends wrapper platform info telemetry`() = runBlocking {
+        val identifyRequestSlot = slot<AppActorIdentifyRequestDTO>()
+        val mockClient = mockk<AppActorBackendClient>(relaxed = true)
+        coEvery { mockClient.getOfferings(any()) } returns freshOfferingsResponse(fixtureOfferings())
+        coEvery { mockClient.identify(capture(identifyRequestSlot)) } returns freshCustomerResponse(
+            fixtureCustomer("fixtures/backend/customer_android_active.json")
+        )
+        val manager = createCustomerManager(
+            backendClient = mockClient,
+            options = AppActorConfiguration.Options(platformInfo = AppActorPlatformInfo("flutter", "0.0.8")),
+        )
+
+        manager.identify()
+
+        assertEquals("flutter", identifyRequestSlot.captured.platformFlavor)
+        assertEquals("0.0.8", identifyRequestSlot.captured.platformVersion)
     }
 
     @Test
@@ -298,6 +318,7 @@ class AppActorCustomerManagerTests {
             }
             coEvery { mock.queryActivePurchases() } returns emptyList()
         },
+        options: AppActorConfiguration.Options = AppActorConfiguration.Options(),
         dateProviderMillis: () -> Long = { System.currentTimeMillis() },
     ): AppActorCustomerManager {
         val identityStore = mockk<AppActorIdentityStore>().also { store ->
@@ -350,6 +371,7 @@ class AppActorCustomerManagerTests {
                 apiKey = "pk_test_123",
                 appUserId = "user_android_123",
                 environment = AppActorEnvironment.Production,
+                options = options,
             ),
             backendClient = backendClient,
             cacheStore = AppActorCustomerCacheStore(

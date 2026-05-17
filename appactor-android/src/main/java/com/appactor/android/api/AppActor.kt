@@ -679,13 +679,12 @@ public object AppActor {
         return snapshot.runtime.customerManager.activeEntitlementKeysOffline(snapshot.appUserId)
     }
 
-    public suspend fun setAttributes(attributes: Map<String, AppActorAttributeValue>) {
-        @Suppress("SENSELESS_COMPARISON")
-        attributes.forEach { (key, value) ->
-            require(value != null) {
-                "Attribute '$key' value cannot be null. Use unsetAttribute(key) to remove an attribute."
-            }
-        }
+    /**
+     * Sets developer-defined custom attributes. Keys starting with `$` or
+     * `appactor.` are reserved for AppActor system/profile context helpers.
+     * A `null` value unsets that custom attribute.
+     */
+    public suspend fun setAttributes(attributes: Map<String, AppActorAttributeValue?>) {
         executeGuardedRead(resolveAppUserId = true) { snapshot ->
             snapshot.runtime.attributesManager.setAttributes(
                 appUserId = snapshot.appUserId,
@@ -734,15 +733,22 @@ public object AppActor {
         setReservedString(AppActorAttributeReservedKeys.fcmToken, pushToken)
     }
 
+    /**
+     * Collects optional system profile context and routes it through the
+     * server-managed profile-current path, not the developer custom attribute list.
+     */
     public suspend fun collectDeviceIdentifiers() {
         executeGuardedRead(resolveAppUserId = true) { snapshot ->
             snapshot.runtime.attributesManager.collectDeviceIdentifiers(snapshot.appUserId)
         }
     }
 
+    /**
+     * Sets or clears an integration identifier on the integration-identifiers endpoint.
+     */
     public suspend fun setIntegrationIdentifier(
         type: String,
-        value: String,
+        value: String?,
     ) {
         executeGuardedRead(resolveAppUserId = true) { snapshot ->
             snapshot.runtime.attributesManager.setIntegrationIdentifier(
@@ -753,37 +759,53 @@ public object AppActor {
         }
     }
 
+    public suspend fun unsetIntegrationIdentifier(type: String) {
+        executeGuardedRead(resolveAppUserId = true) { snapshot ->
+            snapshot.runtime.attributesManager.unsetIntegrationIdentifier(
+                appUserId = snapshot.appUserId,
+                type = type,
+            )
+        }
+    }
+
     public suspend fun setIntegrationIdentifier(
         type: AppActorIntegrationIdentifier,
-        value: String,
+        value: String?,
     ) {
         setIntegrationIdentifier(type.wireValue, value)
     }
 
-    public suspend fun setAppsflyerID(appsflyerID: String) {
+    public suspend fun unsetIntegrationIdentifier(type: AppActorIntegrationIdentifier) {
+        unsetIntegrationIdentifier(type.wireValue)
+    }
+
+    public suspend fun setAppsflyerID(appsflyerID: String?) {
         setIntegrationIdentifier(AppActorIntegrationIdentifier.AppsFlyerId, appsflyerID)
     }
 
-    public suspend fun setAppsFlyerID(appsFlyerID: String) {
+    public suspend fun setAppsFlyerID(appsFlyerID: String?) {
         setAppsflyerID(appsFlyerID)
     }
 
-    public suspend fun setAdjustID(adjustID: String) {
+    public suspend fun setAdjustID(adjustID: String?) {
         setIntegrationIdentifier(AppActorIntegrationIdentifier.AdjustId, adjustID)
     }
 
-    public suspend fun setBranchID(branchID: String) {
+    public suspend fun setBranchID(branchID: String?) {
         setIntegrationIdentifier(AppActorIntegrationIdentifier.BranchId, branchID)
     }
 
-    public suspend fun setFirebaseAppInstanceID(firebaseAppInstanceID: String) {
+    public suspend fun setFirebaseAppInstanceID(firebaseAppInstanceID: String?) {
         setIntegrationIdentifier(AppActorIntegrationIdentifier.FirebaseAppInstanceId, firebaseAppInstanceID)
     }
 
-    public suspend fun setOneSignalID(oneSignalID: String) {
+    public suspend fun setOneSignalID(oneSignalID: String?) {
         setIntegrationIdentifier(AppActorIntegrationIdentifier.OneSignalId, oneSignalID)
     }
 
+    /**
+     * Sends acquisition attribution on the attribution endpoint.
+     */
     public suspend fun updateAttribution(attribution: AppActorAttribution) {
         executeGuardedRead(resolveAppUserId = true) { snapshot ->
             snapshot.runtime.attributesManager.updateAttribution(

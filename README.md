@@ -75,6 +75,25 @@ accepts the receipt and AppActor returns an `ok` receipt result/customer update.
 Retryable receipt failures remain queued for later delivery and should not be
 treated as final backend credit grants.
 
+## Customer Attributes & Profile Context
+
+`setAttributes()` is for developer-defined custom attributes. Custom keys cannot
+start with `$` or `appactor.`; pass a `null` map value, or call
+`unsetAttribute()`, to remove a custom attribute.
+
+System profile context is collected separately. `configure()` sends the SDK
+identity context, including optional wrapper platform info, through
+`/v1/payment/identify`. `collectDeviceIdentifiers()` can be called when your app
+opts in to additional device context; the SDK sends canonical `$...` profile
+keys that the AppActor API routes into profile-current storage instead of the
+custom attributes list.
+
+Integration identifiers and acquisition attribution have dedicated routes. Use
+`setIntegrationIdentifier()` or helpers such as `setAppsFlyerID()` for IDs, and
+`updateAttribution()` or helpers such as `setMediaSource()` for attribution.
+`enableInstallReferrer()` also uses the attribution route and stores only a
+hashed referrer marker locally.
+
 ## Documentation
 
 Visit [appactor.com/docs](https://appactor.com/docs) for full documentation.

@@ -178,6 +178,8 @@ internal object AppActorAttributeReservedKeys {
     const val locale = "\$locale"
     const val timezone = "\$timezone"
     const val platform = "\$platform"
+    const val platformFlavor = "\$platformFlavor"
+    const val platformVersion = "\$platformVersion"
     const val deviceModel = "\$deviceModel"
     const val osVersion = "\$osVersion"
     const val sdkVersion = "\$sdkVersion"
@@ -210,6 +212,8 @@ internal object AppActorAttributeReservedKeys {
         locale,
         timezone,
         platform,
+        platformFlavor,
+        platformVersion,
         deviceModel,
         osVersion,
         sdkVersion,
@@ -250,6 +254,9 @@ internal object AppActorAttributesValidation {
         }
         require(!normalized.startsWith("appactor.", ignoreCase = true)) {
             "Custom attribute keys must not start with 'appactor.'."
+        }
+        require(!normalized.startsWith("integration.", ignoreCase = true)) {
+            "Custom attribute keys must not start with 'integration.'. Use setIntegrationIdentifier() instead."
         }
         return normalized
     }

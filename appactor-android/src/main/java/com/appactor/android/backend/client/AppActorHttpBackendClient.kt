@@ -197,6 +197,27 @@ internal class AppActorHttpBackendClient(
         return executeRetryable(httpRequest)
     }
 
+    override suspend fun deleteIntegrationIdentifier(
+        appUserId: String,
+        type: String,
+    ): AppActorBackendHttpResponse<Unit> {
+        val path = buildAppActorUrl(
+            configuration.baseUrl,
+            "v1",
+            "payment",
+            "users",
+            appUserId,
+            "integration-identifiers",
+            type,
+        )
+        val builder = Request.Builder()
+            .url(path)
+            .delete()
+            .header("Accept", "application/json")
+        AppActorAuthHeaderProvider.apply(builder, configuration, extractPath(path))
+        return executeRetryable(builder.build())
+    }
+
     override suspend fun postAttribution(
         appUserId: String,
         request: AppActorAttributionRequestDTO,

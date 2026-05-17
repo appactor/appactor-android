@@ -45,6 +45,11 @@ class AppActorAttributesTests {
         }.exceptionOrNull()
         assertTrue(appactorFailure is IllegalArgumentException)
 
+        val integrationFailure = runCatching {
+            AppActorAttributesValidation.normalizeCustomKey("integration.adjust_id")
+        }.exceptionOrNull()
+        assertTrue(integrationFailure is IllegalArgumentException)
+
         val longKeyFailure = runCatching {
             AppActorAttributesValidation.normalizeCustomKey("a".repeat(65))
         }.exceptionOrNull()

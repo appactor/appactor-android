@@ -430,6 +430,58 @@ class AppActorPaymentProcessorTests {
     }
 
     @Test
+    fun `rate limit cooldown pauses ready queue drain until it expires`() = runBlocking {
+        var now = 10_000L
+        val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
+        val dependencies = createDependencies(
+            receiptResponse = AppActorBackendHttpResponse(
+                body = receiptResponse,
+                statusCode = 200,
+                requestId = receiptResponse.requestId,
+                signatureVerified = true,
+            ),
+            dateProviderMillis = { now },
+        )
+        val queuedItem = AppActorReceiptQueueItem(
+            key = AppActorReceiptQueueItem.makeKey(
+                purchaseToken = "token_rate_limit_123",
+                productId = "com.appactor.pro.monthly",
+                basePlanId = "monthly001",
+            ),
+            appUserId = "user_android_123",
+            packageName = context.packageName,
+            environment = "production",
+            productId = "com.appactor.pro.monthly",
+            productType = AppActorProductType.Subscription.wireValue,
+            purchaseToken = "token_rate_limit_123",
+            purchaseTime = "1710000000000",
+            purchaseState = "PURCHASED",
+            orderId = "GPA.rate.limit.123",
+            basePlanId = "monthly001",
+            offerId = "intro7d",
+            idempotencyKey = "google:com.appactor.pro.monthly:monthly001:token_rate_limit_123",
+            createdAtMillis = now,
+            lastUpdatedAtMillis = now,
+            nextRetryAtMillis = now,
+            phase = com.appactor.android.storage.AppActorReceiptQueuePhase.NeedsPost,
+        )
+        dependencies.queueStore.upsert(queuedItem)
+        dependencies.queueStore.setRateLimitCooldownMillis(now + 60_000L)
+
+        dependencies.processor.drainReadyQueue()
+
+        assertEquals(0, dependencies.postedReceipts.size)
+        assertEquals(now + 60_000L, dependencies.queueStore.getRateLimitCooldownMillis())
+
+        now += 61_000L
+        dependencies.processor.drainReadyQueue()
+
+        assertEquals(1, dependencies.postedReceipts.size)
+        assertNull(dependencies.queueStore.getRateLimitCooldownMillis())
+        assertTrue(dependencies.queueStore.snapshot().isEmpty())
+    }
+
+    @Test
     fun `drain all retries queued receipt until it succeeds`() = runBlocking {
         val retryableResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_retryable.json")
         val successResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")

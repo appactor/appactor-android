@@ -37,21 +37,36 @@ package com.appactor.android.api {
     method @Deprecated public suspend Object? purchase(android.app.Activity activity, com.appactor.android.models.AppActorPurchaseParams params, kotlin.coroutines.Continuation<? super com.appactor.android.models.AppActorPurchaseResult>);
     method public suspend Object? reset(kotlin.coroutines.Continuation<? super kotlin.Unit>);
     method public suspend Object? restorePurchases(kotlin.coroutines.Continuation<? super com.appactor.android.models.AppActorCustomerInfo>);
+    method public suspend Object? setAd(String ad, kotlin.coroutines.Continuation<? super kotlin.Unit>);
+    method public suspend Object? setAdGroup(String adGroup, kotlin.coroutines.Continuation<? super kotlin.Unit>);
+    method public suspend Object? setAdjustID(String? adjustID, kotlin.coroutines.Continuation<? super kotlin.Unit>);
+    method public suspend Object? setAppsFlyerID(String? appsFlyerID, kotlin.coroutines.Continuation<? super kotlin.Unit>);
+    method public suspend Object? setAppsflyerID(String? appsflyerID, kotlin.coroutines.Continuation<? super kotlin.Unit>);
     method public suspend Object? setAttribute(String key, com.appactor.android.models.AppActorAttributeValue value, kotlin.coroutines.Continuation<? super kotlin.Unit>);
     method public suspend Object? setAttributes(java.util.Map<java.lang.String,? extends com.appactor.android.models.AppActorAttributeValue?> attributes, kotlin.coroutines.Continuation<? super kotlin.Unit>);
+    method public suspend Object? setBranchID(String? branchID, kotlin.coroutines.Continuation<? super kotlin.Unit>);
+    method public suspend Object? setCampaign(String campaign, kotlin.coroutines.Continuation<? super kotlin.Unit>);
+    method public suspend Object? setCreative(String creative, kotlin.coroutines.Continuation<? super kotlin.Unit>);
     method public suspend Object? setDisplayName(String? displayName, kotlin.coroutines.Continuation<? super kotlin.Unit>);
     method public suspend Object? setEmail(String? email, kotlin.coroutines.Continuation<? super kotlin.Unit>);
     method public void setFallbackOfferings(byte[] jsonData);
-    method public suspend Object? setIntegrationIdentifier(String type, String value, kotlin.coroutines.Continuation<? super kotlin.Unit>);
+    method public suspend Object? setFirebaseAppInstanceID(String? firebaseAppInstanceID, kotlin.coroutines.Continuation<? super kotlin.Unit>);
+    method public suspend Object? setIntegrationIdentifier(com.appactor.android.models.AppActorIntegrationIdentifier type, String? value, kotlin.coroutines.Continuation<? super kotlin.Unit>);
+    method public suspend Object? setIntegrationIdentifier(String type, String? value, kotlin.coroutines.Continuation<? super kotlin.Unit>);
+    method public suspend Object? setKeyword(String keyword, kotlin.coroutines.Continuation<? super kotlin.Unit>);
     method public void setLogHandler(kotlin.jvm.functions.Function4<? super java.lang.String,? super java.lang.String,? super java.lang.String,? super java.lang.String,kotlin.Unit>? handler);
     method public void setLogLevel(com.appactor.android.models.AppActorLogLevel level);
+    method public suspend Object? setMediaSource(String mediaSource, kotlin.coroutines.Continuation<? super kotlin.Unit>);
     method public void setOnCustomerInfoChanged(kotlin.jvm.functions.Function1<? super com.appactor.android.models.AppActorCustomerInfo,kotlin.Unit>?);
     method public void setOnDeferredPurchaseResolved(kotlin.jvm.functions.Function2<? super java.lang.String,? super com.appactor.android.models.AppActorCustomerInfo,kotlin.Unit>?);
     method public void setOnReceiptPipelineEvent(kotlin.jvm.functions.Function1<? super com.appactor.android.models.AppActorReceiptPipelineEvent,kotlin.Unit>?);
+    method public suspend Object? setOneSignalID(String? oneSignalID, kotlin.coroutines.Continuation<? super kotlin.Unit>);
     method public suspend Object? setPhoneNumber(String? phoneNumber, kotlin.coroutines.Continuation<? super kotlin.Unit>);
     method public suspend Object? setPushToken(String? pushToken, kotlin.coroutines.Continuation<? super kotlin.Unit>);
     method public suspend Object? syncPurchases(kotlin.coroutines.Continuation<? super com.appactor.android.models.AppActorCustomerInfo>);
     method public suspend Object? unsetAttribute(String key, kotlin.coroutines.Continuation<? super kotlin.Unit>);
+    method public suspend Object? unsetIntegrationIdentifier(com.appactor.android.models.AppActorIntegrationIdentifier type, kotlin.coroutines.Continuation<? super kotlin.Unit>);
+    method public suspend Object? unsetIntegrationIdentifier(String type, kotlin.coroutines.Continuation<? super kotlin.Unit>);
     method public suspend Object? updateAttribution(com.appactor.android.models.AppActorAttribution attribution, kotlin.coroutines.Continuation<? super kotlin.Unit>);
     property public final String? appUserId;
     property public final com.appactor.android.models.AppActorOfferings? cachedOfferings;
@@ -139,12 +154,36 @@ package com.appactor.android.api {
     method public static void restorePurchases();
     method public static void restorePurchases(optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorCustomerInfo>? onSuccess);
     method public static void restorePurchases(optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorCustomerInfo>? onSuccess, optional com.appactor.android.models.AppActorBridgeErrorCallback? onError);
+    method public static void setAd(String ad);
+    method public static void setAd(String ad, optional com.appactor.android.models.AppActorCompletionCallback? onComplete);
+    method public static void setAd(String ad, optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorBridgeErrorCallback? onError);
+    method public static void setAdGroup(String adGroup);
+    method public static void setAdGroup(String adGroup, optional com.appactor.android.models.AppActorCompletionCallback? onComplete);
+    method public static void setAdGroup(String adGroup, optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorBridgeErrorCallback? onError);
+    method public static void setAdjustID(String? adjustID);
+    method public static void setAdjustID(String? adjustID, optional com.appactor.android.models.AppActorCompletionCallback? onComplete);
+    method public static void setAdjustID(String? adjustID, optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorBridgeErrorCallback? onError);
+    method public static void setAppsFlyerID(String? appsFlyerID);
+    method public static void setAppsFlyerID(String? appsFlyerID, optional com.appactor.android.models.AppActorCompletionCallback? onComplete);
+    method public static void setAppsFlyerID(String? appsFlyerID, optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorBridgeErrorCallback? onError);
+    method public static void setAppsflyerID(String? appsflyerID);
+    method public static void setAppsflyerID(String? appsflyerID, optional com.appactor.android.models.AppActorCompletionCallback? onComplete);
+    method public static void setAppsflyerID(String? appsflyerID, optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorBridgeErrorCallback? onError);
     method public static void setAttribute(String key, com.appactor.android.models.AppActorAttributeValue value);
     method public static void setAttribute(String key, com.appactor.android.models.AppActorAttributeValue value, optional com.appactor.android.models.AppActorCompletionCallback? onComplete);
     method public static void setAttribute(String key, com.appactor.android.models.AppActorAttributeValue value, optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorBridgeErrorCallback? onError);
     method public static void setAttributes(java.util.Map<java.lang.String,? extends com.appactor.android.models.AppActorAttributeValue?> attributes);
     method public static void setAttributes(java.util.Map<java.lang.String,? extends com.appactor.android.models.AppActorAttributeValue?> attributes, optional com.appactor.android.models.AppActorCompletionCallback? onComplete);
     method public static void setAttributes(java.util.Map<java.lang.String,? extends com.appactor.android.models.AppActorAttributeValue?> attributes, optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorBridgeErrorCallback? onError);
+    method public static void setBranchID(String? branchID);
+    method public static void setBranchID(String? branchID, optional com.appactor.android.models.AppActorCompletionCallback? onComplete);
+    method public static void setBranchID(String? branchID, optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorBridgeErrorCallback? onError);
+    method public static void setCampaign(String campaign);
+    method public static void setCampaign(String campaign, optional com.appactor.android.models.AppActorCompletionCallback? onComplete);
+    method public static void setCampaign(String campaign, optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorBridgeErrorCallback? onError);
+    method public static void setCreative(String creative);
+    method public static void setCreative(String creative, optional com.appactor.android.models.AppActorCompletionCallback? onComplete);
+    method public static void setCreative(String creative, optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorBridgeErrorCallback? onError);
     method public static void setCustomerInfoListener(com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorCustomerInfo>? listener);
     method public static void setDeferredPurchaseListener(kotlin.jvm.functions.Function2<? super java.lang.String,? super com.appactor.android.models.AppActorCustomerInfo,kotlin.Unit>? listener);
     method public static void setDisplayName(String? displayName);
@@ -156,9 +195,24 @@ package com.appactor.android.api {
     method public static void setFallbackOfferings(byte[] jsonData);
     method public static void setFallbackOfferings(byte[] jsonData, optional kotlin.jvm.functions.Function0<kotlin.Unit>? onSuccess);
     method public static void setFallbackOfferings(byte[] jsonData, optional kotlin.jvm.functions.Function0<kotlin.Unit>? onSuccess, optional com.appactor.android.models.AppActorBridgeErrorCallback? onError);
-    method public static void setIntegrationIdentifier(String type, String value);
-    method public static void setIntegrationIdentifier(String type, String value, optional com.appactor.android.models.AppActorCompletionCallback? onComplete);
-    method public static void setIntegrationIdentifier(String type, String value, optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorBridgeErrorCallback? onError);
+    method public static void setFirebaseAppInstanceID(String? firebaseAppInstanceID);
+    method public static void setFirebaseAppInstanceID(String? firebaseAppInstanceID, optional com.appactor.android.models.AppActorCompletionCallback? onComplete);
+    method public static void setFirebaseAppInstanceID(String? firebaseAppInstanceID, optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorBridgeErrorCallback? onError);
+    method public static void setIntegrationIdentifier(com.appactor.android.models.AppActorIntegrationIdentifier type, String? value);
+    method public static void setIntegrationIdentifier(com.appactor.android.models.AppActorIntegrationIdentifier type, String? value, optional com.appactor.android.models.AppActorCompletionCallback? onComplete);
+    method public static void setIntegrationIdentifier(com.appactor.android.models.AppActorIntegrationIdentifier type, String? value, optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorBridgeErrorCallback? onError);
+    method public static void setIntegrationIdentifier(String type, String? value);
+    method public static void setIntegrationIdentifier(String type, String? value, optional com.appactor.android.models.AppActorCompletionCallback? onComplete);
+    method public static void setIntegrationIdentifier(String type, String? value, optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorBridgeErrorCallback? onError);
+    method public static void setKeyword(String keyword);
+    method public static void setKeyword(String keyword, optional com.appactor.android.models.AppActorCompletionCallback? onComplete);
+    method public static void setKeyword(String keyword, optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorBridgeErrorCallback? onError);
+    method public static void setMediaSource(String mediaSource);
+    method public static void setMediaSource(String mediaSource, optional com.appactor.android.models.AppActorCompletionCallback? onComplete);
+    method public static void setMediaSource(String mediaSource, optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorBridgeErrorCallback? onError);
+    method public static void setOneSignalID(String? oneSignalID);
+    method public static void setOneSignalID(String? oneSignalID, optional com.appactor.android.models.AppActorCompletionCallback? onComplete);
+    method public static void setOneSignalID(String? oneSignalID, optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorBridgeErrorCallback? onError);
     method public static void setPhoneNumber(String? phoneNumber);
     method public static void setPhoneNumber(String? phoneNumber, optional com.appactor.android.models.AppActorCompletionCallback? onComplete);
     method public static void setPhoneNumber(String? phoneNumber, optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorBridgeErrorCallback? onError);
@@ -172,6 +226,12 @@ package com.appactor.android.api {
     method public static void unsetAttribute(String key);
     method public static void unsetAttribute(String key, optional com.appactor.android.models.AppActorCompletionCallback? onComplete);
     method public static void unsetAttribute(String key, optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorBridgeErrorCallback? onError);
+    method public static void unsetIntegrationIdentifier(com.appactor.android.models.AppActorIntegrationIdentifier type);
+    method public static void unsetIntegrationIdentifier(com.appactor.android.models.AppActorIntegrationIdentifier type, optional com.appactor.android.models.AppActorCompletionCallback? onComplete);
+    method public static void unsetIntegrationIdentifier(com.appactor.android.models.AppActorIntegrationIdentifier type, optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorBridgeErrorCallback? onError);
+    method public static void unsetIntegrationIdentifier(String type);
+    method public static void unsetIntegrationIdentifier(String type, optional com.appactor.android.models.AppActorCompletionCallback? onComplete);
+    method public static void unsetIntegrationIdentifier(String type, optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorBridgeErrorCallback? onError);
     method public static void updateAttribution(com.appactor.android.models.AppActorAttribution attribution);
     method public static void updateAttribution(com.appactor.android.models.AppActorAttribution attribution, optional com.appactor.android.models.AppActorCompletionCallback? onComplete);
     method public static void updateAttribution(com.appactor.android.models.AppActorAttribution attribution, optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorBridgeErrorCallback? onError);
@@ -199,17 +259,32 @@ package com.appactor.android.api {
     method public static void purchaseAsync(android.app.Activity activity, com.appactor.android.models.AppActorPackage appActorPackage, optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorPurchaseResult>? onSuccess, optional com.appactor.android.models.AppActorErrorCallback? onError);
     method public static void quietSyncPurchasesAsync(optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorCustomerInfo>? onSuccess, optional com.appactor.android.models.AppActorErrorCallback? onError);
     method public static void restorePurchasesAsync(optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorCustomerInfo>? onSuccess, optional com.appactor.android.models.AppActorErrorCallback? onError);
+    method public static void setAdAsync(String ad, optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorErrorCallback? onError);
+    method public static void setAdGroupAsync(String adGroup, optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorErrorCallback? onError);
+    method public static void setAdjustIDAsync(String? adjustID, optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorErrorCallback? onError);
+    method public static void setAppsFlyerIDAsync(String? appsFlyerID, optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorErrorCallback? onError);
+    method public static void setAppsflyerIDAsync(String? appsflyerID, optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorErrorCallback? onError);
     method public static void setAttributeAsync(String key, com.appactor.android.models.AppActorAttributeValue value, optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorErrorCallback? onError);
     method public static void setAttributesAsync(java.util.Map<java.lang.String,? extends com.appactor.android.models.AppActorAttributeValue?> attributes, optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorErrorCallback? onError);
+    method public static void setBranchIDAsync(String? branchID, optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorErrorCallback? onError);
+    method public static void setCampaignAsync(String campaign, optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorErrorCallback? onError);
+    method public static void setCreativeAsync(String creative, optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorErrorCallback? onError);
     method public static void setDisplayNameAsync(String? displayName, optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorErrorCallback? onError);
     method public static void setEmailAsync(String? email, optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorErrorCallback? onError);
-    method public static void setIntegrationIdentifierAsync(String type, String value, optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorErrorCallback? onError);
+    method public static void setFirebaseAppInstanceIDAsync(String? firebaseAppInstanceID, optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorErrorCallback? onError);
+    method public static void setIntegrationIdentifierAsync(com.appactor.android.models.AppActorIntegrationIdentifier type, String? value, optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorErrorCallback? onError);
+    method public static void setIntegrationIdentifierAsync(String type, String? value, optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorErrorCallback? onError);
+    method public static void setKeywordAsync(String keyword, optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorErrorCallback? onError);
+    method public static void setMediaSourceAsync(String mediaSource, optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorErrorCallback? onError);
     method public static void setOnCustomerInfoChangedListener(com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorCustomerInfo>? listener);
     method public static void setOnReceiptPipelineEventListener(com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorReceiptPipelineEvent>? listener);
+    method public static void setOneSignalIDAsync(String? oneSignalID, optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorErrorCallback? onError);
     method public static void setPhoneNumberAsync(String? phoneNumber, optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorErrorCallback? onError);
     method public static void setPushTokenAsync(String? pushToken, optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorErrorCallback? onError);
     method public static void syncPurchasesAsync(optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorCustomerInfo>? onSuccess, optional com.appactor.android.models.AppActorErrorCallback? onError);
     method public static void unsetAttributeAsync(String key, optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorErrorCallback? onError);
+    method public static void unsetIntegrationIdentifierAsync(com.appactor.android.models.AppActorIntegrationIdentifier type, optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorErrorCallback? onError);
+    method public static void unsetIntegrationIdentifierAsync(String type, optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorErrorCallback? onError);
     method public static void updateAttributionAsync(com.appactor.android.models.AppActorAttribution attribution, optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorErrorCallback? onError);
     field public static final com.appactor.android.api.AppActorJava INSTANCE;
   }
@@ -258,12 +333,12 @@ package com.appactor.android.models {
     method public com.appactor.android.models.AppActorAttributeValue stringArray(java.util.List<java.lang.String> value);
   }
 
-  public static final class AppActorAttributeValue.DateArrayValue extends com.appactor.android.models.AppActorAttributeValue {
-    ctor public AppActorAttributeValue.DateArrayValue(java.util.List<? extends java.util.Date> value);
-    method public java.util.List<java.util.Date> component1();
-    method public com.appactor.android.models.AppActorAttributeValue.DateArrayValue copy(java.util.List<? extends java.util.Date> value);
-    method public java.util.List<java.util.Date> getValue();
-    property public final java.util.List<java.util.Date> value;
+  @Deprecated public static final class AppActorAttributeValue.DateArrayValue extends com.appactor.android.models.AppActorAttributeValue {
+    ctor @Deprecated public AppActorAttributeValue.DateArrayValue(java.util.List<? extends java.util.Date> value);
+    method @Deprecated public java.util.List<java.util.Date> component1();
+    method @Deprecated public com.appactor.android.models.AppActorAttributeValue.DateArrayValue copy(java.util.List<? extends java.util.Date> value);
+    method @Deprecated public java.util.List<java.util.Date> getValue();
+    property @Deprecated public final java.util.List<java.util.Date> value;
   }
 
   public static final class AppActorAttributeValue.DateValue extends com.appactor.android.models.AppActorAttributeValue {
@@ -933,6 +1008,20 @@ package com.appactor.android.models {
     property public final com.appactor.android.models.AppActorConfigValueType valueType;
     property public final String variantId;
     property public final String variantKey;
+  }
+
+  public enum AppActorIntegrationIdentifier {
+    method public String getWireValue();
+    property public final String wireValue;
+    enum_constant public static final com.appactor.android.models.AppActorIntegrationIdentifier AdjustId;
+    enum_constant public static final com.appactor.android.models.AppActorIntegrationIdentifier AmplitudeDeviceId;
+    enum_constant public static final com.appactor.android.models.AppActorIntegrationIdentifier AmplitudeUserId;
+    enum_constant public static final com.appactor.android.models.AppActorIntegrationIdentifier AppsFlyerId;
+    enum_constant public static final com.appactor.android.models.AppActorIntegrationIdentifier BranchId;
+    enum_constant public static final com.appactor.android.models.AppActorIntegrationIdentifier FacebookAnonymousId;
+    enum_constant public static final com.appactor.android.models.AppActorIntegrationIdentifier FirebaseAppInstanceId;
+    enum_constant public static final com.appactor.android.models.AppActorIntegrationIdentifier MixpanelDistinctId;
+    enum_constant public static final com.appactor.android.models.AppActorIntegrationIdentifier OneSignalId;
   }
 
   public enum AppActorLogLevel {

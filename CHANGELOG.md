@@ -2,9 +2,9 @@
 
 ## 0.1.4
 
-- Added customer attribute polish for RevenueCat-style migration helpers, stricter null/unset handling, profile validation, and typed date payload parity.
-- Expanded Android system attributes with platform and timezone metadata while keeping explicit helpers for sensitive identifiers.
-- Updated the Android plugin bridge to reject null attribute values and decode typed date envelopes from Flutter.
+- Added customer attribute polish for RevenueCat-style migration helpers, nullable custom-attribute unsets, profile validation, and typed date payload parity.
+- Expanded Android system profile-current context with platform, wrapper platform, and timezone metadata while keeping explicit helpers for sensitive identifiers.
+- Updated the Android plugin bridge to keep `set_attributes` developer-custom only, reject null bridge values in favor of `unset_attribute`, and decode typed date envelopes from Flutter.
 
 ## 0.1.3
 
