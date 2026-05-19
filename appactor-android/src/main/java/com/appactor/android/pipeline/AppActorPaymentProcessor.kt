@@ -241,7 +241,7 @@ internal class AppActorPaymentProcessor(
                         identityTransitionBuffer.add(BufferedPurchase(purchase, userId, updateContext))
                     } else {
                         overflowPurchases.add(BufferedPurchase(purchase, userId, updateContext))
-                        AppActorLogger.warn("[PaymentProcessor] Transition buffer full ($maxTransitionBufferSize), purchase ${purchase.productId} will use current identity instead of buffered identity")
+                        AppActorLogger.warn("[PaymentProcessor] Transition buffer full ($maxTransitionBufferSize), purchase ${purchase.productId} will be processed immediately with captured identity")
                     }
                 }
                 overflowPurchases
@@ -250,13 +250,13 @@ internal class AppActorPaymentProcessor(
                 // Fall through — no identity transition active.
             } else if (overflow.isEmpty()) {
                 return null
-            } else {
-                return processPurchaseUpdatesInternal(
-                    purchases = overflow.map { it.purchase },
-                    appUserIdOverride = identityStore.currentAppUserId ?: identityStore.ensureAppUserId(),
-                    purchaseUpdateContextOverrides = overflow.associate { it.purchase.purchaseToken to it.purchaseUpdateContext },
-                    emitDeferredPurchaseCallback = emitDeferredPurchaseCallback,
-                )
+	            } else {
+	                return processPurchaseUpdatesInternal(
+	                    purchases = overflow.map { it.purchase },
+	                    appUserIdOverride = overflow.first().capturedAppUserId,
+	                    purchaseUpdateContextOverrides = overflow.associate { it.purchase.purchaseToken to it.purchaseUpdateContext },
+	                    emitDeferredPurchaseCallback = emitDeferredPurchaseCallback,
+	                )
             }
         }
         var processedAppUserId: String? = null
@@ -349,8 +349,12 @@ internal class AppActorPaymentProcessor(
                     )
                 }
 
-                is AppActorStorePurchaseLaunchResult.Purchased -> {
-                    val purchaseResult = pipelineMutex.withLock {
+	                is AppActorStorePurchaseLaunchResult.Purchased -> {
+	                    val completedContext = clientPurchaseContext.withDeliverySource(
+	                        AppActorClientDeliverySource.PurchaseFlow,
+	                        observedAtMillis = dateProviderMillis(),
+	                    )
+	                    val purchaseResult = pipelineMutex.withLock {
                         val productEntitlements = ensureProductEntitlements()
                         val primaryPurchase = launchResult.purchases.firstOrNull { purchase ->
                             target.matches(purchase)
@@ -361,11 +365,11 @@ internal class AppActorPaymentProcessor(
                             val outcome = enqueueAndProcess(
                                 purchase = purchase,
                                 productEntitlements = productEntitlements,
-                                appUserIdOverride = appUserId,
-                                offeringId = if (isPrimary) target.offeringId else null,
-                                packageId = if (isPrimary) target.packageId else null,
-                                clientPurchaseContext = clientPurchaseContext,
-                            )
+	                                appUserIdOverride = appUserId,
+	                                offeringId = if (isPrimary) target.offeringId else null,
+	                                packageId = if (isPrimary) target.packageId else null,
+	                                clientPurchaseContext = completedContext,
+	                            )
                             if (purchase.purchaseToken == primaryPurchase.purchaseToken) {
                                 primaryOutcome = outcome
                             }
@@ -463,6 +467,28 @@ internal class AppActorPaymentProcessor(
                 return@forEach
             }
             allProcessedPurchases += normalized
+            val pendingUpdateContext = consumePendingPurchaseUpdateContext(normalized)
+            if (pendingUpdateContext != null) {
+                when (val outcome = enqueueAndProcess(
+                    normalized,
+                    productEntitlements,
+                    appUserId,
+                    sourceIntent = pendingUpdateContext.sourceIntent,
+                    clientPurchaseContext = pendingUpdateContext.clientPurchaseContext,
+                )) {
+                    is ProcessingOutcome.Success -> {
+                        latestCustomer = outcome.customerInfo
+                        fireDeferredPurchaseCallbackIfNeeded(normalized, outcome.customerInfo)
+                    }
+                    is ProcessingOutcome.AlreadyPosted -> {
+                        latestCustomer = outcome.customerInfo
+                        fireDeferredPurchaseCallbackIfNeeded(normalized, outcome.customerInfo)
+                    }
+                    is ProcessingOutcome.Queued,
+                    is ProcessingOutcome.PermanentFailure -> Unit
+                }
+                return@forEach
+            }
             if (normalized.productType == AppActorProductType.Unknown) {
                 when (val outcome = enqueueAndProcess(
                     normalized,
@@ -788,6 +814,11 @@ internal class AppActorPaymentProcessor(
                 claimedAtMillis = null,
                 lastUpdatedAtMillis = now,
                 lastError = null,
+                clientDeliverySource = if (item.clientDeliverySource != null) {
+                    AppActorClientDeliverySource.QueueRetry.wireValue
+                } else {
+                    null
+                },
             )
         }
         queueStore.upsertAll(revived)
@@ -903,6 +934,7 @@ internal class AppActorPaymentProcessor(
         }
 
         val now = dateProviderMillis()
+        val adoptClientContext = shouldAdoptDeadLetterClientPurchaseContext(existing, incoming)
         val baseline = existing.copy(
             appUserId = incoming.appUserId,
             environment = incoming.environment,
@@ -916,12 +948,17 @@ internal class AppActorPaymentProcessor(
             currencyCode = incoming.currencyCode ?: existing.currencyCode,
             offeringId = incoming.offeringId ?: existing.offeringId,
             packageId = incoming.packageId ?: existing.packageId,
-            clientPurchaseAttemptStartedAt = incoming.clientPurchaseAttemptStartedAt ?: existing.clientPurchaseAttemptStartedAt,
-            clientObservedAt = incoming.clientObservedAt ?: existing.clientObservedAt,
-            clientDeliverySource = incoming.clientDeliverySource ?: existing.clientDeliverySource,
-            clientPurchaseAttemptId = incoming.clientPurchaseAttemptId ?: existing.clientPurchaseAttemptId,
-            sdkOriginated = incoming.sdkOriginated ?: existing.sdkOriginated,
-            sdkVersion = incoming.sdkVersion ?: existing.sdkVersion,
+            sourceIntent = mergeDeadLetterSourceIntent(existing, incoming),
+            clientPurchaseAttemptStartedAt = if (adoptClientContext) {
+                incoming.clientPurchaseAttemptStartedAt
+            } else {
+                existing.clientPurchaseAttemptStartedAt
+            },
+            clientObservedAt = if (adoptClientContext) incoming.clientObservedAt else existing.clientObservedAt,
+            clientDeliverySource = if (adoptClientContext) incoming.clientDeliverySource else existing.clientDeliverySource,
+            clientPurchaseAttemptId = if (adoptClientContext) incoming.clientPurchaseAttemptId else existing.clientPurchaseAttemptId,
+            sdkOriginated = if (adoptClientContext) incoming.sdkOriginated else existing.sdkOriginated,
+            sdkVersion = if (adoptClientContext) incoming.sdkVersion else existing.sdkVersion,
             isAcknowledged = existing.isAcknowledged || incoming.isAcknowledged,
             retryCount = 0,
             nextRetryAtMillis = 0L,
@@ -942,6 +979,49 @@ internal class AppActorPaymentProcessor(
         }
 
         return resolved.takeIf { it.productType != AppActorProductType.Unknown.wireValue }
+    }
+
+    private fun mergeDeadLetterSourceIntent(
+        existing: AppActorReceiptQueueItem,
+        incoming: AppActorReceiptQueueItem,
+    ): String {
+        val priority = mapOf(
+            SOURCE_INTENT_QUEUE to 0,
+            SOURCE_INTENT_SYNC to 1,
+            SOURCE_INTENT_RESTORE to 2,
+            SOURCE_INTENT_PURCHASE to 3,
+        )
+        val existingPriority = priority[existing.sourceIntent] ?: 0
+        val incomingPriority = priority[incoming.sourceIntent] ?: 0
+        return if (incomingPriority > existingPriority) incoming.sourceIntent else existing.sourceIntent
+    }
+
+    private fun shouldAdoptDeadLetterClientPurchaseContext(
+        existing: AppActorReceiptQueueItem,
+        incoming: AppActorReceiptQueueItem,
+    ): Boolean {
+        val incomingHasAttempt = incoming.clientPurchaseAttemptStartedAt != null &&
+            !incoming.clientPurchaseAttemptId.isNullOrBlank()
+        val incomingHasAnyContext = incoming.clientDeliverySource != null ||
+            incoming.clientPurchaseAttemptStartedAt != null ||
+            incoming.clientPurchaseAttemptId != null ||
+            incoming.clientObservedAt != null
+        if (!incomingHasAnyContext) return false
+
+        val existingHasAnyContext = existing.clientDeliverySource != null ||
+            existing.clientPurchaseAttemptStartedAt != null ||
+            existing.clientPurchaseAttemptId != null ||
+            existing.clientObservedAt != null
+        if (!existingHasAnyContext) {
+            return incomingHasAttempt || incoming.clientDeliverySource != AppActorClientDeliverySource.TransactionUpdates.wireValue
+        }
+
+        val existingHasAttempt = existing.clientPurchaseAttemptStartedAt != null &&
+            !existing.clientPurchaseAttemptId.isNullOrBlank()
+        if (incomingHasAttempt && !existingHasAttempt) return true
+        return incomingHasAttempt &&
+            incoming.clientDeliverySource == AppActorClientDeliverySource.PurchaseFlow.wireValue &&
+            existing.clientDeliverySource != AppActorClientDeliverySource.PurchaseFlow.wireValue
     }
 
     private suspend fun buildRestorePlan(
@@ -1528,18 +1608,9 @@ internal class AppActorPaymentProcessor(
     }
 
     private fun resolvePurchaseUpdateContext(purchase: AppActorStorePurchase): PurchaseUpdateContext {
-        pendingPurchaseTokens[purchase.purchaseToken]?.let { rawEntry ->
-            val entry = PendingPurchaseEntry.parse(rawEntry)
-            val now = dateProviderMillis()
-            if (entry != null && now - entry.recordedAtMillis <= PENDING_EXPIRY_MILLIS) {
-                return PurchaseUpdateContext(
-                    sourceIntent = SOURCE_INTENT_PURCHASE,
-                    clientPurchaseContext = AppActorClientPurchaseContext.fromPendingEntry(entry, observedAtMillis = now)
-                        ?: AppActorClientPurchaseContext.transactionUpdates(now),
-                )
-            }
-            pendingPurchaseTokens.remove(purchase.purchaseToken)
-            persistPendingState()
+        val pendingContext = consumePendingPurchaseUpdateContext(purchase)
+        if (pendingContext != null) {
+            return pendingContext
         }
 
         val foregroundContext = consumeRecentForegroundPurchaseContext(purchase.productId)
@@ -1557,6 +1628,22 @@ internal class AppActorPaymentProcessor(
             sourceIntent = SOURCE_INTENT_QUEUE,
             clientPurchaseContext = AppActorClientPurchaseContext.transactionUpdates(dateProviderMillis()),
         )
+    }
+
+    private fun consumePendingPurchaseUpdateContext(purchase: AppActorStorePurchase): PurchaseUpdateContext? {
+        val rawEntry = pendingPurchaseTokens[purchase.purchaseToken] ?: return null
+        val entry = PendingPurchaseEntry.parse(rawEntry)
+        val now = dateProviderMillis()
+        if (entry != null && now - entry.recordedAtMillis <= PENDING_EXPIRY_MILLIS) {
+            return PurchaseUpdateContext(
+                sourceIntent = SOURCE_INTENT_PURCHASE,
+                clientPurchaseContext = AppActorClientPurchaseContext.fromPendingEntry(entry, observedAtMillis = now)
+                    ?: AppActorClientPurchaseContext.transactionUpdates(now),
+            )
+        }
+        pendingPurchaseTokens.remove(purchase.purchaseToken)
+        persistPendingState()
+        return null
     }
 
     private fun persistPendingState() {
