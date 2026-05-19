@@ -31,6 +31,7 @@ import com.appactor.android.cache.AppActorOfflineProductCatalogStore
 import com.appactor.android.cache.AppActorOfferingsCacheStore
 import com.appactor.android.managers.AppActorCustomerManager
 import com.appactor.android.managers.AppActorOfferingsManager
+import com.appactor.android.models.AppActorBridgeReceiptEvent
 import com.appactor.android.models.AppActorConfiguration
 import com.appactor.android.models.AppActorEnvironment
 import com.appactor.android.models.AppActorError
@@ -97,6 +98,13 @@ class AppActorPaymentProcessorTests {
         assertTrue(dependencies.consumedTokens.isEmpty())
         assertTrue(dependencies.queueStore.snapshot().isEmpty())
         assertTrue(dependencies.ledgerStore.isPosted("google:com.appactor.pro.monthly:monthly001:token_123"))
+        val receipt = dependencies.postedReceipts.single()
+        assertEquals("purchase_flow", receipt.clientDeliverySource)
+        assertTrue(receipt.clientPurchaseAttemptStartedAt?.isNotBlank() == true)
+        assertTrue(receipt.clientObservedAt?.isNotBlank() == true)
+        assertTrue(receipt.clientPurchaseAttemptId?.isNotBlank() == true)
+        assertEquals(true, receipt.sdkOriginated)
+        assertTrue(receipt.sdkVersion?.isNotBlank() == true)
     }
 
     @Test
@@ -229,6 +237,8 @@ class AppActorPaymentProcessorTests {
         assertTrue(info?.hasActiveEntitlement("premium") == true)
         assertEquals(1, dependencies.postedReceipts.size)
         assertEquals("queue", dependencies.postedReceipts.single().sourceIntent)
+        assertEquals("transaction_updates", dependencies.postedReceipts.single().clientDeliverySource)
+        assertNull(dependencies.postedReceipts.single().clientPurchaseAttemptStartedAt)
         assertEquals(4_990_000L, dependencies.postedReceipts.single().priceAmountMicros)
         assertEquals("USD", dependencies.postedReceipts.single().currency)
     }
@@ -289,6 +299,66 @@ class AppActorPaymentProcessorTests {
 
         assertEquals(1, dependencies.postedReceipts.size)
         assertEquals("purchase", dependencies.postedReceipts.single().sourceIntent)
+        assertNull(dependencies.postedReceipts.single().clientDeliverySource)
+        assertNull(dependencies.postedReceipts.single().clientPurchaseAttemptStartedAt)
+        assertNull(dependencies.postedReceipts.single().clientPurchaseAttemptId)
+    }
+
+    @Test
+    fun `pending purchase update keeps original attempt and refreshes observed time`() = runBlocking {
+        val pendingPrefs = context.getSharedPreferences(
+            "com.appactor.android.pending_purchases",
+            Context.MODE_PRIVATE,
+        )
+        val attemptStartedAt = 1_710_000_000_000L
+        val pendingRecordedAt = 1_710_000_030_000L
+        val completedAt = 1_710_003_600_000L
+        pendingPrefs.edit()
+            .clear()
+            .putString(
+                "token_pending_modern_123",
+                "com.appactor.pro.monthly|$pendingRecordedAt|$attemptStartedAt|attempt-google-pending",
+            )
+            .commit()
+
+        try {
+            val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
+            val dependencies = createDependencies(
+                receiptResponse = AppActorBackendHttpResponse(
+                    body = receiptResponse,
+                    statusCode = 200,
+                    requestId = receiptResponse.requestId,
+                    signatureVerified = true,
+                ),
+                dateProviderMillis = { completedAt },
+            )
+            val purchase = AppActorStorePurchase(
+                productId = "com.appactor.pro.monthly",
+                productType = AppActorProductType.Subscription,
+                purchaseToken = "token_pending_modern_123",
+                orderId = "GPA.pending.modern.1234",
+                purchaseTimeMillis = completedAt,
+                purchaseState = com.appactor.android.billing.AppActorStorePurchaseState.Purchased,
+                basePlanId = "monthly001",
+                offerId = "intro7d",
+                isAcknowledged = false,
+                isAutoRenewing = true,
+                rawPurchaseData = "{\"purchaseToken\":\"token_pending_modern_123\"}",
+                purchaseSignature = "signature_pending_modern_123",
+            )
+
+            dependencies.processor.processPurchaseUpdates(listOf(purchase))
+
+            val receipt = dependencies.postedReceipts.single()
+            assertEquals("purchase", receipt.sourceIntent)
+            assertEquals("transaction_updates", receipt.clientDeliverySource)
+            assertEquals(AppActorBridgeReceiptEvent.millisToIso8601(attemptStartedAt), receipt.clientPurchaseAttemptStartedAt)
+            assertEquals(AppActorBridgeReceiptEvent.millisToIso8601(completedAt), receipt.clientObservedAt)
+            assertEquals("attempt-google-pending", receipt.clientPurchaseAttemptId)
+            assertFalse(pendingPrefs.contains("token_pending_modern_123"))
+        } finally {
+            pendingPrefs.edit().clear().commit()
+        }
     }
 
     @Test
@@ -522,6 +592,12 @@ class AppActorPaymentProcessorTests {
 
         assertTrue("drainAll should return fresh premium customer", drained?.hasActiveEntitlement("premium") == true)
         assertEquals("receipt should be posted once during purchase and once during retry drain", 2, dependencies.postedReceipts.size)
+        assertEquals("purchase_flow", dependencies.postedReceipts.first().clientDeliverySource)
+        assertEquals("queue_retry", dependencies.postedReceipts.last().clientDeliverySource)
+        assertEquals(
+            dependencies.postedReceipts.first().clientPurchaseAttemptId,
+            dependencies.postedReceipts.last().clientPurchaseAttemptId,
+        )
         assertEquals("successful retry should acknowledge purchase", listOf("token_123"), dependencies.acknowledgedTokens)
         assertTrue("queue should be empty after retry succeeds", dependencies.queueStore.snapshot().isEmpty())
     }
@@ -602,6 +678,8 @@ class AppActorPaymentProcessorTests {
         assertTrue(info?.hasActiveEntitlement("premium") == true)
         assertEquals(1, dependencies.syncRequests.size)
         assertEquals("sync", dependencies.syncRequests.single().sourceIntent)
+        assertEquals("foreground_sync", dependencies.syncRequests.single().clientDeliverySource)
+        assertTrue(dependencies.syncRequests.single().clientObservedAt?.isNotBlank() == true)
         assertEquals("token_sync_123", dependencies.syncRequests.single().purchases.single().purchaseToken)
         assertEquals(4_990_000L, dependencies.syncRequests.single().purchases.single().priceAmountMicros)
         assertEquals("USD", dependencies.syncRequests.single().purchases.single().currency)
@@ -1513,6 +1591,8 @@ class AppActorPaymentProcessorTests {
         assertTrue(info.hasActiveEntitlement("premium"))
         assertEquals(1, dependencies.restoreRequests.size)
         assertEquals("restore", dependencies.restoreRequests.single().sourceIntent)
+        assertEquals("restore_flow", dependencies.restoreRequests.single().clientDeliverySource)
+        assertTrue(dependencies.restoreRequests.single().clientObservedAt?.isNotBlank() == true)
         assertEquals("token_restore_123", dependencies.restoreRequests.single().purchases.single().purchaseToken)
         assertEquals(4_990_000L, dependencies.restoreRequests.single().purchases.single().priceAmountMicros)
         assertEquals("USD", dependencies.restoreRequests.single().purchases.single().currency)
