@@ -250,13 +250,13 @@ internal class AppActorPaymentProcessor(
                 // Fall through — no identity transition active.
             } else if (overflow.isEmpty()) {
                 return null
-	            } else {
-	                return processPurchaseUpdatesInternal(
-	                    purchases = overflow.map { it.purchase },
-	                    appUserIdOverride = overflow.first().capturedAppUserId,
-	                    purchaseUpdateContextOverrides = overflow.associate { it.purchase.purchaseToken to it.purchaseUpdateContext },
-	                    emitDeferredPurchaseCallback = emitDeferredPurchaseCallback,
-	                )
+            } else {
+                return processPurchaseUpdatesInternal(
+                    purchases = overflow.map { it.purchase },
+                    appUserIdOverride = overflow.first().capturedAppUserId,
+                    purchaseUpdateContextOverrides = overflow.associate { it.purchase.purchaseToken to it.purchaseUpdateContext },
+                    emitDeferredPurchaseCallback = false,
+                )
             }
         }
         var processedAppUserId: String? = null
@@ -775,8 +775,22 @@ internal class AppActorPaymentProcessor(
         var latestCustomer: AppActorCustomerInfo? = null
         claimed.forEach { item ->
             when (val outcome = processClaimedItem(item, productEntitlements)) {
-                is ProcessingOutcome.Success -> latestCustomer = outcome.customerInfo
-                is ProcessingOutcome.AlreadyPosted -> latestCustomer = outcome.customerInfo
+                is ProcessingOutcome.Success -> {
+                    latestCustomer = outcome.customerInfo
+                    resolveDeferredPurchaseCallbackIfNeeded(
+                        purchaseToken = item.purchaseToken,
+                        customerInfo = outcome.customerInfo,
+                        emitCallback = identityStore.currentAppUserId == item.appUserId,
+                    )
+                }
+                is ProcessingOutcome.AlreadyPosted -> {
+                    latestCustomer = outcome.customerInfo
+                    resolveDeferredPurchaseCallbackIfNeeded(
+                        purchaseToken = item.purchaseToken,
+                        customerInfo = outcome.customerInfo,
+                        emitCallback = identityStore.currentAppUserId == item.appUserId,
+                    )
+                }
                 is ProcessingOutcome.Queued,
                 is ProcessingOutcome.PermanentFailure -> Unit
             }
@@ -1559,8 +1573,20 @@ internal class AppActorPaymentProcessor(
         customerInfo: AppActorCustomerInfo,
         emitCallback: Boolean = true,
     ) {
+        resolveDeferredPurchaseCallbackIfNeeded(
+            purchaseToken = purchase.purchaseToken,
+            customerInfo = customerInfo,
+            emitCallback = emitCallback,
+        )
+    }
+
+    private fun resolveDeferredPurchaseCallbackIfNeeded(
+        purchaseToken: String,
+        customerInfo: AppActorCustomerInfo,
+        emitCallback: Boolean = true,
+    ) {
         var resolvedProductId: String? = null
-        pendingPurchaseTokens.compute(purchase.purchaseToken) { _, entry ->
+        pendingPurchaseTokens.compute(purchaseToken) { _, entry ->
             if (entry == null) return@compute null
             val pendingEntry = PendingPurchaseEntry.parse(entry) ?: return@compute null
             if (dateProviderMillis() - pendingEntry.recordedAtMillis > PENDING_EXPIRY_MILLIS) {
