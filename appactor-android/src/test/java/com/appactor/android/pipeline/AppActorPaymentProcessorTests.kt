@@ -240,7 +240,15 @@ class AppActorPaymentProcessorTests {
                 signatureVerified = true,
             ),
         )
-        dependencies.ledgerStore.markPosted("google:com.appactor.pro.monthly:monthly001:token_123")
+        dependencies.ledgerStore.markPosted(
+            AppActorReceiptQueueItem.makeKey(
+                purchaseToken = "token_123",
+                productId = "com.appactor.pro.monthly",
+                basePlanId = "monthly001",
+                orderId = "GPA.1234",
+                purchaseTime = "1710000000000",
+            )
+        )
 
         val result = dependencies.processor.purchase(Activity(), monthlyPackage())
 
@@ -249,6 +257,53 @@ class AppActorPaymentProcessorTests {
         assertEquals(0, dependencies.postedReceipts.size)
         assertEquals(listOf("user_android_123"), dependencies.fetchedCustomers)
         assertTrue(dependencies.queueStore.snapshot().isEmpty())
+    }
+
+    @Test
+    fun `purchase updates repost same token when order id advances`() = runBlocking {
+        val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
+        val dependencies = createDependencies(
+            receiptResponse = AppActorBackendHttpResponse(
+                body = receiptResponse,
+                statusCode = 200,
+                requestId = receiptResponse.requestId,
+                signatureVerified = true,
+            ),
+        )
+        val original = AppActorStorePurchase(
+            productId = "com.appactor.pro.monthly",
+            productType = AppActorProductType.Subscription,
+            purchaseToken = "token_same_chain_123",
+            orderId = "GPA.same.chain.0",
+            purchaseTimeMillis = 1_710_000_000_000,
+            purchaseState = com.appactor.android.billing.AppActorStorePurchaseState.Purchased,
+            basePlanId = "monthly001",
+            offerId = "intro7d",
+            isAcknowledged = false,
+            isAutoRenewing = true,
+            rawPurchaseData = "{\"purchaseToken\":\"token_same_chain_123\"}",
+            purchaseSignature = "signature_same_chain_0",
+        )
+        val renewal = original.copy(
+            orderId = "GPA.same.chain.1",
+            purchaseTimeMillis = 1_710_086_400_000,
+            rawPurchaseData = "{\"purchaseToken\":\"token_same_chain_123\",\"renewal\":true}",
+            purchaseSignature = "signature_same_chain_1",
+        )
+
+        dependencies.processor.processPurchaseUpdates(listOf(original))
+        dependencies.processor.processPurchaseUpdates(listOf(renewal))
+
+        assertEquals(2, dependencies.postedReceipts.size)
+        assertEquals(listOf("GPA.same.chain.0", "GPA.same.chain.1"), dependencies.postedReceipts.map { it.orderId })
+        assertEquals(
+            listOf(
+                "google:com.appactor.pro.monthly:monthly001:token_same_chain_123",
+                "google:com.appactor.pro.monthly:monthly001:token_same_chain_123:orderId=GPA.same.chain.0",
+                "google:com.appactor.pro.monthly:monthly001:token_same_chain_123:orderId=GPA.same.chain.1",
+            ),
+            dependencies.ledgerStore.snapshot().keys.sorted(),
+        )
     }
 
     @Test
@@ -403,6 +458,64 @@ class AppActorPaymentProcessorTests {
             assertEquals(AppActorBridgeReceiptEvent.millisToIso8601(completedAt), receipt.clientObservedAt)
             assertEquals("attempt-google-pending", receipt.clientPurchaseAttemptId)
             assertFalse(pendingPrefs.contains("token_pending_modern_123"))
+        } finally {
+            pendingPrefs.edit().clear().commit()
+        }
+    }
+
+    @Test
+    fun `legacy pending purchase update keeps purchase intent without synthetic update context`() = runBlocking {
+        val pendingPrefs = context.getSharedPreferences(
+            "com.appactor.android.pending_purchases",
+            Context.MODE_PRIVATE,
+        )
+        val pendingRecordedAt = 1_710_000_030_000L
+        val completedAt = 1_710_003_600_000L
+        pendingPrefs.edit()
+            .clear()
+            .putString(
+                "token_pending_legacy_123",
+                "com.appactor.pro.monthly|$pendingRecordedAt",
+            )
+            .commit()
+
+        try {
+            val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
+            val dependencies = createDependencies(
+                receiptResponse = AppActorBackendHttpResponse(
+                    body = receiptResponse,
+                    statusCode = 200,
+                    requestId = receiptResponse.requestId,
+                    signatureVerified = true,
+                ),
+                dateProviderMillis = { completedAt },
+            )
+            val purchase = AppActorStorePurchase(
+                productId = "com.appactor.pro.monthly",
+                productType = AppActorProductType.Subscription,
+                purchaseToken = "token_pending_legacy_123",
+                orderId = "GPA.pending.legacy.1234",
+                purchaseTimeMillis = completedAt,
+                purchaseState = com.appactor.android.billing.AppActorStorePurchaseState.Purchased,
+                basePlanId = "monthly001",
+                offerId = "intro7d",
+                isAcknowledged = false,
+                isAutoRenewing = true,
+                rawPurchaseData = "{\"purchaseToken\":\"token_pending_legacy_123\"}",
+                purchaseSignature = "signature_pending_legacy_123",
+            )
+
+            dependencies.processor.processPurchaseUpdates(listOf(purchase))
+
+            val receipt = dependencies.postedReceipts.single()
+            assertEquals("purchase", receipt.sourceIntent)
+            assertNull(receipt.clientDeliverySource)
+            assertNull(receipt.clientPurchaseAttemptStartedAt)
+            assertNull(receipt.clientObservedAt)
+            assertNull(receipt.clientPurchaseAttemptId)
+            assertNull(receipt.sdkOriginated)
+            assertNull(receipt.sdkVersion)
+            assertFalse(pendingPrefs.contains("token_pending_legacy_123"))
         } finally {
             pendingPrefs.edit().clear().commit()
         }
@@ -596,7 +709,15 @@ class AppActorPaymentProcessorTests {
             )
         }
         dependencies.queueStore.upsert(queuedItem)
-        dependencies.ledgerStore.markPosted(queuedItem.key)
+        dependencies.ledgerStore.markPosted(
+            AppActorReceiptQueueItem.makeKey(
+                purchaseToken = queuedItem.purchaseToken,
+                productId = queuedItem.productId,
+                basePlanId = queuedItem.basePlanId,
+                orderId = queuedItem.orderId,
+                purchaseTime = queuedItem.purchaseTime,
+            )
+        )
 
         dependencies.processor.drainReadyQueue()
 
@@ -1943,6 +2064,64 @@ class AppActorPaymentProcessorTests {
     }
 
     @Test
+    fun `restore purchases clears deferred pending state after successful bulk restore`() = runBlocking {
+        val pendingPrefs = context.getSharedPreferences(
+            "com.appactor.android.pending_purchases",
+            Context.MODE_PRIVATE,
+        )
+        val now = 1_710_000_000_000L
+        val token = "token_restore_pending_123"
+        pendingPrefs.edit()
+            .clear()
+            .putString(token, "com.appactor.pro.monthly|$now|$now|attempt-restore-pending")
+            .commit()
+        try {
+            val restoreResponse = fixtureRestoreResponse("fixtures/backend/google_restore_sample.json")
+            val activePurchase = AppActorStorePurchase(
+                productId = "com.appactor.pro.monthly",
+                productType = AppActorProductType.Subscription,
+                purchaseToken = token,
+                orderId = "GPA.restore.pending.1234",
+                purchaseTimeMillis = now,
+                purchaseState = com.appactor.android.billing.AppActorStorePurchaseState.Purchased,
+                basePlanId = "monthly001",
+                offerId = "intro7d",
+                isAcknowledged = false,
+                isAutoRenewing = true,
+            )
+            val dependencies = createDependencies(
+                receiptResponse = AppActorBackendHttpResponse(
+                    body = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json"),
+                    statusCode = 200,
+                    requestId = "unused",
+                    signatureVerified = true,
+                ),
+                activePurchases = listOf(activePurchase),
+                restoreResponse = AppActorBackendHttpResponse(
+                    body = restoreResponse,
+                    statusCode = 200,
+                    requestId = restoreResponse.requestId,
+                    signatureVerified = true,
+                ),
+                dateProviderMillis = { now + 1_000 },
+            )
+            val deferredCallbacks = mutableListOf<String>()
+            dependencies.processor.onDeferredPurchaseResolved = { productId, customerInfo ->
+                if (customerInfo.hasActiveEntitlement("premium")) {
+                    deferredCallbacks += productId
+                }
+            }
+
+            dependencies.processor.restorePurchases()
+
+            assertEquals(listOf("com.appactor.pro.monthly"), deferredCallbacks)
+            assertFalse(pendingPrefs.contains(token))
+        } finally {
+            pendingPrefs.edit().clear().commit()
+        }
+    }
+
+    @Test
     fun `restore purchases only finalizes active purchases confirmed by restore batch`() = runBlocking {
         val restoreResponse = fixtureRestoreResponse("fixtures/backend/google_restore_sample.json")
         val successfulPurchase = AppActorStorePurchase(
@@ -2368,8 +2547,72 @@ class AppActorPaymentProcessorTests {
         assertTrue(info.hasActiveEntitlement("premium"))
         assertEquals(1, dependencies.restoreRequests.size)
         assertEquals(1, dependencies.syncRequests.size)
+        assertEquals("restore", dependencies.syncRequests.single().sourceIntent)
+        assertEquals("user_restore", dependencies.syncRequests.single().source)
+        assertEquals("restore_flow", dependencies.syncRequests.single().clientDeliverySource)
         assertTrue(dependencies.postedReceipts.isEmpty())
-        assertEquals(1, dependencies.fetchedCustomers.size)
+        assertTrue(dependencies.fetchedCustomers.isEmpty())
+    }
+
+    @Test
+    fun `restore fallback returns canonical customer resolved by sync`() = runBlocking {
+        val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
+        val activePurchase = AppActorStorePurchase(
+            productId = "com.appactor.pro.monthly",
+            productType = AppActorProductType.Subscription,
+            purchaseToken = "token_restore_fallback_canonical_123",
+            orderId = "GPA.restore.fallback.canonical.1234",
+            purchaseTimeMillis = 1_710_000_000_000,
+            purchaseState = com.appactor.android.billing.AppActorStorePurchaseState.Purchased,
+            basePlanId = "monthly001",
+            offerId = "intro7d",
+            isAcknowledged = false,
+            isAutoRenewing = true,
+            rawPurchaseData = "{\"purchaseToken\":\"token_restore_fallback_canonical_123\"}",
+            purchaseSignature = "signature_restore_fallback_canonical_123",
+        )
+        val identityStore = createMockIdentityStore(initialAppUserId = "appactor-anon-old")
+        val dependencies = createDependencies(
+            receiptResponse = AppActorBackendHttpResponse(
+                body = receiptResponse,
+                statusCode = 200,
+                requestId = receiptResponse.requestId,
+                signatureVerified = true,
+            ),
+            activePurchases = listOf(activePurchase),
+            syncResponse = AppActorBackendHttpResponse(
+                body = AppActorGoogleSyncResponseDTO(
+                    appUserId = "user_google_canonical",
+                    customer = requireNotNull(receiptResponse.customer),
+                    syncedCount = 1,
+                    transferred = true,
+                    results = listOf(
+                        AppActorGoogleBatchResultDTO(
+                            purchaseToken = activePurchase.purchaseToken,
+                            productId = activePurchase.productId,
+                            basePlanId = activePurchase.basePlanId,
+                            offerId = activePurchase.offerId,
+                            status = "synced",
+                        ),
+                    ),
+                    requestId = "req_restore_fallback_sync",
+                ),
+                statusCode = 200,
+                requestId = "req_restore_fallback_sync",
+                signatureVerified = true,
+            ),
+            restoreThrowable = IllegalStateException("restore down"),
+            identityStore = identityStore,
+        )
+
+        val info = dependencies.processor.restorePurchases()
+
+        assertEquals("user_google_canonical", dependencies.identityStore.currentAppUserId)
+        assertEquals("user_google_canonical", info.appUserId)
+        assertEquals("appactor-anon-old", dependencies.syncRequests.single().appUserId)
+        assertEquals("restore", dependencies.syncRequests.single().sourceIntent)
+        assertEquals("user_restore", dependencies.syncRequests.single().source)
+        assertTrue(dependencies.fetchedCustomers.isEmpty())
     }
 
     // region — MockK Identity Store Factory

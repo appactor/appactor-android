@@ -125,8 +125,39 @@ internal class AppActorPaymentProcessor(
 
     private data class PurchaseUpdateContext(
         val sourceIntent: String,
-        val clientPurchaseContext: AppActorClientPurchaseContext,
+        val clientPurchaseContext: AppActorClientPurchaseContext?,
     )
+
+    private data class CurrentPurchasesSyncMetadata(
+        val sourceIntent: String,
+        val source: String,
+        val clientDeliverySource: AppActorClientDeliverySource,
+    ) {
+        fun clientPurchaseContext(observedAtMillis: Long): AppActorClientPurchaseContext {
+            return AppActorClientPurchaseContext(
+                clientObservedAtMillis = observedAtMillis,
+                clientDeliverySource = clientDeliverySource,
+            )
+        }
+
+        companion object {
+            fun foregroundSync(): CurrentPurchasesSyncMetadata {
+                return CurrentPurchasesSyncMetadata(
+                    sourceIntent = SOURCE_INTENT_SYNC,
+                    source = "foreground_sync",
+                    clientDeliverySource = AppActorClientDeliverySource.ForegroundSync,
+                )
+            }
+
+            fun restoreFallback(): CurrentPurchasesSyncMetadata {
+                return CurrentPurchasesSyncMetadata(
+                    sourceIntent = SOURCE_INTENT_RESTORE,
+                    source = "user_restore",
+                    clientDeliverySource = AppActorClientDeliverySource.RestoreFlow,
+                )
+            }
+        }
+    }
 
     suspend fun beginIdentityTransition() {
         transitionMutex.withLock {
@@ -448,6 +479,7 @@ internal class AppActorPaymentProcessor(
         appUserIdOverride: String? = null,
         excludedPurchaseTokens: Set<String> = emptySet(),
         refreshEntitlementsIfMissing: Boolean = true,
+        metadata: CurrentPurchasesSyncMetadata = CurrentPurchasesSyncMetadata.foregroundSync(),
     ): AppActorCustomerInfo? {
         val appUserId = appUserIdOverride
             ?.takeIf { it.isNotBlank() }
@@ -494,8 +526,8 @@ internal class AppActorPaymentProcessor(
                     normalized,
                     productEntitlements,
                     appUserId,
-                    sourceIntent = SOURCE_INTENT_SYNC,
-                    clientPurchaseContext = AppActorClientPurchaseContext.foregroundSync(dateProviderMillis()),
+                    sourceIntent = metadata.sourceIntent,
+                    clientPurchaseContext = metadata.clientPurchaseContext(dateProviderMillis()),
                 )) {
                     is ProcessingOutcome.Success -> latestCustomer = outcome.customerInfo
                     is ProcessingOutcome.AlreadyPosted -> latestCustomer = outcome.customerInfo
@@ -509,14 +541,14 @@ internal class AppActorPaymentProcessor(
 
         if (syncCandidates.isNotEmpty()) {
             try {
-                val syncContext = AppActorClientPurchaseContext.foregroundSync(dateProviderMillis())
+                val syncContext = metadata.clientPurchaseContext(dateProviderMillis())
                 val response = backendClient.postGoogleSync(
                     AppActorGoogleSyncRequestDTO(
                         appUserId = appUserId,
                         obfuscatedAccountId = appActorGoogleObfuscatedAccountId(appUserId),
                         obfuscatedProfileId = null,
-                        sourceIntent = SOURCE_INTENT_SYNC,
-                        source = "foreground_sync",
+                        sourceIntent = metadata.sourceIntent,
+                        source = metadata.source,
                         observedAt = isoNow(),
                         clientPurchaseAttemptStartedAt = syncContext.clientPurchaseAttemptStartedAt,
                         clientObservedAt = syncContext.clientObservedAt,
@@ -558,7 +590,7 @@ internal class AppActorPaymentProcessor(
                     successfulPurchaseKeys,
                     productEntitlements,
                     resolvedAppUserId,
-                    SOURCE_INTENT_SYNC,
+                    metadata.sourceIntent,
                     syncContext,
                 )
                 latestCustomer = customerManager.cachedInfo(resolvedAppUserId)
@@ -570,8 +602,8 @@ internal class AppActorPaymentProcessor(
                             purchase,
                             productEntitlements,
                             appUserId,
-                            sourceIntent = SOURCE_INTENT_SYNC,
-                            clientPurchaseContext = AppActorClientPurchaseContext.foregroundSync(dateProviderMillis()),
+                            sourceIntent = metadata.sourceIntent,
+                            clientPurchaseContext = metadata.clientPurchaseContext(dateProviderMillis()),
                         )
                     ) {
                         is ProcessingOutcome.Success -> latestCustomer = outcome.customerInfo
@@ -632,7 +664,11 @@ internal class AppActorPaymentProcessor(
         )
         if (restorePlan.bulkCandidates.isEmpty()) {
             val syncCustomer = if (restorePlan.followUpSyncRequired) {
-                syncCurrentPurchasesLocked(limit = batchSize, appUserIdOverride = currentAppUserId)
+                syncCurrentPurchasesLocked(
+                    limit = batchSize,
+                    appUserIdOverride = currentAppUserId,
+                    metadata = CurrentPurchasesSyncMetadata.restoreFallback(),
+                )
             } else {
                 null
             }
@@ -696,10 +732,11 @@ internal class AppActorPaymentProcessor(
                     successCount = body.restoredCount,
                     results = body.results,
                 )
+                val successfullyRestoredActivePurchases = activeCandidates.filter { purchase ->
+                    successfulPurchaseKeys.contains(batchPurchaseKey(purchase))
+                }
                 finalizeRestoredActivePurchases(
-                    purchases = activeCandidates.filter { purchase ->
-                        successfulPurchaseKeys.contains(batchPurchaseKey(purchase))
-                    },
+                    purchases = successfullyRestoredActivePurchases,
                     appUserId = resolvedAppUserId,
                 )
                 enqueueFailedBatchPurchases(
@@ -710,12 +747,26 @@ internal class AppActorPaymentProcessor(
                     SOURCE_INTENT_RESTORE,
                     restoreContext,
                 )
-                latestBatchCustomer = customerManager.cachedInfo(resolvedAppUserId)
+                val restoredCustomer = customerManager.cachedInfo(resolvedAppUserId)
+                latestBatchCustomer = restoredCustomer
+                if (restoredCustomer != null) {
+                    successfullyRestoredActivePurchases.forEach { purchase ->
+                        resolveDeferredPurchaseCallbackIfNeeded(
+                            purchaseToken = purchase.purchaseToken,
+                            customerInfo = restoredCustomer,
+                        )
+                    }
+                }
             } catch (throwable: Throwable) {
                 if (throwable is CancellationException) throw throwable
                 val fallbackCustomer = runCatching {
-                    syncCurrentPurchasesLocked(limit = batchSize, appUserIdOverride = currentAppUserId)
-                    customerManager.getCustomerInfo(
+                    val syncCustomer = syncCurrentPurchasesLocked(
+                        limit = batchSize,
+                        appUserIdOverride = currentAppUserId,
+                        metadata = CurrentPurchasesSyncMetadata.restoreFallback(),
+                    )
+                    currentAppUserId = identityStore.currentAppUserId ?: currentAppUserId
+                    syncCustomer ?: customerManager.getCustomerInfo(
                         currentAppUserId,
                         forceRefresh = true,
                         persistIdentityState = false,
@@ -744,6 +795,7 @@ internal class AppActorPaymentProcessor(
                 limit = batchSize,
                 appUserIdOverride = currentAppUserId,
                 excludedPurchaseTokens = restorePlan.restoredActivePurchaseTokens,
+                metadata = CurrentPurchasesSyncMetadata.restoreFallback(),
             )
         } else {
             null
@@ -1145,7 +1197,7 @@ internal class AppActorPaymentProcessor(
                 purchase = purchase,
                 appUserId = appUserId,
             )
-            postedLedgerStore.markPosted(finishItem.key)
+            markPurchasePosted(finishItem)
             queueStore.update(finishItem)
             val finished = finalizePostedPurchase(finishItem)
             if (finished) {
@@ -1280,7 +1332,7 @@ internal class AppActorPaymentProcessor(
             queueStore.update(normalizedItem)
         }
 
-        if (postedLedgerStore.isPosted(normalizedItem.key)) {
+        if (isPurchasePosted(normalizedItem)) {
             return finishAlreadyPostedItem(normalizedItem, productEntitlements)
         }
 
@@ -1294,7 +1346,7 @@ internal class AppActorPaymentProcessor(
                     val customerDTO = requireNotNull(body.customer) {
                         "Receipt response success was missing customer info."
                     }
-                    postedLedgerStore.markPosted(normalizedItem.key)
+                    markPurchasePosted(normalizedItem)
                     customerManager.seedEnvelope(
                         appUserId = normalizedItem.appUserId,
                         envelope = AppActorCustomerEnvelopeDTO(
@@ -1450,7 +1502,7 @@ internal class AppActorPaymentProcessor(
             retryCount = nextRetryCount,
             nextRetryAtMillis = nextRetryAt,
             claimedAtMillis = null,
-            phase = if (postedLedgerStore.isPosted(item.key)) {
+            phase = if (isPurchasePosted(item)) {
                 AppActorReceiptQueuePhase.NeedsFinish
             } else {
                 AppActorReceiptQueuePhase.NeedsPost
@@ -1481,7 +1533,7 @@ internal class AppActorPaymentProcessor(
     ) {
         val finalized = finalizeDeadLetteredPurchase(item)
         if (finalized) {
-            postedLedgerStore.markPosted(item.key)
+            markPurchasePosted(item)
         }
         val updated = item.copy(
             phase = AppActorReceiptQueuePhase.DeadLettered,
@@ -1663,8 +1715,7 @@ internal class AppActorPaymentProcessor(
         if (entry != null && now - entry.recordedAtMillis <= PENDING_EXPIRY_MILLIS) {
             return PurchaseUpdateContext(
                 sourceIntent = SOURCE_INTENT_PURCHASE,
-                clientPurchaseContext = AppActorClientPurchaseContext.fromPendingEntry(entry, observedAtMillis = now)
-                    ?: AppActorClientPurchaseContext.transactionUpdates(now),
+                clientPurchaseContext = AppActorClientPurchaseContext.fromPendingEntry(entry, observedAtMillis = now),
             )
         }
         pendingPurchaseTokens.remove(purchase.purchaseToken)
@@ -1973,6 +2024,30 @@ internal class AppActorPaymentProcessor(
             lastError = null,
             offeringId = offeringId,
             packageId = packageId,
+        )
+    }
+
+    private fun isPurchasePosted(item: AppActorReceiptQueueItem): Boolean {
+        // Intentionally check the versioned ledger key only. Reading the legacy
+        // token-only queue key here would suppress same-token Google renewals.
+        return postedLedgerStore.isPosted(postedLedgerKey(item))
+    }
+
+    private fun markPurchasePosted(item: AppActorReceiptQueueItem) {
+        val primaryKey = postedLedgerKey(item)
+        postedLedgerStore.markPosted(primaryKey)
+        if (primaryKey != item.key) {
+            postedLedgerStore.markPosted(item.key)
+        }
+    }
+
+    private fun postedLedgerKey(item: AppActorReceiptQueueItem): String {
+        return AppActorReceiptQueueItem.makeKey(
+            purchaseToken = item.purchaseToken,
+            productId = item.productId,
+            basePlanId = item.basePlanId,
+            orderId = item.orderId,
+            purchaseTime = item.purchaseTime,
         )
     }
 

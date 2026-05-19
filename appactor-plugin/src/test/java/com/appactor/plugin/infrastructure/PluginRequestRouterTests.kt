@@ -314,6 +314,33 @@ class PluginRequestRouterTests {
     }
 
     @Test
+    fun `set integration identifier rejects missing value but accepts explicit null clear`() = runBlocking {
+        val missingValue = PluginRequestRouter.route(
+            "set_integration_identifier",
+            """{"type":"firebase_app_instance_id"}""",
+        )
+
+        assertTrue(missingValue is PluginResult.Error)
+
+        mockkObject(AppActor)
+        try {
+            coEvery { AppActor.setIntegrationIdentifier(any<String>(), null) } returns Unit
+
+            val explicitNull = PluginRequestRouter.route(
+                "set_integration_identifier",
+                """{"type":"firebase_app_instance_id","value":null}""",
+            )
+
+            assertTrue(explicitNull is PluginResult.Success)
+            coVerify(exactly = 1) {
+                AppActor.setIntegrationIdentifier("firebase_app_instance_id", null)
+            }
+        } finally {
+            unmockkObject(AppActor)
+        }
+    }
+
+    @Test
     fun `update attribution request forwards native attribution model`() = runBlocking {
         mockkObject(AppActor)
         try {
