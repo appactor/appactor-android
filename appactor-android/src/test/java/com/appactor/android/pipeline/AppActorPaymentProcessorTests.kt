@@ -531,6 +531,69 @@ class AppActorPaymentProcessorTests {
     }
 
     @Test
+    fun `pending purchase update posts with captured app user after identity changes`() = runBlocking {
+        val pendingPrefs = context.getSharedPreferences(
+            "com.appactor.android.pending_purchases",
+            Context.MODE_PRIVATE,
+        )
+        val attemptStartedAt = 1_710_000_000_000L
+        val pendingRecordedAt = 1_710_000_030_000L
+        val completedAt = 1_710_003_600_000L
+        pendingPrefs.edit()
+            .clear()
+            .putString(
+                "token_pending_identity_123",
+                "com.appactor.pro.monthly|$pendingRecordedAt|$attemptStartedAt|attempt-google-pending-identity|${PendingPurchaseEntry.encodeAppUserId("user_old")}",
+            )
+            .commit()
+
+        try {
+            val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
+            val dependencies = createDependencies(
+                receiptResponse = AppActorBackendHttpResponse(
+                    body = receiptResponse,
+                    statusCode = 200,
+                    requestId = receiptResponse.requestId,
+                    signatureVerified = true,
+                ),
+                identityStore = createMockIdentityStore(initialAppUserId = "user_new"),
+                dateProviderMillis = { completedAt },
+            )
+            val deferredCallbacks = mutableListOf<Pair<String, String?>>()
+            dependencies.processor.onDeferredPurchaseResolved = { productId, customerInfo ->
+                deferredCallbacks += productId to customerInfo.appUserId
+            }
+            val purchase = AppActorStorePurchase(
+                productId = "com.appactor.pro.monthly",
+                productType = AppActorProductType.Subscription,
+                purchaseToken = "token_pending_identity_123",
+                orderId = "GPA.pending.identity.1234",
+                purchaseTimeMillis = completedAt,
+                purchaseState = com.appactor.android.billing.AppActorStorePurchaseState.Purchased,
+                basePlanId = "monthly001",
+                offerId = "intro7d",
+                isAcknowledged = false,
+                isAutoRenewing = true,
+                rawPurchaseData = "{\"purchaseToken\":\"token_pending_identity_123\"}",
+                purchaseSignature = "signature_pending_identity_123",
+            )
+
+            val result = dependencies.processor.processLivePurchaseUpdates(listOf(purchase))
+
+            val receipt = dependencies.postedReceipts.single()
+            assertEquals("user_old", receipt.appUserId)
+            assertEquals("user_old", result?.appUserId)
+            assertEquals("purchase", receipt.sourceIntent)
+            assertEquals("transaction_updates", receipt.clientDeliverySource)
+            assertEquals("attempt-google-pending-identity", receipt.clientPurchaseAttemptId)
+            assertTrue(deferredCallbacks.isEmpty())
+            assertFalse(pendingPrefs.contains("token_pending_identity_123"))
+        } finally {
+            pendingPrefs.edit().clear().commit()
+        }
+    }
+
+    @Test
     fun `legacy pending purchase update keeps purchase intent without synthetic update context`() = runBlocking {
         val pendingPrefs = context.getSharedPreferences(
             "com.appactor.android.pending_purchases",
@@ -643,6 +706,69 @@ class AppActorPaymentProcessorTests {
             assertEquals(AppActorBridgeReceiptEvent.millisToIso8601(completedAt), receipt.clientObservedAt)
             assertEquals("attempt-google-startup-sync", receipt.clientPurchaseAttemptId)
             assertFalse(pendingPrefs.contains("token_pending_startup_sync"))
+        } finally {
+            pendingPrefs.edit().clear().commit()
+        }
+    }
+
+    @Test
+    fun `startup sync posts pending purchase with captured app user after identity changes`() = runBlocking {
+        val pendingPrefs = context.getSharedPreferences(
+            "com.appactor.android.pending_purchases",
+            Context.MODE_PRIVATE,
+        )
+        val attemptStartedAt = 1_710_000_000_000L
+        val pendingRecordedAt = 1_710_000_030_000L
+        val completedAt = 1_710_003_600_000L
+        pendingPrefs.edit()
+            .clear()
+            .putString(
+                "token_pending_startup_identity",
+                "com.appactor.pro.monthly|$pendingRecordedAt|$attemptStartedAt|attempt-google-startup-identity|${PendingPurchaseEntry.encodeAppUserId("user_old")}",
+            )
+            .commit()
+
+        try {
+            val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
+            val activePurchase = AppActorStorePurchase(
+                productId = "com.appactor.pro.monthly",
+                productType = AppActorProductType.Subscription,
+                purchaseToken = "token_pending_startup_identity",
+                orderId = "GPA.pending.startup.identity",
+                purchaseTimeMillis = completedAt,
+                purchaseState = com.appactor.android.billing.AppActorStorePurchaseState.Purchased,
+                basePlanId = "monthly001",
+                offerId = "intro7d",
+                isAcknowledged = false,
+                isAutoRenewing = true,
+                rawPurchaseData = "{\"purchaseToken\":\"token_pending_startup_identity\"}",
+                purchaseSignature = "signature_pending_startup_identity",
+            )
+            val dependencies = createDependencies(
+                receiptResponse = AppActorBackendHttpResponse(
+                    body = receiptResponse,
+                    statusCode = 200,
+                    requestId = receiptResponse.requestId,
+                    signatureVerified = true,
+                ),
+                activePurchases = listOf(activePurchase),
+                identityStore = createMockIdentityStore(initialAppUserId = "user_new"),
+                dateProviderMillis = { completedAt },
+            )
+            val deferredCallbacks = mutableListOf<Pair<String, String?>>()
+            dependencies.processor.onDeferredPurchaseResolved = { productId, customerInfo ->
+                deferredCallbacks += productId to customerInfo.appUserId
+            }
+
+            dependencies.processor.syncCurrentPurchases()
+
+            val receipt = dependencies.postedReceipts.single()
+            assertEquals("user_old", receipt.appUserId)
+            assertEquals("purchase", receipt.sourceIntent)
+            assertEquals("transaction_updates", receipt.clientDeliverySource)
+            assertEquals("attempt-google-startup-identity", receipt.clientPurchaseAttemptId)
+            assertTrue(deferredCallbacks.isEmpty())
+            assertFalse(pendingPrefs.contains("token_pending_startup_identity"))
         } finally {
             pendingPrefs.edit().clear().commit()
         }
