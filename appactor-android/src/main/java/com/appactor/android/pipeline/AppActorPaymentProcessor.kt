@@ -934,7 +934,7 @@ internal class AppActorPaymentProcessor(
         clientPurchaseContext: AppActorClientPurchaseContext? = null,
     ): ProcessingOutcome {
         val normalizedPurchase = normalizePurchaseForPosting(purchase)
-        val item = makeQueueItem(
+        val rawItem = makeQueueItem(
             normalizedPurchase,
             appUserIdOverride,
             offeringId,
@@ -942,6 +942,7 @@ internal class AppActorPaymentProcessor(
             sourceIntent,
             clientPurchaseContext,
         )
+        val item = queueItemForIncomingPurchase(rawItem)
         val existing = queueStore.get(item.key)
         if (existing?.phase == AppActorReceiptQueuePhase.DeadLettered) {
             val revived = reviveRecoverableDeadLetter(
@@ -1270,40 +1271,41 @@ internal class AppActorPaymentProcessor(
             lastUpdatedAtMillis = now,
             lastError = null,
         )
-        val existing = queueStore.get(restoreItem.key) ?: return restoreItem
+        val keyedRestoreItem = queueItemForIncomingPurchase(restoreItem)
+        val existing = queueStore.get(keyedRestoreItem.key) ?: return keyedRestoreItem
         return existing.copy(
-            appUserId = restoreItem.appUserId,
-            packageName = restoreItem.packageName,
-            environment = restoreItem.environment,
-            productId = restoreItem.productId,
+            appUserId = keyedRestoreItem.appUserId,
+            packageName = keyedRestoreItem.packageName,
+            environment = keyedRestoreItem.environment,
+            productId = keyedRestoreItem.productId,
             productType = if (restoreItem.productType != AppActorProductType.Unknown.wireValue) {
-                restoreItem.productType
+                keyedRestoreItem.productType
             } else {
                 existing.productType
             },
-            purchaseToken = restoreItem.purchaseToken,
-            purchaseTime = restoreItem.purchaseTime,
-            purchaseState = restoreItem.purchaseState,
-            orderId = restoreItem.orderId ?: existing.orderId,
-            basePlanId = restoreItem.basePlanId ?: existing.basePlanId,
-            offerId = restoreItem.offerId ?: existing.offerId,
-            priceAmountMicros = restoreItem.priceAmountMicros ?: existing.priceAmountMicros,
-            currencyCode = restoreItem.currencyCode ?: existing.currencyCode,
-            isAutoRenewing = restoreItem.isAutoRenewing ?: existing.isAutoRenewing,
-            obfuscatedAccountId = restoreItem.obfuscatedAccountId ?: existing.obfuscatedAccountId,
+            purchaseToken = keyedRestoreItem.purchaseToken,
+            purchaseTime = keyedRestoreItem.purchaseTime,
+            purchaseState = keyedRestoreItem.purchaseState,
+            orderId = keyedRestoreItem.orderId ?: existing.orderId,
+            basePlanId = keyedRestoreItem.basePlanId ?: existing.basePlanId,
+            offerId = keyedRestoreItem.offerId ?: existing.offerId,
+            priceAmountMicros = keyedRestoreItem.priceAmountMicros ?: existing.priceAmountMicros,
+            currencyCode = keyedRestoreItem.currencyCode ?: existing.currencyCode,
+            isAutoRenewing = keyedRestoreItem.isAutoRenewing ?: existing.isAutoRenewing,
+            obfuscatedAccountId = keyedRestoreItem.obfuscatedAccountId ?: existing.obfuscatedAccountId,
             sourceIntent = existing.sourceIntent,
-            idempotencyKey = restoreItem.idempotencyKey,
-            rawPurchaseData = restoreItem.rawPurchaseData ?: existing.rawPurchaseData,
-            purchaseSignature = restoreItem.purchaseSignature ?: existing.purchaseSignature,
-            clientPurchaseAttemptStartedAt = restoreItem.clientPurchaseAttemptStartedAt ?: existing.clientPurchaseAttemptStartedAt,
-            clientObservedAt = restoreItem.clientObservedAt ?: existing.clientObservedAt,
-            clientDeliverySource = restoreItem.clientDeliverySource ?: existing.clientDeliverySource,
-            clientPurchaseAttemptId = restoreItem.clientPurchaseAttemptId ?: existing.clientPurchaseAttemptId,
-            sdkOriginated = restoreItem.sdkOriginated ?: existing.sdkOriginated,
-            sdkVersion = restoreItem.sdkVersion ?: existing.sdkVersion,
-            isAcknowledged = existing.isAcknowledged || restoreItem.isAcknowledged,
-            shouldAcknowledge = existing.shouldAcknowledge || restoreItem.shouldAcknowledge,
-            shouldConsume = existing.shouldConsume || restoreItem.shouldConsume,
+            idempotencyKey = keyedRestoreItem.idempotencyKey,
+            rawPurchaseData = keyedRestoreItem.rawPurchaseData ?: existing.rawPurchaseData,
+            purchaseSignature = keyedRestoreItem.purchaseSignature ?: existing.purchaseSignature,
+            clientPurchaseAttemptStartedAt = keyedRestoreItem.clientPurchaseAttemptStartedAt ?: existing.clientPurchaseAttemptStartedAt,
+            clientObservedAt = keyedRestoreItem.clientObservedAt ?: existing.clientObservedAt,
+            clientDeliverySource = keyedRestoreItem.clientDeliverySource ?: existing.clientDeliverySource,
+            clientPurchaseAttemptId = keyedRestoreItem.clientPurchaseAttemptId ?: existing.clientPurchaseAttemptId,
+            sdkOriginated = keyedRestoreItem.sdkOriginated ?: existing.sdkOriginated,
+            sdkVersion = keyedRestoreItem.sdkVersion ?: existing.sdkVersion,
+            isAcknowledged = existing.isAcknowledged || keyedRestoreItem.isAcknowledged,
+            shouldAcknowledge = existing.shouldAcknowledge || keyedRestoreItem.shouldAcknowledge,
+            shouldConsume = existing.shouldConsume || keyedRestoreItem.shouldConsume,
             retryCount = existing.retryCount,
             nextRetryAtMillis = 0L,
             createdAtMillis = existing.createdAtMillis,
@@ -1986,6 +1988,8 @@ internal class AppActorPaymentProcessor(
                 purchaseToken = purchase.purchaseToken,
                 productId = purchase.productId,
                 basePlanId = purchase.basePlanId,
+                orderId = purchase.orderId,
+                purchaseTime = purchase.purchaseTimeMillis.toString(),
             ),
             appUserId = appUserId,
             packageName = packageName,
@@ -2035,10 +2039,59 @@ internal class AppActorPaymentProcessor(
 
     private fun markPurchasePosted(item: AppActorReceiptQueueItem) {
         val primaryKey = postedLedgerKey(item)
+        val legacyKey = legacyQueueKey(item)
         postedLedgerStore.markPosted(primaryKey)
-        if (primaryKey != item.key) {
+        if (legacyKey != primaryKey) {
+            postedLedgerStore.markPosted(legacyKey)
+        }
+        if (item.key != primaryKey && item.key != legacyKey) {
             postedLedgerStore.markPosted(item.key)
         }
+    }
+
+    private fun queueItemForIncomingPurchase(item: AppActorReceiptQueueItem): AppActorReceiptQueueItem {
+        if (queueStore.get(item.key) != null) return item
+        val legacyKey = legacyQueueKey(item)
+        if (legacyKey == item.key) return item
+        val legacyItem = queueStore.get(legacyKey) ?: return item
+        return if (representsSameQueuedEconomicEvent(legacyItem, item)) {
+            item.copy(key = legacyItem.key)
+        } else {
+            item
+        }
+    }
+
+    private fun representsSameQueuedEconomicEvent(
+        existing: AppActorReceiptQueueItem,
+        incoming: AppActorReceiptQueueItem,
+    ): Boolean {
+        if (existing.purchaseToken != incoming.purchaseToken) return false
+        if (existing.productId != incoming.productId) return false
+        if (existing.basePlanId != incoming.basePlanId) return false
+        val existingRevision = queuedEconomicRevision(existing)
+        val incomingRevision = queuedEconomicRevision(incoming)
+        return if (existingRevision != null && incomingRevision != null) {
+            existingRevision == incomingRevision
+        } else {
+            true
+        }
+    }
+
+    private fun queuedEconomicRevision(item: AppActorReceiptQueueItem): String? {
+        return item.orderId
+            ?.takeIf { it.isNotBlank() }
+            ?.let { "orderId=$it" }
+            ?: item.purchaseTime
+                .takeIf { it.isNotBlank() }
+                ?.let { "purchaseTime=$it" }
+    }
+
+    private fun legacyQueueKey(item: AppActorReceiptQueueItem): String {
+        return AppActorReceiptQueueItem.makeKey(
+            purchaseToken = item.purchaseToken,
+            productId = item.productId,
+            basePlanId = item.basePlanId,
+        )
     }
 
     private fun postedLedgerKey(item: AppActorReceiptQueueItem): String {

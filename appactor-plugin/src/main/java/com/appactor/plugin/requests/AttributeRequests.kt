@@ -107,15 +107,15 @@ internal class SetEmailRequest private constructor(
     companion object : PluginRequestFactory {
         override val method: String = "set_email"
         override fun create(json: String): PluginRequest {
-            val p = PluginCoder.json.decodeFromString(SetEmailParams.serializer(), json)
-            return SetEmailRequest(p.value ?: p.email)
+            return SetEmailRequest(
+                ReservedAttributeHelperParsing.value(
+                    json = json,
+                    method = method,
+                    canonicalKey = "value",
+                    legacyKey = "email",
+                )
+            )
         }
-
-        @Serializable
-        private data class SetEmailParams(
-            val value: String? = null,
-            val email: String? = null,
-        )
     }
 }
 
@@ -131,15 +131,15 @@ internal class SetDisplayNameRequest private constructor(
     companion object : PluginRequestFactory {
         override val method: String = "set_display_name"
         override fun create(json: String): PluginRequest {
-            val p = PluginCoder.json.decodeFromString(SetDisplayNameParams.serializer(), json)
-            return SetDisplayNameRequest(p.value ?: p.displayName)
+            return SetDisplayNameRequest(
+                ReservedAttributeHelperParsing.value(
+                    json = json,
+                    method = method,
+                    canonicalKey = "value",
+                    legacyKey = "display_name",
+                )
+            )
         }
-
-        @Serializable
-        private data class SetDisplayNameParams(
-            val value: String? = null,
-            @SerialName("display_name") val displayName: String? = null,
-        )
     }
 }
 
@@ -155,15 +155,15 @@ internal class SetPhoneNumberRequest private constructor(
     companion object : PluginRequestFactory {
         override val method: String = "set_phone_number"
         override fun create(json: String): PluginRequest {
-            val p = PluginCoder.json.decodeFromString(SetPhoneNumberParams.serializer(), json)
-            return SetPhoneNumberRequest(p.value ?: p.phoneNumber)
+            return SetPhoneNumberRequest(
+                ReservedAttributeHelperParsing.value(
+                    json = json,
+                    method = method,
+                    canonicalKey = "value",
+                    legacyKey = "phone_number",
+                )
+            )
         }
-
-        @Serializable
-        private data class SetPhoneNumberParams(
-            val value: String? = null,
-            @SerialName("phone_number") val phoneNumber: String? = null,
-        )
     }
 }
 
@@ -179,15 +179,15 @@ internal class SetPushTokenRequest private constructor(
     companion object : PluginRequestFactory {
         override val method: String = "set_push_token"
         override fun create(json: String): PluginRequest {
-            val p = PluginCoder.json.decodeFromString(SetPushTokenParams.serializer(), json)
-            return SetPushTokenRequest(p.value ?: p.pushToken)
+            return SetPushTokenRequest(
+                ReservedAttributeHelperParsing.value(
+                    json = json,
+                    method = method,
+                    canonicalKey = "value",
+                    legacyKey = "push_token",
+                )
+            )
         }
-
-        @Serializable
-        private data class SetPushTokenParams(
-            val value: String? = null,
-            @SerialName("push_token") val pushToken: String? = null,
-        )
     }
 }
 
@@ -312,6 +312,29 @@ internal class UpdateAttributionRequest private constructor(
 
 @Serializable
 private data class AttributionHelperParams(val value: String)
+
+private object ReservedAttributeHelperParsing {
+    fun value(
+        json: String,
+        method: String,
+        canonicalKey: String,
+        legacyKey: String,
+    ): String? {
+        val root = PluginCoder.json.parseToJsonElement(json).jsonObject
+        val element = when {
+            root.containsKey(canonicalKey) -> root[canonicalKey]
+            root.containsKey(legacyKey) -> root[legacyKey]
+            else -> throw IllegalArgumentException("$method requires '$canonicalKey' or '$legacyKey'; pass null to clear.")
+        }
+        if (element == null || element is JsonNull) return null
+        val primitive = element as? JsonPrimitive
+            ?: throw IllegalArgumentException("$method value must be a string or null.")
+        require(primitive.isString) {
+            "$method value must be a string or null."
+        }
+        return primitive.content
+    }
+}
 
 internal class SetMediaSourceRequest private constructor(
     private val value: String,
