@@ -108,6 +108,53 @@ class AppActorPaymentProcessorTests {
     }
 
     @Test
+    fun `purchase success refreshes observed time at completion`() = runBlocking {
+        var now = 1_710_000_000_000L
+        val completedAt = 1_710_000_120_000L
+        val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
+        val dependencies = createDependencies(
+            receiptResponse = AppActorBackendHttpResponse(
+                body = receiptResponse,
+                statusCode = 200,
+                requestId = receiptResponse.requestId,
+                signatureVerified = true,
+            ),
+            dateProviderMillis = { now },
+        )
+        coEvery { dependencies.storeAdapter.launchPurchase(any(), any()) } coAnswers {
+            now = completedAt
+            val request: AppActorStoreProductRequest = secondArg()
+            AppActorStorePurchaseLaunchResult.Purchased(
+                purchases = listOf(
+                    AppActorStorePurchase(
+                        productId = request.productId,
+                        productType = request.productType,
+                        purchaseToken = "token_observed_completion",
+                        orderId = "GPA.observed.completion",
+                        purchaseTimeMillis = completedAt,
+                        purchaseState = com.appactor.android.billing.AppActorStorePurchaseState.Purchased,
+                        basePlanId = request.basePlanId,
+                        offerId = request.offerId,
+                        priceAmountMicros = 4_990_000,
+                        currencyCode = "USD",
+                        isAcknowledged = false,
+                        isAutoRenewing = true,
+                        obfuscatedAccountId = request.obfuscatedAccountId,
+                        rawPurchaseData = "{\"purchaseToken\":\"token_observed_completion\"}",
+                        purchaseSignature = "signature_observed_completion",
+                    )
+                )
+            )
+        }
+
+        dependencies.processor.purchase(Activity(), monthlyPackage())
+
+        val receipt = dependencies.postedReceipts.single()
+        assertEquals(AppActorBridgeReceiptEvent.millisToIso8601(1_710_000_000_000L), receipt.clientPurchaseAttemptStartedAt)
+        assertEquals(AppActorBridgeReceiptEvent.millisToIso8601(completedAt), receipt.clientObservedAt)
+    }
+
+    @Test
     fun `purchase receipt includes cached storefront country code`() = runBlocking {
         val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
         val dependencies = createDependencies(
@@ -356,6 +403,66 @@ class AppActorPaymentProcessorTests {
             assertEquals(AppActorBridgeReceiptEvent.millisToIso8601(completedAt), receipt.clientObservedAt)
             assertEquals("attempt-google-pending", receipt.clientPurchaseAttemptId)
             assertFalse(pendingPrefs.contains("token_pending_modern_123"))
+        } finally {
+            pendingPrefs.edit().clear().commit()
+        }
+    }
+
+    @Test
+    fun `startup sync posts pending purchase with original attempt context`() = runBlocking {
+        val pendingPrefs = context.getSharedPreferences(
+            "com.appactor.android.pending_purchases",
+            Context.MODE_PRIVATE,
+        )
+        val attemptStartedAt = 1_710_000_000_000L
+        val pendingRecordedAt = 1_710_000_030_000L
+        val completedAt = 1_710_003_600_000L
+        pendingPrefs.edit()
+            .clear()
+            .putString(
+                "token_pending_startup_sync",
+                "com.appactor.pro.monthly|$pendingRecordedAt|$attemptStartedAt|attempt-google-startup-sync",
+            )
+            .commit()
+
+        try {
+            val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
+            val activePurchase = AppActorStorePurchase(
+                productId = "com.appactor.pro.monthly",
+                productType = AppActorProductType.Subscription,
+                purchaseToken = "token_pending_startup_sync",
+                orderId = "GPA.pending.startup.sync",
+                purchaseTimeMillis = completedAt,
+                purchaseState = com.appactor.android.billing.AppActorStorePurchaseState.Purchased,
+                basePlanId = "monthly001",
+                offerId = "intro7d",
+                isAcknowledged = false,
+                isAutoRenewing = true,
+                rawPurchaseData = "{\"purchaseToken\":\"token_pending_startup_sync\"}",
+                purchaseSignature = "signature_pending_startup_sync",
+            )
+            val dependencies = createDependencies(
+                receiptResponse = AppActorBackendHttpResponse(
+                    body = receiptResponse,
+                    statusCode = 200,
+                    requestId = receiptResponse.requestId,
+                    signatureVerified = true,
+                ),
+                activePurchases = listOf(activePurchase),
+                dateProviderMillis = { completedAt },
+            )
+
+            val info = dependencies.processor.syncCurrentPurchases()
+
+            assertTrue(info?.hasActiveEntitlement("premium") == true)
+            assertTrue(dependencies.syncRequests.isEmpty())
+            val receipt = dependencies.postedReceipts.single()
+            assertEquals("purchase", receipt.sourceIntent)
+            assertEquals("transaction_updates", receipt.clientDeliverySource)
+            assertEquals(AppActorBridgeReceiptEvent.millisToIso8601(attemptStartedAt), receipt.clientPurchaseAttemptStartedAt)
+            assertEquals(AppActorBridgeReceiptEvent.millisToIso8601(completedAt), receipt.clientObservedAt)
+            assertEquals("attempt-google-startup-sync", receipt.clientPurchaseAttemptId)
+            assertFalse(pendingPrefs.contains("token_pending_startup_sync"))
         } finally {
             pendingPrefs.edit().clear().commit()
         }
@@ -629,6 +736,12 @@ class AppActorPaymentProcessorTests {
             idempotencyKey = "google:com.appactor.pro.monthly:monthly001:token_dead_123",
             rawPurchaseData = "{\"purchaseToken\":\"token_dead_123\"}",
             purchaseSignature = "signature_dead_123",
+            clientPurchaseAttemptStartedAt = AppActorBridgeReceiptEvent.millisToIso8601(1_710_000_000_000L),
+            clientObservedAt = AppActorBridgeReceiptEvent.millisToIso8601(1_710_000_010_000L),
+            clientDeliverySource = "purchase_flow",
+            clientPurchaseAttemptId = "attempt-dead-letter-retry",
+            sdkOriginated = true,
+            sdkVersion = "9.9.9",
             createdAtMillis = System.currentTimeMillis(),
             lastUpdatedAtMillis = System.currentTimeMillis(),
             phase = com.appactor.android.storage.AppActorReceiptQueuePhase.DeadLettered,
@@ -640,6 +753,8 @@ class AppActorPaymentProcessorTests {
 
         assertTrue(retried?.hasActiveEntitlement("premium") == true)
         assertEquals(1, dependencies.postedReceipts.size)
+        assertEquals("queue_retry", dependencies.postedReceipts.single().clientDeliverySource)
+        assertEquals("attempt-dead-letter-retry", dependencies.postedReceipts.single().clientPurchaseAttemptId)
         assertEquals(listOf("token_dead_123"), dependencies.acknowledgedTokens)
         assertTrue(dependencies.queueStore.snapshot().isEmpty())
     }
@@ -1411,6 +1526,83 @@ class AppActorPaymentProcessorTests {
                 )
             )
         )
+    }
+
+    @Test
+    fun `pending replay revives unknown dead letter with purchase source and attempt context`() = runBlocking {
+        val pendingPrefs = context.getSharedPreferences(
+            "com.appactor.android.pending_purchases",
+            Context.MODE_PRIVATE,
+        )
+        val attemptStartedAt = 1_710_000_000_000L
+        val completedAt = 1_710_003_600_000L
+        pendingPrefs.edit()
+            .clear()
+            .putString(
+                "token_unknown_pending_replay",
+                "com.appactor.coins.100|${attemptStartedAt + 30_000}|$attemptStartedAt|attempt-unknown-pending-replay",
+            )
+            .commit()
+
+        try {
+            val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
+            val activePurchase = AppActorStorePurchase(
+                productId = "com.appactor.coins.100",
+                productType = AppActorProductType.Unknown,
+                purchaseToken = "token_unknown_pending_replay",
+                orderId = "GPA.unknown.pending.replay",
+                purchaseTimeMillis = completedAt,
+                purchaseState = com.appactor.android.billing.AppActorStorePurchaseState.Purchased,
+                isAcknowledged = false,
+                rawPurchaseData = "{\"purchaseToken\":\"token_unknown_pending_replay\"}",
+                purchaseSignature = "signature_unknown_pending_replay",
+            )
+            val dependencies = createDependencies(
+                receiptResponse = AppActorBackendHttpResponse(
+                    body = receiptResponse,
+                    statusCode = 200,
+                    requestId = receiptResponse.requestId,
+                    signatureVerified = true,
+                ),
+                dateProviderMillis = { completedAt },
+            )
+            dependencies.queueStore.upsert(
+                AppActorReceiptQueueItem(
+                    key = AppActorReceiptQueueItem.makeKey(
+                        purchaseToken = activePurchase.purchaseToken,
+                        productId = activePurchase.productId,
+                    ),
+                    appUserId = "user_android_123",
+                    packageName = context.packageName,
+                    environment = "production",
+                    productId = activePurchase.productId,
+                    productType = AppActorProductType.Unknown.wireValue,
+                    purchaseToken = activePurchase.purchaseToken,
+                    purchaseTime = activePurchase.purchaseTimeMillis.toString(),
+                    purchaseState = "PURCHASED",
+                    orderId = activePurchase.orderId,
+                    sourceIntent = "sync",
+                    idempotencyKey = "google:${activePurchase.productId}:${activePurchase.purchaseToken}",
+                    createdAtMillis = 1_710_000_000_000,
+                    lastUpdatedAtMillis = 1_710_000_000_000,
+                    retryCount = 3,
+                    phase = com.appactor.android.storage.AppActorReceiptQueuePhase.DeadLettered,
+                    lastError = "unknown_product_type: Unable to resolve Google Play one-time product type.",
+                    rawPurchaseData = activePurchase.rawPurchaseData,
+                    purchaseSignature = activePurchase.purchaseSignature,
+                )
+            )
+
+            dependencies.processor.processPurchaseUpdates(listOf(activePurchase))
+
+            val receipt = dependencies.postedReceipts.single()
+            assertEquals("purchase", receipt.sourceIntent)
+            assertEquals("transaction_updates", receipt.clientDeliverySource)
+            assertEquals(AppActorBridgeReceiptEvent.millisToIso8601(attemptStartedAt), receipt.clientPurchaseAttemptStartedAt)
+            assertEquals("attempt-unknown-pending-replay", receipt.clientPurchaseAttemptId)
+        } finally {
+            pendingPrefs.edit().clear().commit()
+        }
     }
 
     @Test
