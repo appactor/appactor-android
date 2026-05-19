@@ -63,8 +63,25 @@ internal data class AppActorReceiptQueueItem(
             purchaseToken: String,
             productId: String,
             basePlanId: String? = null,
+            orderId: String? = null,
+            purchaseTime: String? = null,
         ): String {
-            return listOfNotNull("google", productId, basePlanId, purchaseToken).joinToString(":")
+            return listOfNotNull(
+                "google",
+                productId,
+                basePlanId,
+                purchaseToken,
+                postedLedgerRevision(orderId = orderId, purchaseTime = purchaseTime),
+            ).joinToString(":")
+        }
+
+        private fun postedLedgerRevision(orderId: String?, purchaseTime: String?): String? {
+            return orderId
+                ?.takeIf { it.isNotBlank() }
+                ?.let { "orderId=$it" }
+                ?: purchaseTime
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { "purchaseTime=$it" }
         }
     }
 }

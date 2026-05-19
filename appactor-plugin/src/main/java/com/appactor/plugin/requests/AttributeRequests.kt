@@ -217,14 +217,18 @@ internal class SetIntegrationIdentifierRequest private constructor(
     companion object : PluginRequestFactory {
         override val method: String = "set_integration_identifier"
         override fun create(json: String): PluginRequest {
-            val p = PluginCoder.json.decodeFromString(Params.serializer(), json)
+            val root = PluginCoder.json.parseToJsonElement(json).jsonObject
+            require(root.containsKey("value")) {
+                "set_integration_identifier requires value; pass null to clear."
+            }
+            val p = PluginCoder.json.decodeFromJsonElement(Params.serializer(), root)
             return SetIntegrationIdentifierRequest(p.type, p.value)
         }
 
         @Serializable
         private data class Params(
             val type: String,
-            val value: String? = null,
+            val value: String?,
         )
     }
 }
