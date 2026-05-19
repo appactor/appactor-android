@@ -126,6 +126,7 @@ internal class AppActorPaymentProcessor(
     private data class PurchaseUpdateContext(
         val sourceIntent: String,
         val clientPurchaseContext: AppActorClientPurchaseContext?,
+        val appUserId: String? = null,
     )
 
     private data class CurrentPurchasesSyncMetadata(
@@ -292,21 +293,27 @@ internal class AppActorPaymentProcessor(
         }
         var processedAppUserId: String? = null
         val result = pipelineMutex.withLock {
-            val appUserId = appUserIdOverride
+            val defaultAppUserId = appUserIdOverride
                 ?.takeIf { it.isNotBlank() }
                 ?: identityStore.currentAppUserId
                 ?: identityStore.ensureAppUserId()
-            processedAppUserId = appUserId
+            processedAppUserId = defaultAppUserId
             val productEntitlements = ensureProductEntitlements()
             var latestCustomer: AppActorCustomerInfo? = null
             purchases.forEach { purchase ->
                 val updateContext = purchaseUpdateContextOverrides[purchase.purchaseToken]
                     ?: resolvePurchaseUpdateContext(purchase)
+                val receiptAppUserId = updateContext.appUserId?.takeIf { it.isNotBlank() } ?: defaultAppUserId
+                if (processedAppUserId == null || processedAppUserId == defaultAppUserId) {
+                    processedAppUserId = receiptAppUserId
+                }
+                val shouldEmitDeferredCallback =
+                    emitDeferredPurchaseCallback && identityStore.currentAppUserId == receiptAppUserId
                 when (
                     val outcome = enqueueAndProcess(
                         purchase = purchase,
                         productEntitlements = productEntitlements,
-                        appUserIdOverride = appUserId,
+                        appUserIdOverride = receiptAppUserId,
                         sourceIntent = updateContext.sourceIntent,
                         clientPurchaseContext = updateContext.clientPurchaseContext,
                     )
@@ -316,7 +323,7 @@ internal class AppActorPaymentProcessor(
                         fireDeferredPurchaseCallbackIfNeeded(
                             purchase = purchase,
                             customerInfo = outcome.customerInfo,
-                            emitCallback = emitDeferredPurchaseCallback,
+                            emitCallback = shouldEmitDeferredCallback,
                         )
                     }
                     is ProcessingOutcome.AlreadyPosted -> {
@@ -324,7 +331,7 @@ internal class AppActorPaymentProcessor(
                         fireDeferredPurchaseCallbackIfNeeded(
                             purchase = purchase,
                             customerInfo = outcome.customerInfo,
-                            emitCallback = emitDeferredPurchaseCallback,
+                            emitCallback = shouldEmitDeferredCallback,
                         )
                     }
                     is ProcessingOutcome.Queued,
@@ -367,6 +374,7 @@ internal class AppActorPaymentProcessor(
                         pendingPurchaseTokens[purchase.purchaseToken] = clientPurchaseContext.toPendingEntry(
                             productId = purchase.productId,
                             recordedAtMillis = now,
+                            appUserId = appUserId,
                         )
                     }
                     persistPendingState()
@@ -501,20 +509,29 @@ internal class AppActorPaymentProcessor(
             allProcessedPurchases += normalized
             val pendingUpdateContext = consumePendingPurchaseUpdateContext(normalized)
             if (pendingUpdateContext != null) {
+                val pendingAppUserId = pendingUpdateContext.appUserId?.takeIf { it.isNotBlank() } ?: appUserId
                 when (val outcome = enqueueAndProcess(
                     normalized,
                     productEntitlements,
-                    appUserId,
+                    pendingAppUserId,
                     sourceIntent = pendingUpdateContext.sourceIntent,
                     clientPurchaseContext = pendingUpdateContext.clientPurchaseContext,
                 )) {
                     is ProcessingOutcome.Success -> {
                         latestCustomer = outcome.customerInfo
-                        fireDeferredPurchaseCallbackIfNeeded(normalized, outcome.customerInfo)
+                        fireDeferredPurchaseCallbackIfNeeded(
+                            normalized,
+                            outcome.customerInfo,
+                            emitCallback = identityStore.currentAppUserId == pendingAppUserId,
+                        )
                     }
                     is ProcessingOutcome.AlreadyPosted -> {
                         latestCustomer = outcome.customerInfo
-                        fireDeferredPurchaseCallbackIfNeeded(normalized, outcome.customerInfo)
+                        fireDeferredPurchaseCallbackIfNeeded(
+                            normalized,
+                            outcome.customerInfo,
+                            emitCallback = identityStore.currentAppUserId == pendingAppUserId,
+                        )
                     }
                     is ProcessingOutcome.Queued,
                     is ProcessingOutcome.PermanentFailure -> Unit
@@ -1718,6 +1735,7 @@ internal class AppActorPaymentProcessor(
             return PurchaseUpdateContext(
                 sourceIntent = SOURCE_INTENT_PURCHASE,
                 clientPurchaseContext = AppActorClientPurchaseContext.fromPendingEntry(entry, observedAtMillis = now),
+                appUserId = entry.appUserId,
             )
         }
         pendingPurchaseTokens.remove(purchase.purchaseToken)

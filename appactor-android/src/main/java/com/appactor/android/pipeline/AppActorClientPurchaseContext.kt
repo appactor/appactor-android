@@ -2,6 +2,9 @@ package com.appactor.android.pipeline
 
 import com.appactor.android.internal.AppActorSDK
 import com.appactor.android.models.AppActorBridgeReceiptEvent
+import java.net.URLDecoder
+import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
 import java.util.UUID
 
 internal enum class AppActorClientDeliverySource(val wireValue: String) {
@@ -41,12 +44,17 @@ internal data class AppActorClientPurchaseContext(
         )
     }
 
-    fun toPendingEntry(productId: String, recordedAtMillis: Long): String {
+    fun toPendingEntry(
+        productId: String,
+        recordedAtMillis: Long,
+        appUserId: String? = null,
+    ): String {
         return listOf(
             productId,
             recordedAtMillis.toString(),
             clientPurchaseAttemptStartedAtMillis?.toString().orEmpty(),
             clientPurchaseAttemptId.orEmpty(),
+            PendingPurchaseEntry.encodeAppUserId(appUserId),
         ).joinToString("|")
     }
 
@@ -99,8 +107,11 @@ internal data class PendingPurchaseEntry(
     val recordedAtMillis: Long,
     val clientPurchaseAttemptStartedAtMillis: Long? = null,
     val clientPurchaseAttemptId: String? = null,
+    val appUserId: String? = null,
 ) {
     companion object {
+        private const val ENCODED_APP_USER_ID_PREFIX = "url:"
+
         fun parse(raw: String): PendingPurchaseEntry? {
             val parts = raw.split("|")
             return when {
@@ -109,6 +120,7 @@ internal data class PendingPurchaseEntry(
                     recordedAtMillis = parts[1].toLongOrNull() ?: return null,
                     clientPurchaseAttemptStartedAtMillis = parts[2].toLongOrNull(),
                     clientPurchaseAttemptId = parts[3].takeIf { it.isNotBlank() },
+                    appUserId = parts.getOrNull(4)?.let(::decodeAppUserId)?.takeIf { it.isNotBlank() },
                 )
                 parts.size == 2 -> PendingPurchaseEntry(
                     productId = parts[0].takeIf { it.isNotBlank() } ?: return null,
@@ -116,6 +128,22 @@ internal data class PendingPurchaseEntry(
                 )
                 else -> null
             }
+        }
+
+        fun encodeAppUserId(appUserId: String?): String {
+            val normalized = appUserId?.trim()?.takeIf { it.isNotEmpty() } ?: return ""
+            return ENCODED_APP_USER_ID_PREFIX + URLEncoder.encode(normalized, StandardCharsets.UTF_8.name())
+        }
+
+        private fun decodeAppUserId(value: String): String {
+            if (value.isBlank()) return ""
+            if (!value.startsWith(ENCODED_APP_USER_ID_PREFIX)) return value
+            return runCatching {
+                URLDecoder.decode(
+                    value.removePrefix(ENCODED_APP_USER_ID_PREFIX),
+                    StandardCharsets.UTF_8.name(),
+                )
+            }.getOrDefault("")
         }
     }
 }
