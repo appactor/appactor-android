@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.4
+## 2.3.2
 
 - Added customer attribute polish for RevenueCat-style migration helpers, nullable custom-attribute unsets, profile validation, and typed date payload parity.
 - Expanded Android system profile-current context with platform, wrapper platform, and timezone metadata while keeping explicit helpers for sensitive identifiers.
