@@ -795,6 +795,58 @@ class AppActorPaymentProcessorTests {
     }
 
     @Test
+    fun `drain ready queue honors legacy posted marker for legacy keyed needs finish item`() = runBlocking {
+        val customerEnvelope = fixtureCustomerEnvelope("fixtures/backend/customer_android_active.json")
+        val dependencies = createDependencies(
+            receiptResponse = AppActorBackendHttpResponse(
+                body = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json"),
+                statusCode = 200,
+                requestId = "unused",
+                signatureVerified = true,
+            ),
+            customerResponse = AppActorBackendHttpResponse(
+                body = customerEnvelope,
+                statusCode = 200,
+                requestId = customerEnvelope.requestId,
+                signatureVerified = true,
+            ),
+        )
+        val legacyKey = AppActorReceiptQueueItem.makeKey(
+            purchaseToken = "token_legacy_posted_123",
+            productId = "com.appactor.pro.monthly",
+            basePlanId = "monthly001",
+        )
+        val queuedItem = AppActorReceiptQueueItem(
+            key = legacyKey,
+            appUserId = "user_android_123",
+            packageName = context.packageName,
+            environment = "production",
+            productId = "com.appactor.pro.monthly",
+            productType = "subscription",
+            purchaseToken = "token_legacy_posted_123",
+            purchaseTime = "1710000000000",
+            purchaseState = "PURCHASED",
+            orderId = "GPA.legacy.posted.1234",
+            basePlanId = "monthly001",
+            offerId = "intro7d",
+            idempotencyKey = "google:com.appactor.pro.monthly:monthly001:token_legacy_posted_123",
+            createdAtMillis = System.currentTimeMillis(),
+            lastUpdatedAtMillis = System.currentTimeMillis(),
+            shouldAcknowledge = true,
+            phase = com.appactor.android.storage.AppActorReceiptQueuePhase.NeedsFinish,
+        )
+        dependencies.queueStore.upsert(queuedItem)
+        dependencies.ledgerStore.markPosted(legacyKey)
+
+        dependencies.processor.drainReadyQueue()
+
+        assertEquals(listOf("token_legacy_posted_123"), dependencies.acknowledgedTokens)
+        assertTrue(dependencies.queueStore.snapshot().isEmpty())
+        assertEquals(0, dependencies.postedReceipts.size)
+        assertEquals(listOf("user_android_123"), dependencies.fetchedCustomers)
+    }
+
+    @Test
     fun `rate limit cooldown pauses ready queue drain until it expires`() = runBlocking {
         var now = 10_000L
         val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
