@@ -307,6 +307,73 @@ class AppActorPaymentProcessorTests {
     }
 
     @Test
+    fun `queued same token renewal keeps first unposted event when second arrives`() = runBlocking {
+        val retryableResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_retryable.json")
+        val dependencies = createDependencies(
+            receiptResponse = AppActorBackendHttpResponse(
+                body = retryableResponse,
+                statusCode = 200,
+                requestId = retryableResponse.requestId,
+                signatureVerified = true,
+            ),
+            receiptResponses = listOf(
+                AppActorBackendHttpResponse(
+                    body = retryableResponse,
+                    statusCode = 200,
+                    requestId = retryableResponse.requestId,
+                    signatureVerified = true,
+                ),
+                AppActorBackendHttpResponse(
+                    body = retryableResponse,
+                    statusCode = 200,
+                    requestId = retryableResponse.requestId,
+                    signatureVerified = true,
+                ),
+            ),
+        )
+        val firstRenewal = AppActorStorePurchase(
+            productId = "com.appactor.pro.monthly",
+            productType = AppActorProductType.Subscription,
+            purchaseToken = "token_same_queued_chain_123",
+            orderId = "GPA.same.queued.0",
+            purchaseTimeMillis = 1_710_000_000_000,
+            purchaseState = com.appactor.android.billing.AppActorStorePurchaseState.Purchased,
+            basePlanId = "monthly001",
+            offerId = "intro7d",
+            isAcknowledged = false,
+            isAutoRenewing = true,
+            rawPurchaseData = "{\"purchaseToken\":\"token_same_queued_chain_123\"}",
+            purchaseSignature = "signature_same_queued_0",
+        )
+        val secondRenewal = firstRenewal.copy(
+            orderId = "GPA.same.queued.1",
+            purchaseTimeMillis = 1_710_086_400_000,
+            rawPurchaseData = "{\"purchaseToken\":\"token_same_queued_chain_123\",\"renewal\":true}",
+            purchaseSignature = "signature_same_queued_1",
+        )
+
+        dependencies.processor.processPurchaseUpdates(listOf(firstRenewal))
+        dependencies.processor.processPurchaseUpdates(listOf(secondRenewal))
+
+        val queued = dependencies.queueStore.snapshot().sortedBy { it.orderId }
+        assertEquals(2, dependencies.postedReceipts.size)
+        assertEquals(2, queued.size)
+        assertEquals(listOf("GPA.same.queued.0", "GPA.same.queued.1"), queued.map { it.orderId })
+        assertEquals(
+            listOf(firstRenewal, secondRenewal).map { purchase ->
+                AppActorReceiptQueueItem.makeKey(
+                    purchaseToken = purchase.purchaseToken,
+                    productId = purchase.productId,
+                    basePlanId = purchase.basePlanId,
+                    orderId = purchase.orderId,
+                    purchaseTime = purchase.purchaseTimeMillis.toString(),
+                )
+            },
+            queued.map { it.key },
+        )
+    }
+
+    @Test
     fun `purchase updates post immediately with resolved local identity`() = runBlocking {
         val purchase = AppActorStorePurchase(
             productId = "com.appactor.pro.monthly",

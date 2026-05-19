@@ -444,16 +444,97 @@ class PluginRequestRouterTests {
         mockkObject(AppActor)
         try {
             coEvery { AppActor.setEmail(any()) } returns Unit
+            coEvery { AppActor.setDisplayName(any()) } returns Unit
+            coEvery { AppActor.setPhoneNumber(any()) } returns Unit
+            coEvery { AppActor.setPushToken(any()) } returns Unit
 
-            val result = PluginRequestRouter.route(
+            val email = PluginRequestRouter.route(
                 "set_email",
                 """{"email":"hello@appactor.com"}""",
             )
+            val displayName = PluginRequestRouter.route(
+                "set_display_name",
+                """{"display_name":"Ada Lovelace"}""",
+            )
+            val phoneNumber = PluginRequestRouter.route(
+                "set_phone_number",
+                """{"phone_number":"+15551234567"}""",
+            )
+            val pushToken = PluginRequestRouter.route(
+                "set_push_token",
+                """{"push_token":"fcm_token_123"}""",
+            )
 
-            assertTrue(result is PluginResult.Success)
+            assertTrue(email is PluginResult.Success)
+            assertTrue(displayName is PluginResult.Success)
+            assertTrue(phoneNumber is PluginResult.Success)
+            assertTrue(pushToken is PluginResult.Success)
             coVerify(exactly = 1) {
                 AppActor.setEmail("hello@appactor.com")
             }
+            coVerify(exactly = 1) {
+                AppActor.setDisplayName("Ada Lovelace")
+            }
+            coVerify(exactly = 1) {
+                AppActor.setPhoneNumber("+15551234567")
+            }
+            coVerify(exactly = 1) {
+                AppActor.setPushToken("fcm_token_123")
+            }
+        } finally {
+            unmockkObject(AppActor)
+        }
+    }
+
+    @Test
+    fun `reserved attribute helper requests accept explicit null clears`() = runBlocking {
+        mockkObject(AppActor)
+        try {
+            coEvery { AppActor.setEmail(null) } returns Unit
+            coEvery { AppActor.setDisplayName(null) } returns Unit
+            coEvery { AppActor.setPhoneNumber(null) } returns Unit
+            coEvery { AppActor.setPushToken(null) } returns Unit
+
+            val email = PluginRequestRouter.route("set_email", """{"value":null}""")
+            val displayName = PluginRequestRouter.route("set_display_name", """{"value":null}""")
+            val phoneNumber = PluginRequestRouter.route("set_phone_number", """{"value":null}""")
+            val pushToken = PluginRequestRouter.route("set_push_token", """{"value":null}""")
+
+            assertTrue(email is PluginResult.Success)
+            assertTrue(displayName is PluginResult.Success)
+            assertTrue(phoneNumber is PluginResult.Success)
+            assertTrue(pushToken is PluginResult.Success)
+            coVerify(exactly = 1) { AppActor.setEmail(null) }
+            coVerify(exactly = 1) { AppActor.setDisplayName(null) }
+            coVerify(exactly = 1) { AppActor.setPhoneNumber(null) }
+            coVerify(exactly = 1) { AppActor.setPushToken(null) }
+        } finally {
+            unmockkObject(AppActor)
+        }
+    }
+
+    @Test
+    fun `reserved attribute helper requests reject missing values instead of clearing`() = runBlocking {
+        mockkObject(AppActor)
+        try {
+            coEvery { AppActor.setEmail(null) } returns Unit
+            coEvery { AppActor.setDisplayName(null) } returns Unit
+            coEvery { AppActor.setPhoneNumber(null) } returns Unit
+            coEvery { AppActor.setPushToken(null) } returns Unit
+
+            val email = PluginRequestRouter.route("set_email", "{}")
+            val displayName = PluginRequestRouter.route("set_display_name", "{}")
+            val phoneNumber = PluginRequestRouter.route("set_phone_number", "{}")
+            val pushToken = PluginRequestRouter.route("set_push_token", "{}")
+
+            assertEquals(PluginError.DECODING_FAILED, (email as PluginResult.Error).error.code)
+            assertEquals(PluginError.DECODING_FAILED, (displayName as PluginResult.Error).error.code)
+            assertEquals(PluginError.DECODING_FAILED, (phoneNumber as PluginResult.Error).error.code)
+            assertEquals(PluginError.DECODING_FAILED, (pushToken as PluginResult.Error).error.code)
+            coVerify(exactly = 0) { AppActor.setEmail(null) }
+            coVerify(exactly = 0) { AppActor.setDisplayName(null) }
+            coVerify(exactly = 0) { AppActor.setPhoneNumber(null) }
+            coVerify(exactly = 0) { AppActor.setPushToken(null) }
         } finally {
             unmockkObject(AppActor)
         }
