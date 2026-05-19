@@ -710,6 +710,95 @@ class AppActorPaymentProcessorTests {
     }
 
     @Test
+    fun `deferred pending purchase retry success clears pending state and emits callback`() = runBlocking {
+        val pendingPrefs = context.getSharedPreferences(
+            "com.appactor.android.pending_purchases",
+            Context.MODE_PRIVATE,
+        )
+        val token = "token_pending_retry_123"
+        val now = 1_710_000_000_000L
+        pendingPrefs.edit()
+            .clear()
+            .putString(token, "com.appactor.pro.monthly|$now|$now|attempt-pending-retry")
+            .commit()
+
+        try {
+            val retryableResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_retryable.json")
+            val successResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
+            val dependencies = createDependencies(
+                receiptResponse = AppActorBackendHttpResponse(
+                    body = successResponse,
+                    statusCode = 200,
+                    requestId = successResponse.requestId,
+                    signatureVerified = true,
+                ),
+                receiptResponses = listOf(
+                    AppActorBackendHttpResponse(
+                        body = retryableResponse,
+                        statusCode = 200,
+                        requestId = retryableResponse.requestId,
+                        signatureVerified = true,
+                    ),
+                    AppActorBackendHttpResponse(
+                        body = successResponse,
+                        statusCode = 200,
+                        requestId = successResponse.requestId,
+                        signatureVerified = true,
+                    ),
+                ),
+                dateProviderMillis = { now },
+            )
+            val callbacks = mutableListOf<Pair<String, String?>>()
+            dependencies.processor.onDeferredPurchaseResolved = { productId, customerInfo ->
+                callbacks += productId to customerInfo.appUserId
+            }
+            val purchase = AppActorStorePurchase(
+                productId = "com.appactor.pro.monthly",
+                productType = AppActorProductType.Subscription,
+                purchaseToken = token,
+                orderId = "GPA.pending.retry.1234",
+                purchaseTimeMillis = now,
+                purchaseState = com.appactor.android.billing.AppActorStorePurchaseState.Purchased,
+                basePlanId = "monthly001",
+                offerId = "intro7d",
+                priceAmountMicros = 4_990_000,
+                currencyCode = "USD",
+                isAcknowledged = false,
+                isAutoRenewing = true,
+                rawPurchaseData = "{\"purchaseToken\":\"$token\"}",
+                purchaseSignature = "signature_pending_retry_123",
+            )
+
+            dependencies.processor.processPurchaseUpdates(listOf(purchase))
+            assertTrue(callbacks.isEmpty())
+            assertTrue(pendingPrefs.contains(token))
+
+            val queued = dependencies.queueStore.snapshot().single()
+            dependencies.queueStore.update(
+                queued.copy(
+                    nextRetryAtMillis = 0L,
+                    phase = com.appactor.android.storage.AppActorReceiptQueuePhase.NeedsPost,
+                )
+            )
+
+            dependencies.processor.drainReadyQueue()
+
+            assertEquals(listOf("com.appactor.pro.monthly"), callbacks.map { it.first })
+            assertEquals(listOf("user_android_123"), callbacks.map { it.second })
+            assertFalse(pendingPrefs.contains(token))
+            assertTrue(dependencies.queueStore.snapshot().isEmpty())
+            assertEquals("transaction_updates", dependencies.postedReceipts.first().clientDeliverySource)
+            assertEquals("queue_retry", dependencies.postedReceipts.last().clientDeliverySource)
+            assertEquals(
+                dependencies.postedReceipts.first().clientPurchaseAttemptId,
+                dependencies.postedReceipts.last().clientPurchaseAttemptId,
+            )
+        } finally {
+            pendingPrefs.edit().clear().commit()
+        }
+    }
+
+    @Test
     fun `retry dead lettered items drains revived receipts immediately`() = runBlocking {
         val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
         val dependencies = createDependencies(
@@ -1149,6 +1238,65 @@ class AppActorPaymentProcessorTests {
             assertEquals("user_same", transitionResults.single().appUserId)
             assertEquals(listOf("com.appactor.pro.monthly"), deferredCallbacks.map { it.first })
             assertFalse(pendingPrefs.contains("token_same_user_transition_deferred_123"))
+        } finally {
+            pendingPrefs.edit().clear().commit()
+        }
+    }
+
+    @Test
+    fun `identity transition overflow does not emit deferred callback for captured old user`() = runBlocking {
+        val pendingPrefs = context.getSharedPreferences(
+            "com.appactor.android.pending_purchases",
+            Context.MODE_PRIVATE,
+        )
+        val overflowToken = "token_transition_overflow_deferred_50"
+        val now = System.currentTimeMillis()
+        pendingPrefs.edit()
+            .clear()
+            .putString(overflowToken, "com.appactor.pro.monthly|$now|$now|attempt-overflow")
+            .commit()
+
+        try {
+            val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
+            val dependencies = createDependencies(
+                receiptResponse = AppActorBackendHttpResponse(
+                    body = receiptResponse,
+                    statusCode = 200,
+                    requestId = receiptResponse.requestId,
+                    signatureVerified = true,
+                ),
+                identityStore = createMockIdentityStore(initialAppUserId = "user_old"),
+            )
+            val callbacks = mutableListOf<Pair<String, String?>>()
+            dependencies.processor.onDeferredPurchaseResolved = { productId, customerInfo ->
+                callbacks += productId to customerInfo.appUserId
+            }
+            val purchases = (0..50).map { index ->
+                val token = if (index == 50) overflowToken else "token_transition_overflow_$index"
+                AppActorStorePurchase(
+                    productId = "com.appactor.pro.monthly",
+                    productType = AppActorProductType.Subscription,
+                    purchaseToken = token,
+                    orderId = "GPA.transition.overflow.$index",
+                    purchaseTimeMillis = 1_710_000_000_000L + index,
+                    purchaseState = com.appactor.android.billing.AppActorStorePurchaseState.Purchased,
+                    basePlanId = "monthly001",
+                    offerId = "intro7d",
+                    isAcknowledged = false,
+                    isAutoRenewing = true,
+                    rawPurchaseData = "{\"purchaseToken\":\"$token\"}",
+                    purchaseSignature = "signature_transition_overflow_$index",
+                )
+            }
+
+            dependencies.processor.beginIdentityTransition()
+            val overflowResult = dependencies.processor.processLivePurchaseUpdates(purchases)
+
+            assertEquals("user_old", overflowResult?.appUserId)
+            assertEquals(1, dependencies.postedReceipts.size)
+            assertEquals(overflowToken, dependencies.postedReceipts.single().purchaseToken)
+            assertTrue(callbacks.isEmpty())
+            assertFalse(pendingPrefs.contains(overflowToken))
         } finally {
             pendingPrefs.edit().clear().commit()
         }
