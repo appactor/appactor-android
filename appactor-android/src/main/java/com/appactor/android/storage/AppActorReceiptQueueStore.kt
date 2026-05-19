@@ -39,6 +39,12 @@ internal data class AppActorReceiptQueueItem(
     val rawPurchaseData: String? = null,
     val purchaseSignature: String? = null,
     val countryCode: String? = null,
+    val clientPurchaseAttemptStartedAt: String? = null,
+    val clientObservedAt: String? = null,
+    val clientDeliverySource: String? = null,
+    val clientPurchaseAttemptId: String? = null,
+    val sdkOriginated: Boolean? = null,
+    val sdkVersion: String? = null,
     val isAcknowledged: Boolean = false,
     val shouldAcknowledge: Boolean = false,
     val shouldConsume: Boolean = false,
@@ -109,6 +115,34 @@ internal class AppActorAtomicJsonReceiptQueueStore(
             val incomingPriority = SOURCE_INTENT_PRIORITY[incoming.sourceIntent] ?: 0
             return if (incomingPriority > existingPriority) incoming.sourceIntent else existing.sourceIntent
         }
+
+        private fun shouldAdoptClientPurchaseContext(
+            existing: AppActorReceiptQueueItem,
+            incoming: AppActorReceiptQueueItem,
+        ): Boolean {
+            val incomingHasAttempt = incoming.clientPurchaseAttemptStartedAt != null &&
+                !incoming.clientPurchaseAttemptId.isNullOrBlank()
+            if (incoming.clientDeliverySource == null &&
+                incoming.clientPurchaseAttemptStartedAt == null &&
+                incoming.clientPurchaseAttemptId == null &&
+                incoming.clientObservedAt == null
+            ) {
+                return false
+            }
+            if (existing.clientDeliverySource == null &&
+                existing.clientPurchaseAttemptStartedAt == null &&
+                existing.clientPurchaseAttemptId == null &&
+                existing.clientObservedAt == null
+            ) {
+                return incomingHasAttempt || incoming.clientDeliverySource != "transaction_updates"
+            }
+            val existingHasAttempt = existing.clientPurchaseAttemptStartedAt != null &&
+                !existing.clientPurchaseAttemptId.isNullOrBlank()
+            if (incomingHasAttempt && !existingHasAttempt) return true
+            return incomingHasAttempt &&
+                incoming.clientDeliverySource == "purchase_flow" &&
+                existing.clientDeliverySource != "purchase_flow"
+        }
     }
 
     private val lock = ReentrantLock()
@@ -125,6 +159,7 @@ internal class AppActorAtomicJsonReceiptQueueStore(
             updated[item.key] = if (existing == null) {
                 item
             } else {
+                val adoptClientContext = shouldAdoptClientPurchaseContext(existing, item)
                 item.copy(
                     appUserId = if (
                         existing.appUserId != item.appUserId &&
@@ -147,6 +182,16 @@ internal class AppActorAtomicJsonReceiptQueueStore(
                     rawPurchaseData = item.rawPurchaseData ?: existing.rawPurchaseData,
                     purchaseSignature = item.purchaseSignature ?: existing.purchaseSignature,
                     countryCode = item.countryCode ?: existing.countryCode,
+                    clientPurchaseAttemptStartedAt = if (adoptClientContext) {
+                        item.clientPurchaseAttemptStartedAt
+                    } else {
+                        existing.clientPurchaseAttemptStartedAt
+                    },
+                    clientObservedAt = if (adoptClientContext) item.clientObservedAt else existing.clientObservedAt,
+                    clientDeliverySource = if (adoptClientContext) item.clientDeliverySource else existing.clientDeliverySource,
+                    clientPurchaseAttemptId = if (adoptClientContext) item.clientPurchaseAttemptId else existing.clientPurchaseAttemptId,
+                    sdkOriginated = if (adoptClientContext) item.sdkOriginated else existing.sdkOriginated,
+                    sdkVersion = if (adoptClientContext) item.sdkVersion else existing.sdkVersion,
                     offeringId = item.offeringId ?: existing.offeringId,
                     packageId = item.packageId ?: existing.packageId,
                     isAcknowledged = existing.isAcknowledged || item.isAcknowledged,

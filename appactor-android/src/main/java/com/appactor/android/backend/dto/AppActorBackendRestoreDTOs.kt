@@ -10,6 +10,12 @@ internal data class AppActorGoogleRestoreRequestDTO(
     val sourceIntent: String,
     val source: String? = null,
     val observedAt: String? = null,
+    val clientPurchaseAttemptStartedAt: String? = null,
+    val clientObservedAt: String? = null,
+    val clientDeliverySource: String? = null,
+    val clientPurchaseAttemptId: String? = null,
+    val sdkOriginated: Boolean? = null,
+    val sdkVersion: String? = null,
     val purchases: List<AppActorGoogleRestorePurchaseDTO>,
 )
 
@@ -52,6 +58,12 @@ internal data class AppActorGoogleSyncRequestDTO(
     val sourceIntent: String,
     val source: String,
     val observedAt: String? = null,
+    val clientPurchaseAttemptStartedAt: String? = null,
+    val clientObservedAt: String? = null,
+    val clientDeliverySource: String? = null,
+    val clientPurchaseAttemptId: String? = null,
+    val sdkOriginated: Boolean? = null,
+    val sdkVersion: String? = null,
     val purchases: List<AppActorGoogleRestorePurchaseDTO>,
 )
 
@@ -83,6 +95,12 @@ internal fun AppActorGoogleSyncRequestDTO.toRestoreRequest(): AppActorGoogleRest
         sourceIntent = sourceIntent,
         source = source,
         observedAt = observedAt,
+        clientPurchaseAttemptStartedAt = clientPurchaseAttemptStartedAt,
+        clientObservedAt = clientObservedAt,
+        clientDeliverySource = clientDeliverySource,
+        clientPurchaseAttemptId = clientPurchaseAttemptId,
+        sdkOriginated = sdkOriginated,
+        sdkVersion = sdkVersion,
         purchases = purchases,
     )
 }

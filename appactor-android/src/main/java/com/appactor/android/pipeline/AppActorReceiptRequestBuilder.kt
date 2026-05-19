@@ -9,6 +9,11 @@ internal object AppActorReceiptRequestBuilder {
     fun buildGoogleReceiptRequest(
         item: AppActorReceiptQueueItem,
     ): AppActorGoogleReceiptRequestDTO {
+        val clientDeliverySource = if (item.retryCount > 0 && item.clientDeliverySource != null) {
+            AppActorClientDeliverySource.QueueRetry.wireValue
+        } else {
+            item.clientDeliverySource
+        }
         return AppActorGoogleReceiptRequestDTO(
             appUserId = item.appUserId,
             packageName = item.packageName,
@@ -29,6 +34,12 @@ internal object AppActorReceiptRequestBuilder {
             sourceIntent = item.sourceIntent,
             source = "purchase_update",
             observedAt = item.purchaseTime.toLongOrNull()?.let { AppActorBridgeReceiptEvent.millisToIso8601(it) },
+            clientPurchaseAttemptStartedAt = item.clientPurchaseAttemptStartedAt,
+            clientObservedAt = item.clientObservedAt,
+            clientDeliverySource = clientDeliverySource,
+            clientPurchaseAttemptId = item.clientPurchaseAttemptId,
+            sdkOriginated = item.sdkOriginated,
+            sdkVersion = item.sdkVersion,
             idempotencyKey = item.idempotencyKey,
             rawPurchaseData = item.rawPurchaseData,
             purchaseSignature = item.purchaseSignature,

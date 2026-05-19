@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -212,6 +213,30 @@ class AppActorReceiptQueueStoreTests {
         store.upsert(purchaseRetry)
 
         assertEquals("purchase", store.get(queueItem.key)?.sourceIntent)
+    }
+
+    @Test
+    fun `upsert does not modernize legacy purchase item with contextless transaction update`() {
+        val store = AppActorAtomicJsonReceiptQueueStore(context, tempDirectory("queue-legacy-contextless-update"))
+        val legacyPurchase = queueItem().copy(sourceIntent = "purchase")
+        store.upsert(legacyPurchase)
+
+        val liveUpdate = legacyPurchase.copy(
+            sourceIntent = "queue",
+            clientObservedAt = "2024-03-09T16:10:00Z",
+            clientDeliverySource = "transaction_updates",
+            sdkOriginated = true,
+            sdkVersion = "9.9.9",
+            lastUpdatedAtMillis = legacyPurchase.lastUpdatedAtMillis + 1,
+        )
+        store.upsert(liveUpdate)
+
+        val stored = store.get(legacyPurchase.key)
+        assertEquals("purchase", stored?.sourceIntent)
+        assertNull(stored?.clientObservedAt)
+        assertNull(stored?.clientDeliverySource)
+        assertNull(stored?.sdkOriginated)
+        assertNull(stored?.sdkVersion)
     }
 
     private fun queueItem(
