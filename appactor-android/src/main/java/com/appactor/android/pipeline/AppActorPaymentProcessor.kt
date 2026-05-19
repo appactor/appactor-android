@@ -2032,9 +2032,9 @@ internal class AppActorPaymentProcessor(
     }
 
     private fun isPurchasePosted(item: AppActorReceiptQueueItem): Boolean {
-        // Intentionally check the versioned ledger key only. Reading the legacy
-        // token-only queue key here would suppress same-token Google renewals.
-        return postedLedgerStore.isPosted(postedLedgerKey(item))
+        if (postedLedgerStore.isPosted(postedLedgerKey(item))) return true
+        if (!isLegacyKeyedQueueItem(item)) return false
+        return postedLedgerStore.isPosted(legacyQueueKey(item))
     }
 
     private fun markPurchasePosted(item: AppActorReceiptQueueItem) {
@@ -2092,6 +2092,10 @@ internal class AppActorPaymentProcessor(
             productId = item.productId,
             basePlanId = item.basePlanId,
         )
+    }
+
+    private fun isLegacyKeyedQueueItem(item: AppActorReceiptQueueItem): Boolean {
+        return item.key == legacyQueueKey(item)
     }
 
     private fun postedLedgerKey(item: AppActorReceiptQueueItem): String {
