@@ -1,0 +1,11 @@
+{
+  "status": "retryable_error",
+  "requestId": "req_google_receipt_retryable_001",
+  "error": {
+    "code": "USER_NOT_FOUND",
+    "message": "User not identified yet. Retry after identify completes."
+  },
+  "retryAfterSeconds": 5,
+  "acknowledgePurchase": false,
+  "consumePurchase": false
+}

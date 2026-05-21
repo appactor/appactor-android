@@ -1,0 +1,19 @@
+# Copy these into an untracked Gradle properties file or inject them from CI.
+# Never commit real credentials or signing keys.
+
+POM_SCM_URL=https://github.com/your-org/appactor-android
+POM_SCM_CONNECTION=scm:git:https://github.com/your-org/appactor-android.git
+POM_SCM_DEV_CONNECTION=scm:git:ssh://git@github.com/your-org/appactor-android.git
+POM_LICENSE_NAME=Apache-2.0
+POM_LICENSE_URL=https://www.apache.org/licenses/LICENSE-2.0.txt
+POM_DEVELOPER_ID=appactor
+POM_DEVELOPER_NAME=AppActor
+POM_DEVELOPER_EMAIL=engineering@appactor.com
+
+appactorReleaseRepositoryUrl=https://repo.example.com/releases
+appactorReleaseRepositoryUsername=release-user
+appactorReleaseRepositoryPassword=release-password
+
+signingInMemoryKeyId=
+signingInMemoryKey=
+signingInMemoryKeyPassword=
