@@ -174,4 +174,9 @@ internal data class PendingPurchaseEntry(
     }
 }
 
-internal fun String?.normalizePlacement(): String? = this?.trim()?.takeIf { it.isNotEmpty() }
+private const val MAX_PLACEMENT_LENGTH = 255
+
+internal fun String?.normalizePlacement(): String? {
+    val normalized = this?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    return normalized.takeIf { it.length <= MAX_PLACEMENT_LENGTH }
+}

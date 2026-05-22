@@ -125,6 +125,41 @@ class AppActorPaymentProcessorTests {
     }
 
     @Test
+    fun `purchase placement at max length is posted on receipt`() = runBlocking {
+        val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
+        val dependencies = createDependencies(
+            receiptResponse = AppActorBackendHttpResponse(
+                body = receiptResponse,
+                statusCode = 200,
+                requestId = receiptResponse.requestId,
+                signatureVerified = true,
+            )
+        )
+        val placement = "x".repeat(255)
+
+        dependencies.processor.purchase(Activity(), monthlyPackage(), placement = placement)
+
+        assertEquals(placement, dependencies.postedReceipts.single().placement)
+    }
+
+    @Test
+    fun `overlong purchase placement is omitted from receipt`() = runBlocking {
+        val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
+        val dependencies = createDependencies(
+            receiptResponse = AppActorBackendHttpResponse(
+                body = receiptResponse,
+                statusCode = 200,
+                requestId = receiptResponse.requestId,
+                signatureVerified = true,
+            )
+        )
+
+        dependencies.processor.purchase(Activity(), monthlyPackage(), placement = "x".repeat(256))
+
+        assertNull(dependencies.postedReceipts.single().placement)
+    }
+
+    @Test
     fun `blank purchase placement is omitted from receipt`() = runBlocking {
         val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
         val dependencies = createDependencies(
