@@ -88,6 +88,7 @@ class AppActorBackendContractTests {
                 purchaseState = "PURCHASED",
                 priceAmountMicros = 4_990_000,
                 currency = "USD",
+                placement = "paywall_hero",
                 sourceIntent = "purchase",
                 idempotencyKey = "google:com.appactor.pro.monthly:monthly001:token_123",
             )
@@ -95,7 +96,28 @@ class AppActorBackendContractTests {
 
         assertTrue(payload.contains("\"priceAmountMicros\":4990000"))
         assertTrue(payload.contains("\"currency\":\"USD\""))
+        assertTrue(payload.contains("\"placement\":\"paywall_hero\""))
         assertTrue(payload.contains("\"sourceIntent\":\"purchase\""))
+    }
+
+    @Test
+    fun `google receipt request omits null placement`() {
+        val payload = AppActorBackendJson.instance.encodeToString(
+            AppActorGoogleReceiptRequestDTO(
+                appUserId = "user_android_123",
+                packageName = "com.appactor.android",
+                environment = "production",
+                productId = "com.appactor.pro.monthly",
+                productType = "subscription",
+                purchaseToken = "token_123",
+                purchaseTime = "1710000000000",
+                purchaseState = "PURCHASED",
+                sourceIntent = "sync",
+                idempotencyKey = "google:com.appactor.pro.monthly:monthly001:token_123",
+            )
+        )
+
+        assertFalse(payload.contains("\"placement\""))
     }
 
     @Test

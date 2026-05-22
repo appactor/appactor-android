@@ -136,6 +136,21 @@ public object AppActorJava {
     )
 
     @JvmStatic
+    @JvmName("purchaseAsyncWithPlacement")
+    @JvmOverloads
+    public fun purchaseAsync(
+        activity: Activity,
+        appActorPackage: AppActorPackage,
+        placement: String?,
+        onSuccess: AppActorSuccessCallback<AppActorPurchaseResult>? = null,
+        onError: AppActorErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.purchase(activity, appActorPackage, placement) },
+        onSuccess = onSuccess,
+        onError = onError,
+    )
+
+    @JvmStatic
     public fun restorePurchasesAsync(
         onSuccess: AppActorSuccessCallback<AppActorCustomerInfo>? = null,
         onError: AppActorErrorCallback? = null,

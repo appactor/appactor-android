@@ -196,6 +196,21 @@ public object AppActorBridge {
     )
 
     @JvmStatic
+    @JvmName("purchaseWithPlacement")
+    @JvmOverloads
+    public fun purchase(
+        activity: Activity,
+        appActorPackage: AppActorPackage,
+        placement: String?,
+        onSuccess: AppActorSuccessCallback<AppActorPurchaseResult>? = null,
+        onError: AppActorBridgeErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.purchase(activity, appActorPackage, placement) },
+        onSuccess = onSuccess,
+        onError = onError.asSdkErrorCallback(),
+    )
+
+    @JvmStatic
     @JvmOverloads
     @Deprecated(
         message = "Prefer AppActorBridge.purchase(activity, appActorPackage). " +
@@ -208,6 +223,25 @@ public object AppActorBridge {
         onError: AppActorBridgeErrorCallback? = null,
     ): Unit = AppActor.launchAsync(
         operation = { AppActor.purchase(activity, params) },
+        onSuccess = onSuccess,
+        onError = onError.asSdkErrorCallback(),
+    )
+
+    @JvmStatic
+    @JvmName("purchaseWithPlacement")
+    @JvmOverloads
+    @Deprecated(
+        message = "Prefer AppActorBridge.purchase(activity, appActorPackage). " +
+            "AppActorPurchaseParams is only for explicit direct Play Store targets.",
+    )
+    public fun purchase(
+        activity: Activity,
+        params: AppActorPurchaseParams,
+        placement: String?,
+        onSuccess: AppActorSuccessCallback<AppActorPurchaseResult>? = null,
+        onError: AppActorBridgeErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.purchase(activity, params, placement) },
         onSuccess = onSuccess,
         onError = onError.asSdkErrorCallback(),
     )

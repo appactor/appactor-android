@@ -944,6 +944,16 @@ public object AppActor {
     public suspend fun purchase(
         activity: Activity,
         appActorPackage: AppActorPackage,
+    ): AppActorPurchaseResult = purchase(
+        activity = activity,
+        appActorPackage = appActorPackage,
+        placement = null,
+    )
+
+    public suspend fun purchase(
+        activity: Activity,
+        appActorPackage: AppActorPackage,
+        placement: String?,
     ): AppActorPurchaseResult {
         val snapshot = captureOperationSnapshot(resolveAppUserId = true)
         require(appActorPackage.productId.isNotBlank()) {
@@ -953,6 +963,7 @@ public object AppActor {
             activity = activity,
             appActorPackage = appActorPackage,
             appUserIdOverride = snapshot.appUserId,
+            placement = placement,
         )
         handlePurchaseResult(snapshot, result)
         return result
@@ -965,12 +976,27 @@ public object AppActor {
     public suspend fun purchase(
         activity: Activity,
         params: AppActorPurchaseParams,
+    ): AppActorPurchaseResult = purchase(
+        activity = activity,
+        params = params,
+        placement = null,
+    )
+
+    @Deprecated(
+        message = "Prefer AppActor.purchase(activity, appActorPackage). " +
+            "AppActorPurchaseParams is only for explicit direct Play Store targets.",
+    )
+    public suspend fun purchase(
+        activity: Activity,
+        params: AppActorPurchaseParams,
+        placement: String?,
     ): AppActorPurchaseResult {
         val snapshot = captureOperationSnapshot(resolveAppUserId = true)
         val result = snapshot.runtime.paymentProcessor.purchase(
             activity = activity,
             params = params,
             appUserIdOverride = snapshot.appUserId,
+            placement = placement,
         )
         handlePurchaseResult(snapshot, result)
         return result
