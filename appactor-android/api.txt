@@ -33,7 +33,9 @@ package com.appactor.android.api {
     method public suspend Object? logOut(kotlin.coroutines.Continuation<? super java.lang.Boolean>);
     method public suspend Object? offerings(com.appactor.android.models.AppActorOfferingsFetchPolicy fetchPolicy, kotlin.coroutines.Continuation<? super com.appactor.android.models.AppActorOfferings>);
     method public suspend Object? offerings(kotlin.coroutines.Continuation<? super com.appactor.android.models.AppActorOfferings>);
+    method public suspend Object? purchase(android.app.Activity activity, com.appactor.android.models.AppActorPackage appActorPackage, String? placement, kotlin.coroutines.Continuation<? super com.appactor.android.models.AppActorPurchaseResult>);
     method public suspend Object? purchase(android.app.Activity activity, com.appactor.android.models.AppActorPackage appActorPackage, kotlin.coroutines.Continuation<? super com.appactor.android.models.AppActorPurchaseResult>);
+    method @Deprecated public suspend Object? purchase(android.app.Activity activity, com.appactor.android.models.AppActorPurchaseParams params, String? placement, kotlin.coroutines.Continuation<? super com.appactor.android.models.AppActorPurchaseResult>);
     method @Deprecated public suspend Object? purchase(android.app.Activity activity, com.appactor.android.models.AppActorPurchaseParams params, kotlin.coroutines.Continuation<? super com.appactor.android.models.AppActorPurchaseResult>);
     method public suspend Object? reset(kotlin.coroutines.Continuation<? super kotlin.Unit>);
     method public suspend Object? restorePurchases(kotlin.coroutines.Continuation<? super com.appactor.android.models.AppActorCustomerInfo>);
@@ -145,6 +147,12 @@ package com.appactor.android.api {
     method @Deprecated public static void purchase(android.app.Activity activity, com.appactor.android.models.AppActorPurchaseParams params);
     method @Deprecated public static void purchase(android.app.Activity activity, com.appactor.android.models.AppActorPurchaseParams params, optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorPurchaseResult>? onSuccess);
     method @Deprecated public static void purchase(android.app.Activity activity, com.appactor.android.models.AppActorPurchaseParams params, optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorPurchaseResult>? onSuccess, optional com.appactor.android.models.AppActorBridgeErrorCallback? onError);
+    method public static void purchaseWithPlacement(android.app.Activity activity, com.appactor.android.models.AppActorPackage appActorPackage, String? placement);
+    method public static void purchaseWithPlacement(android.app.Activity activity, com.appactor.android.models.AppActorPackage appActorPackage, String? placement, optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorPurchaseResult>? onSuccess);
+    method public static void purchaseWithPlacement(android.app.Activity activity, com.appactor.android.models.AppActorPackage appActorPackage, String? placement, optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorPurchaseResult>? onSuccess, optional com.appactor.android.models.AppActorBridgeErrorCallback? onError);
+    method @Deprecated public static void purchaseWithPlacement(android.app.Activity activity, com.appactor.android.models.AppActorPurchaseParams params, String? placement);
+    method @Deprecated public static void purchaseWithPlacement(android.app.Activity activity, com.appactor.android.models.AppActorPurchaseParams params, String? placement, optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorPurchaseResult>? onSuccess);
+    method @Deprecated public static void purchaseWithPlacement(android.app.Activity activity, com.appactor.android.models.AppActorPurchaseParams params, String? placement, optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorPurchaseResult>? onSuccess, optional com.appactor.android.models.AppActorBridgeErrorCallback? onError);
     method public static void quietSyncPurchases();
     method public static void quietSyncPurchases(optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorCustomerInfo>? onSuccess);
     method public static void quietSyncPurchases(optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorCustomerInfo>? onSuccess, optional com.appactor.android.models.AppActorBridgeErrorCallback? onError);
@@ -257,6 +265,9 @@ package com.appactor.android.api {
     method public static void logInAsync(String appUserId, optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorCustomerInfo>? onSuccess, optional com.appactor.android.models.AppActorErrorCallback? onError);
     method public static void logOutAsync(optional com.appactor.android.models.AppActorSuccessCallback<java.lang.Boolean>? onSuccess, optional com.appactor.android.models.AppActorErrorCallback? onError);
     method public static void purchaseAsync(android.app.Activity activity, com.appactor.android.models.AppActorPackage appActorPackage, optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorPurchaseResult>? onSuccess, optional com.appactor.android.models.AppActorErrorCallback? onError);
+    method public static void purchaseAsyncWithPlacement(android.app.Activity activity, com.appactor.android.models.AppActorPackage appActorPackage, String? placement);
+    method public static void purchaseAsyncWithPlacement(android.app.Activity activity, com.appactor.android.models.AppActorPackage appActorPackage, String? placement, optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorPurchaseResult>? onSuccess);
+    method public static void purchaseAsyncWithPlacement(android.app.Activity activity, com.appactor.android.models.AppActorPackage appActorPackage, String? placement, optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorPurchaseResult>? onSuccess, optional com.appactor.android.models.AppActorErrorCallback? onError);
     method public static void quietSyncPurchasesAsync(optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorCustomerInfo>? onSuccess, optional com.appactor.android.models.AppActorErrorCallback? onError);
     method public static void restorePurchasesAsync(optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorCustomerInfo>? onSuccess, optional com.appactor.android.models.AppActorErrorCallback? onError);
     method public static void setAdAsync(String? ad, optional com.appactor.android.models.AppActorCompletionCallback? onComplete, optional com.appactor.android.models.AppActorErrorCallback? onError);
@@ -290,7 +301,6 @@ package com.appactor.android.api {
   }
 
 }
-
 package com.appactor.android.models {
 
   public abstract sealed class AppActorAttributeValue {

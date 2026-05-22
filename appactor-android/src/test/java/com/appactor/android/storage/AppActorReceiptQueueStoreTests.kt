@@ -93,6 +93,7 @@ class AppActorReceiptQueueStoreTests {
         assertEquals(1, reloaded.pendingCount())
         assertEquals(null, reloaded.snapshot().single().priceAmountMicros)
         assertEquals(null, reloaded.snapshot().single().currencyCode)
+        assertNull(reloaded.snapshot().single().placement)
     }
 
     @Test
@@ -213,6 +214,43 @@ class AppActorReceiptQueueStoreTests {
         store.upsert(purchaseRetry)
 
         assertEquals("purchase", store.get(queueItem.key)?.sourceIntent)
+    }
+
+    @Test
+    fun `upsert preserves purchase placement across sync queue updates`() {
+        val store = AppActorAtomicJsonReceiptQueueStore(context, tempDirectory("queue-placement-merge"))
+        val purchaseItem = queueItem().copy(
+            sourceIntent = "purchase",
+            placement = "paywall_hero",
+        )
+        store.upsert(purchaseItem)
+
+        val syncUpdate = purchaseItem.copy(
+            sourceIntent = "sync",
+            placement = null,
+            clientObservedAt = "2024-03-09T16:10:00Z",
+            clientDeliverySource = "foreground_sync",
+            lastUpdatedAtMillis = purchaseItem.lastUpdatedAtMillis + 1,
+        )
+        store.upsert(syncUpdate)
+
+        assertEquals("paywall_hero", store.get(purchaseItem.key)?.placement)
+    }
+
+    @Test
+    fun `upsert adopts placement when later purchase update resolves existing queued item`() {
+        val store = AppActorAtomicJsonReceiptQueueStore(context, tempDirectory("queue-placement-adopt"))
+        val syncItem = queueItem().copy(sourceIntent = "sync")
+        store.upsert(syncItem)
+
+        val purchaseUpdate = syncItem.copy(
+            sourceIntent = "purchase",
+            placement = "checkout_modal",
+            lastUpdatedAtMillis = syncItem.lastUpdatedAtMillis + 1,
+        )
+        store.upsert(purchaseUpdate)
+
+        assertEquals("checkout_modal", store.get(syncItem.key)?.placement)
     }
 
     @Test
