@@ -341,6 +341,22 @@ class PluginRequestRouterTests {
     }
 
     @Test
+    fun `purchase package rejects unsupported android quantity before launching billing`() = runBlocking {
+        val invalidQuantity = PluginRequestRouter.route(
+            "purchase_package",
+            """{"package_id":"monthly","quantity":0}""",
+        )
+        val unsupportedQuantity = PluginRequestRouter.route(
+            "purchase_package",
+            """{"package_id":"monthly","quantity":2}""",
+        )
+
+        assertEquals(PluginError.SDK_VALIDATION, (invalidQuantity as PluginResult.Error).error.code)
+        assertEquals(PluginError.SDK_VALIDATION, (unsupportedQuantity as PluginResult.Error).error.code)
+        assertTrue(unsupportedQuantity.error.message.contains("quantity greater than 1"))
+    }
+
+    @Test
     fun `update attribution request forwards native attribution model`() = runBlocking {
         mockkObject(AppActor)
         try {
@@ -425,14 +441,18 @@ class PluginRequestRouterTests {
         mockkObject(AppActor)
         try {
             coEvery { AppActor.setMediaSource(any()) } returns Unit
+            coEvery { AppActor.setMediaSource(null) } returns Unit
             coEvery { AppActor.setCampaign(any()) } returns Unit
 
             val mediaSource = PluginRequestRouter.route("set_media_source", """{"value":"facebook"}""")
             val campaign = PluginRequestRouter.route("set_campaign", """{"value":"spring_sale"}""")
+            val clearMediaSource = PluginRequestRouter.route("set_media_source", """{"value":null}""")
 
             assertTrue(mediaSource is PluginResult.Success)
             assertTrue(campaign is PluginResult.Success)
+            assertTrue(clearMediaSource is PluginResult.Success)
             coVerify(exactly = 1) { AppActor.setMediaSource("facebook") }
+            coVerify(exactly = 1) { AppActor.setMediaSource(null) }
             coVerify(exactly = 1) { AppActor.setCampaign("spring_sale") }
         } finally {
             unmockkObject(AppActor)

@@ -24,6 +24,7 @@ import com.appactor.android.internal.runtime.AppActorStartupCoordinator
 import com.appactor.android.internal.runtime.AppActorStartupCoordinatorHost
 import com.appactor.android.internal.logging.AppActorLogger
 import com.appactor.android.managers.AppActorCustomerManager
+import com.appactor.android.managers.AppActorCustomAttributionField
 import com.appactor.android.models.AppActorAttributeReservedKeys
 import com.appactor.android.models.AppActorAttributeValue
 import com.appactor.android.models.AppActorAttributesValidation
@@ -359,16 +360,21 @@ public object AppActor {
         }
         if (!installReferrerEnabled.compareAndSet(false, true)) return
         currentRuntime.scope.launch {
+            var referrerRecorded = false
             try {
                 val manager = com.appactor.android.billing.AppActorInstallReferrerManager(
                     context = currentRuntime.configuration.applicationContext,
                     identityStore = currentRuntime.identityStore,
                     attributesManager = currentRuntime.attributesManager,
                 )
-                manager.fetchReferrerOnce()
+                referrerRecorded = manager.fetchReferrerOnce() != null
             } catch (throwable: Throwable) {
                 throwIfCancellation(throwable)
                 AppActorLogger.debug("Install referrer fetch failed: ${throwable.message}")
+            } finally {
+                if (!referrerRecorded) {
+                    installReferrerEnabled.set(false)
+                }
             }
         }
     }
@@ -815,40 +821,59 @@ public object AppActor {
         }
     }
 
-    public suspend fun setMediaSource(mediaSource: String) {
+    public suspend fun setMediaSource(mediaSource: String?) {
         updateCustomAttribution(AppActorAttribution(
             provider = "custom",
             providerName = mediaSource,
             network = mediaSource,
             source = mediaSource,
-        ))
+        ), clearFields = if (mediaSource == null) setOf(AppActorCustomAttributionField.MediaSource) else emptySet())
     }
 
-    public suspend fun setCampaign(campaign: String) {
-        updateCustomAttribution(AppActorAttribution(provider = "custom", campaignName = campaign, campaign = campaign))
+    public suspend fun setCampaign(campaign: String?) {
+        updateCustomAttribution(
+            AppActorAttribution(provider = "custom", campaignName = campaign, campaign = campaign),
+            clearFields = if (campaign == null) setOf(AppActorCustomAttributionField.Campaign) else emptySet(),
+        )
     }
 
-    public suspend fun setAdGroup(adGroup: String) {
-        updateCustomAttribution(AppActorAttribution(provider = "custom", adGroupName = adGroup, adGroup = adGroup))
+    public suspend fun setAdGroup(adGroup: String?) {
+        updateCustomAttribution(
+            AppActorAttribution(provider = "custom", adGroupName = adGroup, adGroup = adGroup),
+            clearFields = if (adGroup == null) setOf(AppActorCustomAttributionField.AdGroup) else emptySet(),
+        )
     }
 
-    public suspend fun setAd(ad: String) {
-        updateCustomAttribution(AppActorAttribution(provider = "custom", adName = ad, ad = ad))
+    public suspend fun setAd(ad: String?) {
+        updateCustomAttribution(
+            AppActorAttribution(provider = "custom", adName = ad, ad = ad),
+            clearFields = if (ad == null) setOf(AppActorCustomAttributionField.Ad) else emptySet(),
+        )
     }
 
-    public suspend fun setKeyword(keyword: String) {
-        updateCustomAttribution(AppActorAttribution(provider = "custom", keyword = keyword))
+    public suspend fun setKeyword(keyword: String?) {
+        updateCustomAttribution(
+            AppActorAttribution(provider = "custom", keyword = keyword),
+            clearFields = if (keyword == null) setOf(AppActorCustomAttributionField.Keyword) else emptySet(),
+        )
     }
 
-    public suspend fun setCreative(creative: String) {
-        updateCustomAttribution(AppActorAttribution(provider = "custom", creativeName = creative, creative = creative))
+    public suspend fun setCreative(creative: String?) {
+        updateCustomAttribution(
+            AppActorAttribution(provider = "custom", creativeName = creative, creative = creative),
+            clearFields = if (creative == null) setOf(AppActorCustomAttributionField.Creative) else emptySet(),
+        )
     }
 
-    private suspend fun updateCustomAttribution(attribution: AppActorAttribution) {
+    private suspend fun updateCustomAttribution(
+        attribution: AppActorAttribution,
+        clearFields: Set<AppActorCustomAttributionField> = emptySet(),
+    ) {
         executeGuardedRead(resolveAppUserId = true) { snapshot ->
             snapshot.runtime.attributesManager.updateCustomAttribution(
                 appUserId = snapshot.appUserId,
                 patch = attribution,
+                clearFields = clearFields,
             )
         }
     }

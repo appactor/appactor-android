@@ -196,10 +196,11 @@ internal class AppActorAttributesManager(
     suspend fun updateCustomAttribution(
         appUserId: String,
         patch: AppActorAttribution,
+        clearFields: Set<AppActorCustomAttributionField> = emptySet(),
     ) {
         val patchRequest = patch.toRequestDTO()
         enqueue(appUserId) { existing ->
-            val merged = mergeCustomAttribution(appUserId, existing.attribution, patchRequest)
+            val merged = mergeCustomAttribution(appUserId, existing.attribution, patchRequest, clearFields)
             customAttributionSnapshots[appUserId] = merged
             queueStore.saveAttributionSnapshot(appUserId, merged)
             existing.copy(attribution = merged)
@@ -382,6 +383,7 @@ internal class AppActorAttributesManager(
         appUserId: String,
         queuedAttribution: AppActorAttributionRequestDTO?,
         patch: AppActorAttributionRequestDTO,
+        clearFields: Set<AppActorCustomAttributionField>,
     ): AppActorAttributionRequestDTO {
         val existing = customAttributionSnapshots[appUserId]
             ?: queueStore.loadAttributionSnapshot(appUserId)
@@ -389,23 +391,23 @@ internal class AppActorAttributesManager(
         return AppActorAttributionRequestDTO(
             provider = patch.provider,
             status = patch.status ?: existing?.status,
-            providerName = patch.providerName ?: existing?.providerName,
+            providerName = if (AppActorCustomAttributionField.MediaSource in clearFields) null else patch.providerName ?: existing?.providerName,
             campaignId = patch.campaignId ?: existing?.campaignId,
-            campaignName = patch.campaignName ?: existing?.campaignName,
+            campaignName = if (AppActorCustomAttributionField.Campaign in clearFields) null else patch.campaignName ?: existing?.campaignName,
             adGroupId = patch.adGroupId ?: existing?.adGroupId,
-            adGroupName = patch.adGroupName ?: existing?.adGroupName,
+            adGroupName = if (AppActorCustomAttributionField.AdGroup in clearFields) null else patch.adGroupName ?: existing?.adGroupName,
             adId = patch.adId ?: existing?.adId,
-            adName = patch.adName ?: existing?.adName,
+            adName = if (AppActorCustomAttributionField.Ad in clearFields) null else patch.adName ?: existing?.adName,
             creativeId = patch.creativeId ?: existing?.creativeId,
-            creativeName = patch.creativeName ?: existing?.creativeName,
+            creativeName = if (AppActorCustomAttributionField.Creative in clearFields) null else patch.creativeName ?: existing?.creativeName,
             keywordId = patch.keywordId ?: existing?.keywordId,
-            network = patch.network ?: existing?.network,
-            campaign = patch.campaign ?: existing?.campaign,
-            adGroup = patch.adGroup ?: existing?.adGroup,
-            ad = patch.ad ?: existing?.ad,
-            creative = patch.creative ?: existing?.creative,
-            keyword = patch.keyword ?: existing?.keyword,
-            source = patch.source ?: existing?.source,
+            network = if (AppActorCustomAttributionField.MediaSource in clearFields) null else patch.network ?: existing?.network,
+            campaign = if (AppActorCustomAttributionField.Campaign in clearFields) null else patch.campaign ?: existing?.campaign,
+            adGroup = if (AppActorCustomAttributionField.AdGroup in clearFields) null else patch.adGroup ?: existing?.adGroup,
+            ad = if (AppActorCustomAttributionField.Ad in clearFields) null else patch.ad ?: existing?.ad,
+            creative = if (AppActorCustomAttributionField.Creative in clearFields) null else patch.creative ?: existing?.creative,
+            keyword = if (AppActorCustomAttributionField.Keyword in clearFields) null else patch.keyword ?: existing?.keyword,
+            source = if (AppActorCustomAttributionField.MediaSource in clearFields) null else patch.source ?: existing?.source,
             medium = patch.medium ?: existing?.medium,
             clickId = patch.clickId ?: existing?.clickId,
             identifiers = (existing?.identifiers ?: emptyMap()) + patch.identifiers,
@@ -426,4 +428,13 @@ internal class AppActorAttributesManager(
         const val MAX_PENDING_ATTRIBUTES = 100
         const val MAX_PENDING_INTEGRATION_IDENTIFIERS = 50
     }
+}
+
+internal enum class AppActorCustomAttributionField {
+    MediaSource,
+    Campaign,
+    AdGroup,
+    Ad,
+    Keyword,
+    Creative,
 }
