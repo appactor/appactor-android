@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.3.3
+
+- Added attribution helper null-clear support for campaign, creative, keyword, ad, ad group, and media source fields.
+- Rejected unsupported Android purchase quantities at the plugin bridge instead of silently ignoring them.
+- Kept install referrer retries available when no referrer is recorded and capped stale attribution snapshots with queued users.
+
 ## 2.3.2
 
 - Added customer attribute polish for RevenueCat-style migration helpers, nullable custom-attribute unsets, profile validation, and typed date payload parity.
