@@ -388,7 +388,7 @@ public object AppActorJava {
 
     @JvmStatic
     public fun setMediaSourceAsync(
-        mediaSource: String,
+        mediaSource: String?,
         onComplete: AppActorCompletionCallback? = null,
         onError: AppActorErrorCallback? = null,
     ): Unit = AppActor.launchAsync(
@@ -399,7 +399,7 @@ public object AppActorJava {
 
     @JvmStatic
     public fun setCampaignAsync(
-        campaign: String,
+        campaign: String?,
         onComplete: AppActorCompletionCallback? = null,
         onError: AppActorErrorCallback? = null,
     ): Unit = AppActor.launchAsync(
@@ -410,7 +410,7 @@ public object AppActorJava {
 
     @JvmStatic
     public fun setAdGroupAsync(
-        adGroup: String,
+        adGroup: String?,
         onComplete: AppActorCompletionCallback? = null,
         onError: AppActorErrorCallback? = null,
     ): Unit = AppActor.launchAsync(
@@ -421,7 +421,7 @@ public object AppActorJava {
 
     @JvmStatic
     public fun setAdAsync(
-        ad: String,
+        ad: String?,
         onComplete: AppActorCompletionCallback? = null,
         onError: AppActorErrorCallback? = null,
     ): Unit = AppActor.launchAsync(
@@ -432,7 +432,7 @@ public object AppActorJava {
 
     @JvmStatic
     public fun setKeywordAsync(
-        keyword: String,
+        keyword: String?,
         onComplete: AppActorCompletionCallback? = null,
         onError: AppActorErrorCallback? = null,
     ): Unit = AppActor.launchAsync(
@@ -443,7 +443,7 @@ public object AppActorJava {
 
     @JvmStatic
     public fun setCreativeAsync(
-        creative: String,
+        creative: String?,
         onComplete: AppActorCompletionCallback? = null,
         onError: AppActorErrorCallback? = null,
     ): Unit = AppActor.launchAsync(

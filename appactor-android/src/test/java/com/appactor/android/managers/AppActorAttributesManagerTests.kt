@@ -209,6 +209,37 @@ class AppActorAttributesManagerTests {
     }
 
     @Test
+    fun `custom attribution helper null clears the selected fields`() = runBlocking {
+        val backend = FakeAttributesBackendClient()
+        val manager = manager(backend, InMemoryAttributeQueueStore())
+
+        manager.updateCustomAttribution(
+            "user_a",
+            AppActorAttribution(
+                provider = "custom",
+                providerName = "facebook",
+                network = "facebook",
+                source = "facebook",
+                campaignName = "spring_sale",
+                campaign = "spring_sale",
+            ),
+        )
+        manager.updateCustomAttribution(
+            appUserId = "user_a",
+            patch = AppActorAttribution(provider = "custom"),
+            clearFields = setOf(AppActorCustomAttributionField.MediaSource),
+        )
+
+        val request = backend.attributionRequests.last().second
+        assertEquals("custom", request.provider)
+        assertNull(request.providerName)
+        assertNull(request.network)
+        assertNull(request.source)
+        assertEquals("spring_sale", request.campaignName)
+        assertEquals("spring_sale", request.campaign)
+    }
+
+    @Test
     fun `direct attribution update refreshes custom helper snapshot`() = runBlocking {
         val backend = FakeAttributesBackendClient()
         val manager = manager(backend, InMemoryAttributeQueueStore())

@@ -53,7 +53,7 @@ internal class AppActorSharedPrefsAttributeQueueStore(
             } else {
                 putString(pendingKey, AppActorBackendJson.instance.encodeToString(mutation))
             }
-            trimToMaxUsers(this, keepKey = pendingKey, isSavingMutation = isSavingMutation)
+            trimToMaxUsers(this, keepAppUserId = appUserId, willHaveRecord = isSavingMutation)
         }.apply()
     }
 
@@ -78,6 +78,7 @@ internal class AppActorSharedPrefsAttributeQueueStore(
             } else {
                 putString(snapshotKey(appUserId), AppActorBackendJson.instance.encodeToString(attribution))
             }
+            trimToMaxUsers(this, keepAppUserId = appUserId, willHaveRecord = attribution != null)
         }.apply()
     }
 
@@ -91,17 +92,35 @@ internal class AppActorSharedPrefsAttributeQueueStore(
 
     private fun trimToMaxUsers(
         editor: SharedPreferences.Editor,
-        keepKey: String,
-        isSavingMutation: Boolean,
+        keepAppUserId: String,
+        willHaveRecord: Boolean,
     ) {
-        val keys = preferences.all.keys
-            .filter { it.startsWith(KEY_PREFIX) }
-            .filterNot { it == keepKey }
-            .sorted()
-        val projectedSize = keys.size + if (isSavingMutation) 1 else 0
-        val overflow = projectedSize - MAX_USERS
+        val userIds = preferences.all.keys
+            .mapNotNull(::appUserIdForStoredKey)
+            .toMutableSet()
+        if (willHaveRecord) {
+            userIds.add(keepAppUserId)
+        } else {
+            userIds.remove(keepAppUserId)
+        }
+        val overflow = userIds.size - MAX_USERS
         if (overflow <= 0) return
-        keys.take(overflow).forEach(editor::remove)
+        userIds
+            .filterNot { it == keepAppUserId }
+            .sorted()
+            .take(overflow)
+            .forEach { appUserId ->
+                editor.remove(key(appUserId))
+                editor.remove(snapshotKey(appUserId))
+            }
+    }
+
+    private fun appUserIdForStoredKey(key: String): String? {
+        return when {
+            key.startsWith(KEY_PREFIX) -> key.removePrefix(KEY_PREFIX)
+            key.startsWith(SNAPSHOT_PREFIX) -> key.removePrefix(SNAPSHOT_PREFIX)
+            else -> null
+        }
     }
 
     private companion object {

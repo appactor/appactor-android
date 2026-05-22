@@ -13,9 +13,17 @@ internal class PurchasePackageRequest private constructor(
     private val offeringId: String?,
     private val oldPurchaseToken: String?,
     private val replacementMode: String?,
+    private val quantity: Int?,
 ) : PluginRequest {
 
     override suspend fun execute(): PluginResult {
+        if (quantity != null && quantity < 1) {
+            return PluginResult.Error(PluginError(PluginError.SDK_VALIDATION, "Purchase quantity must be at least 1."))
+        }
+        if (quantity != null && quantity != 1) {
+            return PluginResult.Error(PluginError(PluginError.SDK_VALIDATION, "Android purchase quantity greater than 1 is not supported."))
+        }
+
         val activity = AppActorPlugin.activityRef?.get()
             ?: return PluginResult.Error(PluginError(PluginError.MISSING_ACTIVITY, "Activity not set."))
 
@@ -46,7 +54,7 @@ internal class PurchasePackageRequest private constructor(
         override val method: String = "purchase_package"
         override fun create(json: String): PluginRequest {
             val p = PluginCoder.json.decodeFromString(Params.serializer(), json)
-            return PurchasePackageRequest(p.packageId, p.offeringId, p.oldPurchaseToken, p.replacementMode)
+            return PurchasePackageRequest(p.packageId, p.offeringId, p.oldPurchaseToken, p.replacementMode, p.quantity)
         }
 
         private fun parseReplacementMode(value: String?): AppActorSubscriptionReplacementMode? {
@@ -66,6 +74,7 @@ internal class PurchasePackageRequest private constructor(
             @SerialName("offering_id") val offeringId: String? = null,
             @SerialName("old_purchase_token") val oldPurchaseToken: String? = null,
             @SerialName("replacement_mode") val replacementMode: String? = null,
+            @SerialName("quantity") val quantity: Int? = null,
         )
     }
 }

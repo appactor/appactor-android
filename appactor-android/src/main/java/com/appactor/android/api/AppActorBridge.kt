@@ -543,7 +543,7 @@ public object AppActorBridge {
     @JvmStatic
     @JvmOverloads
     public fun setMediaSource(
-        mediaSource: String,
+        mediaSource: String?,
         onComplete: AppActorCompletionCallback? = null,
         onError: AppActorBridgeErrorCallback? = null,
     ): Unit = AppActor.launchAsync(
@@ -555,7 +555,7 @@ public object AppActorBridge {
     @JvmStatic
     @JvmOverloads
     public fun setCampaign(
-        campaign: String,
+        campaign: String?,
         onComplete: AppActorCompletionCallback? = null,
         onError: AppActorBridgeErrorCallback? = null,
     ): Unit = AppActor.launchAsync(
@@ -567,7 +567,7 @@ public object AppActorBridge {
     @JvmStatic
     @JvmOverloads
     public fun setAdGroup(
-        adGroup: String,
+        adGroup: String?,
         onComplete: AppActorCompletionCallback? = null,
         onError: AppActorBridgeErrorCallback? = null,
     ): Unit = AppActor.launchAsync(
@@ -579,7 +579,7 @@ public object AppActorBridge {
     @JvmStatic
     @JvmOverloads
     public fun setAd(
-        ad: String,
+        ad: String?,
         onComplete: AppActorCompletionCallback? = null,
         onError: AppActorBridgeErrorCallback? = null,
     ): Unit = AppActor.launchAsync(
@@ -591,7 +591,7 @@ public object AppActorBridge {
     @JvmStatic
     @JvmOverloads
     public fun setKeyword(
-        keyword: String,
+        keyword: String?,
         onComplete: AppActorCompletionCallback? = null,
         onError: AppActorBridgeErrorCallback? = null,
     ): Unit = AppActor.launchAsync(
@@ -603,7 +603,7 @@ public object AppActorBridge {
     @JvmStatic
     @JvmOverloads
     public fun setCreative(
-        creative: String,
+        creative: String?,
         onComplete: AppActorCompletionCallback? = null,
         onError: AppActorBridgeErrorCallback? = null,
     ): Unit = AppActor.launchAsync(

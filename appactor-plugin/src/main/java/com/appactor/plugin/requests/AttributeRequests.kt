@@ -311,7 +311,7 @@ internal class UpdateAttributionRequest private constructor(
 }
 
 @Serializable
-private data class AttributionHelperParams(val value: String)
+private data class AttributionHelperParams(val value: String?)
 
 private object ReservedAttributeHelperParsing {
     fun value(
@@ -337,7 +337,7 @@ private object ReservedAttributeHelperParsing {
 }
 
 internal class SetMediaSourceRequest private constructor(
-    private val value: String,
+    private val value: String?,
 ) : PluginRequest {
 
     override suspend fun execute(): PluginResult {
@@ -355,7 +355,7 @@ internal class SetMediaSourceRequest private constructor(
 }
 
 internal class SetCampaignRequest private constructor(
-    private val value: String,
+    private val value: String?,
 ) : PluginRequest {
 
     override suspend fun execute(): PluginResult {
@@ -373,7 +373,7 @@ internal class SetCampaignRequest private constructor(
 }
 
 internal class SetAdGroupRequest private constructor(
-    private val value: String,
+    private val value: String?,
 ) : PluginRequest {
 
     override suspend fun execute(): PluginResult {
@@ -391,7 +391,7 @@ internal class SetAdGroupRequest private constructor(
 }
 
 internal class SetAdRequest private constructor(
-    private val value: String,
+    private val value: String?,
 ) : PluginRequest {
 
     override suspend fun execute(): PluginResult {
@@ -409,7 +409,7 @@ internal class SetAdRequest private constructor(
 }
 
 internal class SetKeywordRequest private constructor(
-    private val value: String,
+    private val value: String?,
 ) : PluginRequest {
 
     override suspend fun execute(): PluginResult {
@@ -427,7 +427,7 @@ internal class SetKeywordRequest private constructor(
 }
 
 internal class SetCreativeRequest private constructor(
-    private val value: String,
+    private val value: String?,
 ) : PluginRequest {
 
     override suspend fun execute(): PluginResult {
