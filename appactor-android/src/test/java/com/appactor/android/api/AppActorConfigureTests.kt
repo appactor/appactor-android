@@ -198,6 +198,49 @@ class AppActorConfigureTests {
     }
 
     @Test
+    fun `configure drops numeric locale country from automatic profile context`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val previousLocale = Locale.getDefault()
+        Locale.setDefault(Locale.forLanguageTag("es-419"))
+        val attributeBodies = CopyOnWriteArrayList<String>()
+        val requestPaths = CopyOnWriteArrayList<String>()
+        try {
+            TestBackendServer { request ->
+                requestPaths += request.path.orEmpty()
+                if (request.path?.contains("/v1/payment/users/user_numeric_locale/attributes") == true) {
+                    attributeBodies += request.body.readUtf8()
+                    MockResponse()
+                        .setResponseCode(200)
+                        .addHeader("Content-Type", "application/json")
+                        .setBody("""{"requestId":"req_attributes"}""")
+                } else {
+                    MockResponse()
+                        .setResponseCode(401)
+                        .addHeader("Content-Type", "application/json")
+                        .setBody("""{"error":{"code":"AUTH_ERROR","message":"Invalid API key"}}""")
+                }
+            }.use { backend ->
+                AppActor.configure(
+                    AppActorConfiguration(
+                        context = context,
+                        apiKey = "pk_test_numeric_locale",
+                        appUserId = "user_numeric_locale",
+                        baseUrl = backend.baseUrl,
+                        options = testOptionsForLocalBackend(),
+                    )
+                )
+            }
+        } finally {
+            Locale.setDefault(previousLocale)
+        }
+
+        assertEquals("Expected one automatic profile context request. Requests: $requestPaths", 1, attributeBodies.size)
+        val body = attributeBodies.single()
+        assertTrue(body.contains("\"\$locale\":\"es-419\""))
+        assertFalse(body.contains("\"\$localeCountry\""))
+    }
+
+    @Test
     fun `app actor options expose wrapper safe startup knobs while preserving defaults`() {
         val defaults = AppActorOptions().toLegacyOptions()
         assertNull(defaults.platformInfo)

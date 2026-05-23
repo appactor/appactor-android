@@ -163,33 +163,49 @@ internal class AppActorAttributesManager(
 
     private fun buildAutomaticProfileContextAttributes(): Map<String, AppActorAttributeValue> {
         val attributes = buildMap<String, AppActorAttributeValue> {
-            put(AppActorAttributeReservedKeys.bundleId, AppActorAttributeValue.string(packageName))
-            put(AppActorAttributeReservedKeys.locale, AppActorAttributeValue.string(Locale.getDefault().toLanguageTag()))
-            put(AppActorAttributeReservedKeys.timezone, AppActorAttributeValue.string(TimeZone.getDefault().id))
-            put(AppActorAttributeReservedKeys.platform, AppActorAttributeValue.string("android"))
+            putProfileString(AppActorAttributeReservedKeys.bundleId, packageName, MAX_BUNDLE_ID_LENGTH)
+            putProfileString(
+                AppActorAttributeReservedKeys.locale,
+                Locale.getDefault().toLanguageTag(),
+                MAX_LOCALE_LENGTH,
+            )
+            putProfileString(AppActorAttributeReservedKeys.timezone, TimeZone.getDefault().id, MAX_TIMEZONE_LENGTH)
+            putProfileString(AppActorAttributeReservedKeys.platform, "android", MAX_PLATFORM_LENGTH)
             platformInfoProvider()?.let { platformInfo ->
-                platformInfo.flavor.trim().takeIf { it.isNotEmpty() }?.let {
-                    put(AppActorAttributeReservedKeys.platformFlavor, AppActorAttributeValue.string(it))
-                }
-                platformInfo.version?.trim()?.takeIf { it.isNotEmpty() }?.let {
-                    put(AppActorAttributeReservedKeys.platformVersion, AppActorAttributeValue.string(it))
-                }
+                putProfileString(
+                    AppActorAttributeReservedKeys.platformFlavor,
+                    platformInfo.flavor,
+                    MAX_PLATFORM_INFO_LENGTH,
+                )
+                putProfileString(
+                    AppActorAttributeReservedKeys.platformVersion,
+                    platformInfo.version,
+                    MAX_PLATFORM_INFO_LENGTH,
+                )
             }
-            Build.MODEL?.takeIf { it.isNotBlank() }?.let {
-                put(AppActorAttributeReservedKeys.deviceModel, AppActorAttributeValue.string(it))
-            }
-            Build.VERSION.RELEASE?.takeIf { it.isNotBlank() }?.let {
-                put(AppActorAttributeReservedKeys.osVersion, AppActorAttributeValue.string(it))
-            }
-            put(AppActorAttributeReservedKeys.sdkVersion, AppActorAttributeValue.string(AppActorSDK.version))
-            appVersionProvider()?.takeIf { it.isNotBlank() }?.let {
-                put(AppActorAttributeReservedKeys.appVersion, AppActorAttributeValue.string(it))
-            }
-            countryProvider()?.takeIf { it.isNotBlank() }?.let {
+            putProfileString(AppActorAttributeReservedKeys.deviceModel, Build.MODEL, MAX_DEVICE_MODEL_LENGTH)
+            putProfileString(AppActorAttributeReservedKeys.osVersion, Build.VERSION.RELEASE, MAX_VERSION_LENGTH)
+            putProfileString(AppActorAttributeReservedKeys.sdkVersion, AppActorSDK.version, MAX_VERSION_LENGTH)
+            putProfileString(AppActorAttributeReservedKeys.appVersion, appVersionProvider(), MAX_VERSION_LENGTH)
+            normalizeAlpha2Country(countryProvider())?.let {
                 put(AppActorAttributeReservedKeys.localeCountry, AppActorAttributeValue.string(it))
             }
         }
         return attributes
+    }
+
+    private fun MutableMap<String, AppActorAttributeValue>.putProfileString(
+        key: String,
+        raw: String?,
+        maxLength: Int,
+    ) {
+        val normalized = raw?.trim()?.takeIf { it.isNotEmpty() && it.length <= maxLength } ?: return
+        put(key, AppActorAttributeValue.string(normalized))
+    }
+
+    private fun normalizeAlpha2Country(raw: String?): String? {
+        val normalized = raw?.trim()?.uppercase(Locale.US).orEmpty()
+        return normalized.takeIf { ALPHA_2_COUNTRY.matches(it) }
     }
 
     suspend fun updateAttribution(
@@ -439,6 +455,14 @@ internal class AppActorAttributesManager(
     private companion object {
         const val MAX_PENDING_ATTRIBUTES = 100
         const val MAX_PENDING_INTEGRATION_IDENTIFIERS = 50
+        private const val MAX_PLATFORM_LENGTH = 24
+        private const val MAX_PLATFORM_INFO_LENGTH = 50
+        private const val MAX_VERSION_LENGTH = 64
+        private const val MAX_DEVICE_MODEL_LENGTH = 120
+        private const val MAX_BUNDLE_ID_LENGTH = 255
+        private const val MAX_LOCALE_LENGTH = 32
+        private const val MAX_TIMEZONE_LENGTH = 80
+        private val ALPHA_2_COUNTRY = Regex("^[A-Z]{2}$")
     }
 }
 
