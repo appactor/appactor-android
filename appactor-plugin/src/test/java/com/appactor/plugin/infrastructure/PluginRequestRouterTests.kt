@@ -6,6 +6,7 @@ import com.appactor.android.api.AppActor
 import com.appactor.android.models.AppActorError
 import com.appactor.android.models.AppActorAttributeValue
 import com.appactor.android.models.AppActorAttribution
+import com.appactor.android.models.AppActorCustomerInfo
 import com.appactor.android.models.AppActorLogLevel
 import com.appactor.android.models.AppActorOffering
 import com.appactor.android.models.AppActorOfferings
@@ -18,6 +19,7 @@ import com.appactor.android.models.AppActorProductType
 import com.appactor.android.models.AppActorPurchaseResult
 import com.appactor.android.models.AppActorStore
 import com.appactor.plugin.AppActorPlugin
+import com.appactor.plugin.encoding.CustomerInfoSurrogate
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -60,6 +62,27 @@ class PluginRequestRouterTests {
 
         assertEquals(PluginError.SDK_NOT_CONFIGURED, (quietResult as PluginResult.Error).error.code)
         assertEquals(PluginError.SDK_NOT_CONFIGURED, (drainResult as PluginResult.Error).error.code)
+    }
+
+    @Test
+    fun `sync purchases wire method uses quiet native sync`() = runBlocking {
+        mockkObject(AppActor)
+        try {
+            coEvery { AppActor.syncPurchases() } returns AppActorCustomerInfo(appUserId = "user-sync")
+            coEvery { AppActor.drainReceiptQueueAndRefreshCustomer() } returns AppActorCustomerInfo(appUserId = "user-drain")
+
+            val result = PluginRequestRouter.route("sync_purchases", "{}")
+
+            val payload = PluginCoder.json.decodeFromString(
+                CustomerInfoSurrogate.serializer(),
+                (result as PluginResult.Success).payload,
+            )
+            assertEquals("user-sync", payload.appUserId)
+            coVerify(exactly = 1) { AppActor.syncPurchases() }
+            coVerify(exactly = 0) { AppActor.drainReceiptQueueAndRefreshCustomer() }
+        } finally {
+            unmockkObject(AppActor)
+        }
     }
 
     @Test
