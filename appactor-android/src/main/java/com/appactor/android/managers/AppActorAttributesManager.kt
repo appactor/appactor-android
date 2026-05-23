@@ -144,7 +144,24 @@ internal class AppActorAttributesManager(
         flushPending(appUserId)
     }
 
+    suspend fun collectAutomaticProfileContext(appUserId: String) {
+        setAttributes(
+            appUserId = appUserId,
+            attributes = buildAutomaticProfileContextAttributes(),
+            allowReservedKeys = true,
+        )
+    }
+
     suspend fun collectDeviceIdentifiers(appUserId: String) {
+        collectAutomaticProfileContext(appUserId)
+        setIntegrationIdentifier(
+            appUserId = appUserId,
+            type = "appactor_install_id",
+            value = identityStore.installId,
+        )
+    }
+
+    private fun buildAutomaticProfileContextAttributes(): Map<String, AppActorAttributeValue> {
         val attributes = buildMap<String, AppActorAttributeValue> {
             put(AppActorAttributeReservedKeys.bundleId, AppActorAttributeValue.string(packageName))
             put(AppActorAttributeReservedKeys.locale, AppActorAttributeValue.string(Locale.getDefault().toLanguageTag()))
@@ -169,15 +186,10 @@ internal class AppActorAttributesManager(
                 put(AppActorAttributeReservedKeys.appVersion, AppActorAttributeValue.string(it))
             }
             countryProvider()?.takeIf { it.isNotBlank() }?.let {
-                put(AppActorAttributeReservedKeys.storefrontCountry, AppActorAttributeValue.string(it))
+                put(AppActorAttributeReservedKeys.localeCountry, AppActorAttributeValue.string(it))
             }
         }
-        setAttributes(appUserId = appUserId, attributes = attributes, allowReservedKeys = true)
-        setIntegrationIdentifier(
-            appUserId = appUserId,
-            type = "appactor_install_id",
-            value = identityStore.installId,
-        )
+        return attributes
     }
 
     suspend fun updateAttribution(

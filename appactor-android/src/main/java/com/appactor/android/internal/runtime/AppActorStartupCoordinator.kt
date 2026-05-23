@@ -126,6 +126,7 @@ internal class AppActorStartupCoordinator(
         runtimeState.scope.launch {
             runStartupOfferingsFetch(runtimeState)
         }
+        runStartupProfileContextSync(runtimeState)
         runStartupPurchaseSync(runtimeState)
         runStartupDeadLetterRetry(runtimeState)
         runStartupCustomerRefresh(runtimeState)
@@ -167,6 +168,19 @@ internal class AppActorStartupCoordinator(
         timedPhase(runtimeState, "offerings", AppActorDebugCategory.Network) {
             val source = host.prefetchOfferings(runtimeState)
             host.persistOfferingsSource(runtimeState.sessionId, source)
+        }
+    }
+
+    private suspend fun runStartupProfileContextSync(runtimeState: AppActorRuntimeState) {
+        timedPhase(runtimeState, "profile_context", AppActorDebugCategory.Network) {
+            val snapshot = host.captureOperationSnapshot(
+                resolveAppUserId = true,
+                awaitBootstrapCompletion = false,
+            )
+            if (snapshot.runtime.sessionId != runtimeState.sessionId) {
+                return@timedPhase
+            }
+            snapshot.runtime.attributesManager.collectAutomaticProfileContext(snapshot.appUserId)
         }
     }
 
