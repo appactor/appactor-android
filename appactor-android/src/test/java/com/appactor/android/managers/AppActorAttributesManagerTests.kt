@@ -144,6 +144,22 @@ class AppActorAttributesManagerTests {
     }
 
     @Test
+    fun `collectAutomaticProfileContext drops non alpha2 locale country`() = runBlocking {
+        val backend = FakeAttributesBackendClient()
+        val manager = manager(
+            backend,
+            InMemoryAttributeQueueStore(),
+            countryProvider = { "419" },
+        )
+
+        manager.collectAutomaticProfileContext("user_a")
+
+        val attributes = backend.patchRequests.single().second.attributes
+        assertEquals(JsonPrimitive("android"), attributes["\$platform"])
+        assertEquals(null, attributes["\$localeCountry"])
+    }
+
+    @Test
     fun `collectDeviceIdentifiers keeps manual integration id path`() = runBlocking {
         val backend = FakeAttributesBackendClient()
         val manager = manager(backend, InMemoryAttributeQueueStore())
@@ -400,6 +416,7 @@ class AppActorAttributesManagerTests {
     private fun manager(
         backend: FakeAttributesBackendClient,
         store: InMemoryAttributeQueueStore,
+        countryProvider: () -> String? = { "TR" },
     ): AppActorAttributesManager {
         val identityStore = mockk<AppActorIdentityStore>(relaxed = true)
         every { identityStore.installId } returns "appactor-install-test"
@@ -410,7 +427,7 @@ class AppActorAttributesManagerTests {
             packageName = "com.appactor.test",
             appVersionProvider = { "1.2.3" },
             platformInfoProvider = { AppActorPlatformInfo("flutter", "0.0.8") },
-            countryProvider = { "TR" },
+            countryProvider = countryProvider,
         )
     }
 
