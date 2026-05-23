@@ -122,11 +122,11 @@ class AppActorAttributesManagerTests {
     }
 
     @Test
-    fun `collectDeviceIdentifiers writes backend canonical system keys and integration id`() = runBlocking {
+    fun `collectAutomaticProfileContext writes backend canonical system keys without identifiers`() = runBlocking {
         val backend = FakeAttributesBackendClient()
         val manager = manager(backend, InMemoryAttributeQueueStore())
 
-        manager.collectDeviceIdentifiers("user_a")
+        manager.collectAutomaticProfileContext("user_a")
 
         val attributes = backend.patchRequests.single().second.attributes
         assertEquals(JsonPrimitive("com.appactor.test"), attributes["\$bundleId"])
@@ -136,9 +136,23 @@ class AppActorAttributesManagerTests {
         assertEquals(JsonPrimitive("0.0.8"), attributes["\$platformVersion"])
         assertNotNull(attributes["\$timezone"])
         assertEquals(JsonPrimitive("1.2.3"), attributes["\$appVersion"])
-        assertEquals(JsonPrimitive("TR"), attributes["\$storefrontCountry"])
+        assertEquals(JsonPrimitive("TR"), attributes["\$localeCountry"])
+        assertEquals(null, attributes["\$storefrontCountry"])
         assertEquals(null, attributes["\$appactorInstallId"])
         assertEquals(null, attributes["\$androidPackageName"])
+        assertEquals(0, backend.integrationRequests.size)
+    }
+
+    @Test
+    fun `collectDeviceIdentifiers keeps manual integration id path`() = runBlocking {
+        val backend = FakeAttributesBackendClient()
+        val manager = manager(backend, InMemoryAttributeQueueStore())
+
+        manager.collectDeviceIdentifiers("user_a")
+
+        val attributes = backend.patchRequests.single().second.attributes
+        assertEquals(JsonPrimitive("android"), attributes["\$platform"])
+        assertEquals(JsonPrimitive("TR"), attributes["\$localeCountry"])
         assertEquals("appactor_install_id", backend.integrationRequests.single().second.type)
     }
 

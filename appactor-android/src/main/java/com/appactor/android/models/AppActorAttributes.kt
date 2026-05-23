@@ -279,7 +279,7 @@ internal object AppActorAttributesValidation {
             "Custom attribute keys must not start with 'integration.'. Use setIntegrationIdentifier() instead."
         }
         require(!legacyProfileCurrentAliases.contains(normalized)) {
-            "Custom attribute key '$normalized' is reserved for profile context. Use collectDeviceIdentifiers() or the reserved '$' helper key instead."
+            "Custom attribute key '$normalized' is reserved for AppActor's automatic profile context. Use the reserved '$' helper key instead."
         }
         return normalized
     }

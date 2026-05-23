@@ -740,8 +740,8 @@ public object AppActor {
     }
 
     /**
-     * Collects optional system profile context and routes it through the
-     * server-managed profile-current path, not the developer custom attribute list.
+     * Collects optional device identifiers. Privacy-safe profile context is sent
+     * automatically during configure.
      */
     public suspend fun collectDeviceIdentifiers() {
         executeGuardedRead(resolveAppUserId = true) { snapshot ->

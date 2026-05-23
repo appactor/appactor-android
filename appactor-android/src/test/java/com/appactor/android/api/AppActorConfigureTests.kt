@@ -16,6 +16,7 @@ import com.appactor.android.storage.AppActorAtomicJsonPostedLedgerStore
 import com.appactor.android.storage.AppActorAtomicJsonReceiptQueueStore
 import com.appactor.android.models.toLegacyOptions
 import kotlinx.coroutines.runBlocking
+import okhttp3.mockwebserver.MockResponse
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -26,6 +27,8 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import java.io.File
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.Locale
 
 @RunWith(RobolectricTestRunner::class)
 class AppActorConfigureTests {
@@ -137,6 +140,61 @@ class AppActorConfigureTests {
             assertTrue(AppActor.shared.isAnonymous)
             assertTrue(AppActor.shared.appUserId?.startsWith("appactor-anon-") == true)
         }
+    }
+
+    @Test
+    fun `configure automatically sends privacy safe profile context`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val previousLocale = Locale.getDefault()
+        Locale.setDefault(Locale.forLanguageTag("tr-TR"))
+        val attributeBodies = CopyOnWriteArrayList<String>()
+        val requestPaths = CopyOnWriteArrayList<String>()
+        try {
+            TestBackendServer { request ->
+                requestPaths += request.path.orEmpty()
+                if (request.path?.contains("/v1/payment/users/user_auto_context/attributes") == true) {
+                    attributeBodies += request.body.readUtf8()
+                    MockResponse()
+                        .setResponseCode(200)
+                        .addHeader("Content-Type", "application/json")
+                        .setBody("""{"requestId":"req_attributes"}""")
+                } else {
+                    MockResponse()
+                        .setResponseCode(401)
+                        .addHeader("Content-Type", "application/json")
+                        .setBody("""{"error":{"code":"AUTH_ERROR","message":"Invalid API key"}}""")
+                }
+            }.use { backend ->
+                AppActor.configure(
+                    AppActorConfiguration(
+                        context = context,
+                        apiKey = "pk_test_auto_context",
+                        appUserId = "user_auto_context",
+                        baseUrl = backend.baseUrl,
+                        options = AppActorConfiguration.Options(
+                            verifyResponseSignatures = false,
+                            requireResponseSignatures = false,
+                            platformInfo = AppActorPlatformInfo("flutter", "0.0.8"),
+                        ),
+                    )
+                )
+            }
+        } finally {
+            Locale.setDefault(previousLocale)
+        }
+
+        assertEquals("Expected one automatic profile context request. Requests: $requestPaths", 1, attributeBodies.size)
+        val body = attributeBodies.single()
+        assertTrue(body.contains("\"\$sdkVersion\""))
+        assertTrue(body.contains("\"\$platform\":\"android\""))
+        assertTrue(body.contains("\"\$platformFlavor\":\"flutter\""))
+        assertTrue(body.contains("\"\$locale\""))
+        assertTrue(body.contains("\"\$timezone\""))
+        assertTrue(body.contains("\"\$deviceModel\""))
+        assertTrue(body.contains("\"\$localeCountry\":\"TR\""))
+        assertFalse(body.contains("appactor_install_id"))
+        assertFalse(body.contains("\"\$idfv\""))
+        assertFalse(body.contains("\"\$idfa\""))
     }
 
     @Test
