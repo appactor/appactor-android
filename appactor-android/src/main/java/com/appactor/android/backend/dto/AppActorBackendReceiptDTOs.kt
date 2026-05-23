@@ -27,6 +27,7 @@ internal data class AppActorGoogleReceiptRequestDTO(
     val clientObservedAt: String? = null,
     val clientDeliverySource: String? = null,
     val clientPurchaseAttemptId: String? = null,
+    val placement: String? = null,
     val sdkOriginated: Boolean? = null,
     val sdkVersion: String? = null,
     val idempotencyKey: String,

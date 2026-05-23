@@ -13,6 +13,7 @@ internal class PurchasePackageRequest private constructor(
     private val offeringId: String?,
     private val oldPurchaseToken: String?,
     private val replacementMode: String?,
+    private val placement: String?,
     private val quantity: Int?,
 ) : PluginRequest {
 
@@ -46,7 +47,7 @@ internal class PurchasePackageRequest private constructor(
             pkg
         }
 
-        val result = AppActor.purchase(activity, finalPkg)
+        val result = AppActor.purchase(activity, finalPkg, placement)
         return PluginResult.encoding(PurchaseResultSurrogate.serializer(), PurchaseResultSurrogate(result))
     }
 
@@ -54,7 +55,14 @@ internal class PurchasePackageRequest private constructor(
         override val method: String = "purchase_package"
         override fun create(json: String): PluginRequest {
             val p = PluginCoder.json.decodeFromString(Params.serializer(), json)
-            return PurchasePackageRequest(p.packageId, p.offeringId, p.oldPurchaseToken, p.replacementMode, p.quantity)
+            return PurchasePackageRequest(
+                p.packageId,
+                p.offeringId,
+                p.oldPurchaseToken,
+                p.replacementMode,
+                p.placement,
+                p.quantity,
+            )
         }
 
         private fun parseReplacementMode(value: String?): AppActorSubscriptionReplacementMode? {
@@ -74,6 +82,7 @@ internal class PurchasePackageRequest private constructor(
             @SerialName("offering_id") val offeringId: String? = null,
             @SerialName("old_purchase_token") val oldPurchaseToken: String? = null,
             @SerialName("replacement_mode") val replacementMode: String? = null,
+            @SerialName("placement") val placement: String? = null,
             @SerialName("quantity") val quantity: Int? = null,
         )
     }

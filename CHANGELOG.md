@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.3.4
+
+- Added optional purchase placement forwarding for explicit purchase receipts.
+- Omitted blank and overlong placements before receipt submission to match backend limits.
+- Preserved null placement for restore, sync, background update, and webhook-originated transactions.
+
 ## 2.3.3
 
 - Added attribution helper null-clear support for campaign, creative, keyword, ad, ad group, and media source fields.

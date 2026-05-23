@@ -108,6 +108,123 @@ class AppActorPaymentProcessorTests {
     }
 
     @Test
+    fun `purchase success posts normalized placement on immediate receipt`() = runBlocking {
+        val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
+        val dependencies = createDependencies(
+            receiptResponse = AppActorBackendHttpResponse(
+                body = receiptResponse,
+                statusCode = 200,
+                requestId = receiptResponse.requestId,
+                signatureVerified = true,
+            )
+        )
+
+        dependencies.processor.purchase(Activity(), monthlyPackage(), placement = " paywall_hero ")
+
+        assertEquals("paywall_hero", dependencies.postedReceipts.single().placement)
+    }
+
+    @Test
+    fun `purchase placement at max length is posted on receipt`() = runBlocking {
+        val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
+        val dependencies = createDependencies(
+            receiptResponse = AppActorBackendHttpResponse(
+                body = receiptResponse,
+                statusCode = 200,
+                requestId = receiptResponse.requestId,
+                signatureVerified = true,
+            )
+        )
+        val placement = "x".repeat(255)
+
+        dependencies.processor.purchase(Activity(), monthlyPackage(), placement = placement)
+
+        assertEquals(placement, dependencies.postedReceipts.single().placement)
+    }
+
+    @Test
+    fun `overlong purchase placement is omitted from receipt`() = runBlocking {
+        val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
+        val dependencies = createDependencies(
+            receiptResponse = AppActorBackendHttpResponse(
+                body = receiptResponse,
+                statusCode = 200,
+                requestId = receiptResponse.requestId,
+                signatureVerified = true,
+            )
+        )
+
+        dependencies.processor.purchase(Activity(), monthlyPackage(), placement = "x".repeat(256))
+
+        assertNull(dependencies.postedReceipts.single().placement)
+    }
+
+    @Test
+    fun `blank purchase placement is omitted from receipt`() = runBlocking {
+        val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
+        val dependencies = createDependencies(
+            receiptResponse = AppActorBackendHttpResponse(
+                body = receiptResponse,
+                statusCode = 200,
+                requestId = receiptResponse.requestId,
+                signatureVerified = true,
+            )
+        )
+
+        dependencies.processor.purchase(Activity(), monthlyPackage(), placement = "   ")
+
+        assertNull(dependencies.postedReceipts.single().placement)
+    }
+
+    @Test
+    fun `pending purchase persists normalized placement until completion update`() = runBlocking {
+        val pendingPrefs = context.getSharedPreferences(
+            "com.appactor.android.pending_purchases",
+            Context.MODE_PRIVATE,
+        )
+        pendingPrefs.edit().clear().commit()
+        try {
+            val now = 1_710_000_000_000L
+            val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
+            val dependencies = createDependencies(
+                receiptResponse = AppActorBackendHttpResponse(
+                    body = receiptResponse,
+                    statusCode = 200,
+                    requestId = receiptResponse.requestId,
+                    signatureVerified = true,
+                ),
+                dateProviderMillis = { now },
+            )
+            coEvery { dependencies.storeAdapter.launchPurchase(any(), any()) } coAnswers {
+                val request: AppActorStoreProductRequest = secondArg()
+                AppActorStorePurchaseLaunchResult.Pending(
+                    purchases = listOf(
+                        AppActorStorePurchase(
+                            productId = request.productId,
+                            productType = request.productType,
+                            purchaseToken = "token_pending_launch",
+                            purchaseTimeMillis = now,
+                            purchaseState = com.appactor.android.billing.AppActorStorePurchaseState.Pending,
+                            basePlanId = request.basePlanId,
+                            offerId = request.offerId,
+                            isAcknowledged = false,
+                            isAutoRenewing = true,
+                        )
+                    )
+                )
+            }
+
+            val result = dependencies.processor.purchase(Activity(), monthlyPackage(), placement = " paywall_pending_launch ")
+
+            assertEquals(AppActorPurchaseResult.Pending, result)
+            val entry = PendingPurchaseEntry.parse(requireNotNull(pendingPrefs.getString("token_pending_launch", null)))
+            assertEquals("paywall_pending_launch", entry?.placement)
+        } finally {
+            pendingPrefs.edit().clear().commit()
+        }
+    }
+
+    @Test
     fun `purchase success refreshes observed time at completion`() = runBlocking {
         var now = 1_710_000_000_000L
         val completedAt = 1_710_000_120_000L
@@ -173,6 +290,39 @@ class AppActorPaymentProcessorTests {
         dependencies.processor.purchase(Activity(), monthlyPackage())
 
         assertEquals("TR", dependencies.postedReceipts.single().countryCode)
+    }
+
+    @Test
+    fun `background purchase update posts null placement`() = runBlocking {
+        val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
+        val dependencies = createDependencies(
+            receiptResponse = AppActorBackendHttpResponse(
+                body = receiptResponse,
+                statusCode = 200,
+                requestId = receiptResponse.requestId,
+                signatureVerified = true,
+            )
+        )
+        val purchase = AppActorStorePurchase(
+            productId = "com.appactor.pro.monthly",
+            productType = AppActorProductType.Subscription,
+            purchaseToken = "token_background_update",
+            orderId = "GPA.background.update",
+            purchaseTimeMillis = 1_710_000_000_000,
+            purchaseState = com.appactor.android.billing.AppActorStorePurchaseState.Purchased,
+            basePlanId = "monthly001",
+            offerId = "intro7d",
+            isAcknowledged = false,
+            isAutoRenewing = true,
+            rawPurchaseData = "{\"purchaseToken\":\"token_background_update\"}",
+            purchaseSignature = "signature_background_update",
+        )
+
+        dependencies.processor.processPurchaseUpdates(listOf(purchase))
+
+        assertEquals("queue", dependencies.postedReceipts.single().sourceIntent)
+        assertEquals("transaction_updates", dependencies.postedReceipts.single().clientDeliverySource)
+        assertNull(dependencies.postedReceipts.single().placement)
     }
 
     @Test
@@ -471,6 +621,7 @@ class AppActorPaymentProcessorTests {
         assertNull(dependencies.postedReceipts.single().clientDeliverySource)
         assertNull(dependencies.postedReceipts.single().clientPurchaseAttemptStartedAt)
         assertNull(dependencies.postedReceipts.single().clientPurchaseAttemptId)
+        assertNull(dependencies.postedReceipts.single().placement)
     }
 
     @Test
@@ -486,7 +637,7 @@ class AppActorPaymentProcessorTests {
             .clear()
             .putString(
                 "token_pending_modern_123",
-                "com.appactor.pro.monthly|$pendingRecordedAt|$attemptStartedAt|attempt-google-pending",
+                "com.appactor.pro.monthly|$pendingRecordedAt|$attemptStartedAt|attempt-google-pending||${PendingPurchaseEntry.encodePlacement("paywall_pending")}",
             )
             .commit()
 
@@ -524,6 +675,7 @@ class AppActorPaymentProcessorTests {
             assertEquals(AppActorBridgeReceiptEvent.millisToIso8601(attemptStartedAt), receipt.clientPurchaseAttemptStartedAt)
             assertEquals(AppActorBridgeReceiptEvent.millisToIso8601(completedAt), receipt.clientObservedAt)
             assertEquals("attempt-google-pending", receipt.clientPurchaseAttemptId)
+            assertEquals("paywall_pending", receipt.placement)
             assertFalse(pendingPrefs.contains("token_pending_modern_123"))
         } finally {
             pendingPrefs.edit().clear().commit()
@@ -1051,9 +1203,10 @@ class AppActorPaymentProcessorTests {
             ),
         )
 
-        dependencies.processor.purchase(Activity(), monthlyPackage())
+        dependencies.processor.purchase(Activity(), monthlyPackage(), placement = "paywall_retry")
         assertEquals("purchase should leave one queued receipt", 1, dependencies.queueStore.snapshot().size)
         val queued = dependencies.queueStore.snapshot().single()
+        assertEquals("paywall_retry", queued.placement)
         dependencies.queueStore.update(
             queued.copy(
                 nextRetryAtMillis = 0L,
@@ -1067,6 +1220,8 @@ class AppActorPaymentProcessorTests {
         assertEquals("receipt should be posted once during purchase and once during retry drain", 2, dependencies.postedReceipts.size)
         assertEquals("purchase_flow", dependencies.postedReceipts.first().clientDeliverySource)
         assertEquals("queue_retry", dependencies.postedReceipts.last().clientDeliverySource)
+        assertEquals("paywall_retry", dependencies.postedReceipts.first().placement)
+        assertEquals("paywall_retry", dependencies.postedReceipts.last().placement)
         assertEquals(
             dependencies.postedReceipts.first().clientPurchaseAttemptId,
             dependencies.postedReceipts.last().clientPurchaseAttemptId,
@@ -1195,6 +1350,7 @@ class AppActorPaymentProcessorTests {
             clientObservedAt = AppActorBridgeReceiptEvent.millisToIso8601(1_710_000_010_000L),
             clientDeliverySource = "purchase_flow",
             clientPurchaseAttemptId = "attempt-dead-letter-retry",
+            placement = "paywall_dead_letter",
             sdkOriginated = true,
             sdkVersion = "9.9.9",
             createdAtMillis = System.currentTimeMillis(),
@@ -1210,6 +1366,7 @@ class AppActorPaymentProcessorTests {
         assertEquals(1, dependencies.postedReceipts.size)
         assertEquals("queue_retry", dependencies.postedReceipts.single().clientDeliverySource)
         assertEquals("attempt-dead-letter-retry", dependencies.postedReceipts.single().clientPurchaseAttemptId)
+        assertEquals("paywall_dead_letter", dependencies.postedReceipts.single().placement)
         assertEquals(listOf("token_dead_123"), dependencies.acknowledgedTokens)
         assertTrue(dependencies.queueStore.snapshot().isEmpty())
     }
@@ -1253,6 +1410,7 @@ class AppActorPaymentProcessorTests {
         assertEquals("token_sync_123", dependencies.syncRequests.single().purchases.single().purchaseToken)
         assertEquals(4_990_000L, dependencies.syncRequests.single().purchases.single().priceAmountMicros)
         assertEquals("USD", dependencies.syncRequests.single().purchases.single().currency)
+        assertFalse(AppActorBackendJson.instance.encodeToString(dependencies.syncRequests.single()).contains("\"placement\""))
     }
 
     @Test
@@ -2010,6 +2168,7 @@ class AppActorPaymentProcessorTests {
                 retryCount = 3,
                 phase = com.appactor.android.storage.AppActorReceiptQueuePhase.DeadLettered,
                 lastError = "unknown_product_type: Unable to resolve Google Play one-time product type.",
+                placement = "coin_paywall",
                 rawPurchaseData = activePurchase.rawPurchaseData,
                 purchaseSignature = activePurchase.purchaseSignature,
             )
@@ -2031,6 +2190,7 @@ class AppActorPaymentProcessorTests {
         assertTrue(info?.hasActiveEntitlement("premium") == true)
         assertEquals(1, dependencies.postedReceipts.size)
         assertEquals("consumable", dependencies.postedReceipts.single().productType)
+        assertEquals("coin_paywall", dependencies.postedReceipts.single().placement)
         assertTrue(dependencies.queueStore.snapshot().isEmpty())
         assertTrue(
             dependencies.ledgerStore.isPosted(
@@ -2054,7 +2214,7 @@ class AppActorPaymentProcessorTests {
             .clear()
             .putString(
                 "token_unknown_pending_replay",
-                "com.appactor.coins.100|${attemptStartedAt + 30_000}|$attemptStartedAt|attempt-unknown-pending-replay",
+                "com.appactor.coins.100|${attemptStartedAt + 30_000}|$attemptStartedAt|attempt-unknown-pending-replay||${PendingPurchaseEntry.encodePlacement("coin_store")}",
             )
             .commit()
 
@@ -2114,6 +2274,7 @@ class AppActorPaymentProcessorTests {
             assertEquals("transaction_updates", receipt.clientDeliverySource)
             assertEquals(AppActorBridgeReceiptEvent.millisToIso8601(attemptStartedAt), receipt.clientPurchaseAttemptStartedAt)
             assertEquals("attempt-unknown-pending-replay", receipt.clientPurchaseAttemptId)
+            assertEquals("coin_store", receipt.placement)
         } finally {
             pendingPrefs.edit().clear().commit()
         }
@@ -2302,6 +2463,7 @@ class AppActorPaymentProcessorTests {
         assertEquals("token_restore_123", dependencies.restoreRequests.single().purchases.single().purchaseToken)
         assertEquals(4_990_000L, dependencies.restoreRequests.single().purchases.single().priceAmountMicros)
         assertEquals("USD", dependencies.restoreRequests.single().purchases.single().currency)
+        assertFalse(AppActorBackendJson.instance.encodeToString(dependencies.restoreRequests.single()).contains("\"placement\""))
         assertEquals(0, dependencies.postedReceipts.size)
         assertEquals(listOf("token_restore_123"), dependencies.acknowledgedTokens)
         assertTrue(dependencies.queueStore.snapshot().isEmpty())

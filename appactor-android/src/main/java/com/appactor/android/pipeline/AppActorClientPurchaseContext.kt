@@ -22,6 +22,7 @@ internal data class AppActorClientPurchaseContext(
     val clientObservedAtMillis: Long,
     val clientDeliverySource: AppActorClientDeliverySource,
     val clientPurchaseAttemptId: String? = null,
+    val placement: String? = null,
     val sdkOriginated: Boolean = true,
     val sdkVersion: String = AppActorSDK.version,
 ) {
@@ -55,16 +56,21 @@ internal data class AppActorClientPurchaseContext(
             clientPurchaseAttemptStartedAtMillis?.toString().orEmpty(),
             clientPurchaseAttemptId.orEmpty(),
             PendingPurchaseEntry.encodeAppUserId(appUserId),
+            PendingPurchaseEntry.encodePlacement(placement),
         ).joinToString("|")
     }
 
     companion object {
-        fun purchaseAttempt(startedAtMillis: Long): AppActorClientPurchaseContext {
+        fun purchaseAttempt(
+            startedAtMillis: Long,
+            placement: String? = null,
+        ): AppActorClientPurchaseContext {
             return AppActorClientPurchaseContext(
                 clientPurchaseAttemptStartedAtMillis = startedAtMillis,
                 clientObservedAtMillis = startedAtMillis,
                 clientDeliverySource = AppActorClientDeliverySource.PurchaseFlow,
                 clientPurchaseAttemptId = UUID.randomUUID().toString().lowercase(),
+                placement = placement.normalizePlacement(),
             )
         }
 
@@ -97,6 +103,7 @@ internal data class AppActorClientPurchaseContext(
                 clientObservedAtMillis = observedAtMillis,
                 clientDeliverySource = AppActorClientDeliverySource.TransactionUpdates,
                 clientPurchaseAttemptId = attemptId,
+                placement = entry.placement,
             )
         }
     }
@@ -108,9 +115,11 @@ internal data class PendingPurchaseEntry(
     val clientPurchaseAttemptStartedAtMillis: Long? = null,
     val clientPurchaseAttemptId: String? = null,
     val appUserId: String? = null,
+    val placement: String? = null,
 ) {
     companion object {
         private const val ENCODED_APP_USER_ID_PREFIX = "url:"
+        private const val ENCODED_PLACEMENT_PREFIX = "url:"
 
         fun parse(raw: String): PendingPurchaseEntry? {
             val parts = raw.split("|")
@@ -121,6 +130,7 @@ internal data class PendingPurchaseEntry(
                     clientPurchaseAttemptStartedAtMillis = parts[2].toLongOrNull(),
                     clientPurchaseAttemptId = parts[3].takeIf { it.isNotBlank() },
                     appUserId = parts.getOrNull(4)?.let(::decodeAppUserId)?.takeIf { it.isNotBlank() },
+                    placement = parts.getOrNull(5)?.let(::decodePlacement).normalizePlacement(),
                 )
                 parts.size == 2 -> PendingPurchaseEntry(
                     productId = parts[0].takeIf { it.isNotBlank() } ?: return null,
@@ -135,6 +145,11 @@ internal data class PendingPurchaseEntry(
             return ENCODED_APP_USER_ID_PREFIX + URLEncoder.encode(normalized, StandardCharsets.UTF_8.name())
         }
 
+        fun encodePlacement(placement: String?): String {
+            val normalized = placement.normalizePlacement() ?: return ""
+            return ENCODED_PLACEMENT_PREFIX + URLEncoder.encode(normalized, StandardCharsets.UTF_8.name())
+        }
+
         private fun decodeAppUserId(value: String): String {
             if (value.isBlank()) return ""
             if (!value.startsWith(ENCODED_APP_USER_ID_PREFIX)) return value
@@ -145,5 +160,23 @@ internal data class PendingPurchaseEntry(
                 )
             }.getOrDefault("")
         }
+
+        private fun decodePlacement(value: String): String {
+            if (value.isBlank()) return ""
+            if (!value.startsWith(ENCODED_PLACEMENT_PREFIX)) return value
+            return runCatching {
+                URLDecoder.decode(
+                    value.removePrefix(ENCODED_PLACEMENT_PREFIX),
+                    StandardCharsets.UTF_8.name(),
+                )
+            }.getOrDefault("")
+        }
     }
+}
+
+private const val MAX_PLACEMENT_LENGTH = 255
+
+internal fun String?.normalizePlacement(): String? {
+    val normalized = this?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    return normalized.takeIf { it.length <= MAX_PLACEMENT_LENGTH }
 }

@@ -190,6 +190,7 @@ internal class AppActorPaymentProcessor(
         activity: Activity,
         appActorPackage: AppActorPackage,
         appUserIdOverride: String? = null,
+        placement: String? = null,
     ): AppActorPurchaseResult {
         if (!purchaseMutex.tryLock()) {
             throw AppActorError.InvalidConfiguration("Only one purchase can be in-flight at a time.")
@@ -207,6 +208,7 @@ internal class AppActorPaymentProcessor(
                 activity = activity,
                 target = appActorPackage.toResolvedPurchaseTarget(appUserId),
                 appUserIdOverride = appUserId,
+                placement = placement,
             )
         } finally {
             purchaseMutex.unlock()
@@ -217,6 +219,7 @@ internal class AppActorPaymentProcessor(
         activity: Activity,
         params: com.appactor.android.models.AppActorPurchaseParams,
         appUserIdOverride: String? = null,
+        placement: String? = null,
     ): AppActorPurchaseResult {
         if (!purchaseMutex.tryLock()) {
             throw AppActorError.InvalidConfiguration("Only one purchase can be in-flight at a time.")
@@ -230,6 +233,7 @@ internal class AppActorPaymentProcessor(
                 activity = activity,
                 target = params.toResolvedPurchaseTarget(appUserId),
                 appUserIdOverride = appUserId,
+                placement = placement,
             )
         } finally {
             purchaseMutex.unlock()
@@ -351,6 +355,7 @@ internal class AppActorPaymentProcessor(
         activity: Activity,
         target: AppActorResolvedPurchaseTarget,
         appUserIdOverride: String? = null,
+        placement: String? = null,
     ): AppActorPurchaseResult {
         val appUserId = appUserIdOverride
             ?.takeIf { it.isNotBlank() }
@@ -362,7 +367,10 @@ internal class AppActorPaymentProcessor(
             target.request
         }
         val foregroundProductId = resolvedRequest.productId
-        val clientPurchaseContext = AppActorClientPurchaseContext.purchaseAttempt(dateProviderMillis())
+        val clientPurchaseContext = AppActorClientPurchaseContext.purchaseAttempt(
+            startedAtMillis = dateProviderMillis(),
+            placement = placement,
+        )
         var keepForegroundMarker = false
         markForegroundPurchaseProduct(foregroundProductId, clientPurchaseContext = clientPurchaseContext)
         try {
@@ -1041,6 +1049,7 @@ internal class AppActorPaymentProcessor(
             clientObservedAt = if (adoptClientContext) incoming.clientObservedAt else existing.clientObservedAt,
             clientDeliverySource = if (adoptClientContext) incoming.clientDeliverySource else existing.clientDeliverySource,
             clientPurchaseAttemptId = if (adoptClientContext) incoming.clientPurchaseAttemptId else existing.clientPurchaseAttemptId,
+            placement = existing.placement ?: incoming.placement,
             sdkOriginated = if (adoptClientContext) incoming.sdkOriginated else existing.sdkOriginated,
             sdkVersion = if (adoptClientContext) incoming.sdkVersion else existing.sdkVersion,
             isAcknowledged = existing.isAcknowledged || incoming.isAcknowledged,
@@ -1318,6 +1327,7 @@ internal class AppActorPaymentProcessor(
             clientObservedAt = keyedRestoreItem.clientObservedAt ?: existing.clientObservedAt,
             clientDeliverySource = keyedRestoreItem.clientDeliverySource ?: existing.clientDeliverySource,
             clientPurchaseAttemptId = keyedRestoreItem.clientPurchaseAttemptId ?: existing.clientPurchaseAttemptId,
+            placement = existing.placement,
             sdkOriginated = keyedRestoreItem.sdkOriginated ?: existing.sdkOriginated,
             sdkVersion = keyedRestoreItem.sdkVersion ?: existing.sdkVersion,
             isAcknowledged = existing.isAcknowledged || keyedRestoreItem.isAcknowledged,
@@ -2037,6 +2047,7 @@ internal class AppActorPaymentProcessor(
             clientObservedAt = clientPurchaseContext?.clientObservedAt,
             clientDeliverySource = clientPurchaseContext?.clientDeliverySource?.wireValue,
             clientPurchaseAttemptId = clientPurchaseContext?.clientPurchaseAttemptId,
+            placement = clientPurchaseContext?.placement.normalizePlacement(),
             sdkOriginated = clientPurchaseContext?.sdkOriginated,
             sdkVersion = clientPurchaseContext?.sdkVersion,
             isAcknowledged = purchase.isAcknowledged,
