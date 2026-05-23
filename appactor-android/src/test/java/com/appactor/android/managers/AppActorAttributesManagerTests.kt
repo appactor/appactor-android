@@ -160,6 +160,24 @@ class AppActorAttributesManagerTests {
     }
 
     @Test
+    fun `collectAutomaticProfileContext drops queued context after permanent backend failure`() = runBlocking {
+        val backend = FakeAttributesBackendClient(permanentMutationStatus = 404)
+        val store = InMemoryAttributeQueueStore()
+        val manager = manager(backend, store)
+
+        manager.collectAutomaticProfileContext("user_a")
+
+        assertNull(store.load("user_a"))
+        assertEquals(0, backend.patchRequests.size)
+
+        backend.permanentMutationStatus = null
+        manager.setAttribute("user_a", "tier", AppActorAttributeValue.string("gold"))
+
+        assertEquals(JsonPrimitive("gold"), backend.patchRequests.single().second.attributes["tier"])
+        assertNull(store.load("user_a"))
+    }
+
+    @Test
     fun `collectDeviceIdentifiers keeps manual integration id path`() = runBlocking {
         val backend = FakeAttributesBackendClient()
         val manager = manager(backend, InMemoryAttributeQueueStore())
@@ -473,6 +491,7 @@ class AppActorAttributesManagerTests {
 
     private class FakeAttributesBackendClient(
         var failMutations: Boolean = false,
+        var permanentMutationStatus: Int? = null,
     ) : AppActorBackendClient {
         val patchRequests = mutableListOf<Pair<String, AppActorAttributesPatchRequestDTO>>()
         val deleteRequests = mutableListOf<Pair<String, String>>()
@@ -525,6 +544,9 @@ class AppActorAttributesManagerTests {
         private fun mutation(block: () -> Unit): AppActorBackendHttpResponse<Unit> {
             if (failMutations) {
                 throw AppActorBackendException.Network("offline")
+            }
+            permanentMutationStatus?.let { status ->
+                throw AppActorBackendException.Http(statusCode = status)
             }
             block()
             return AppActorBackendHttpResponse(body = Unit, statusCode = 204)

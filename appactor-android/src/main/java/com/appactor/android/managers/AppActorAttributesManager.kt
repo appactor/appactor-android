@@ -20,6 +20,7 @@ import com.appactor.android.storage.AppActorQueuedAttributeMutation
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.json.JsonElement
 import java.util.Locale
 import java.util.TimeZone
 
@@ -42,23 +43,7 @@ internal class AppActorAttributesManager(
     ) {
         val normalized = normalizeAttributes(attributes, allowReservedKeys)
         if (normalized.isEmpty()) return
-        enqueue(appUserId) { existing ->
-            val nextAttributes = existing.attributes.toMutableMap()
-            val nextUnset = existing.unsetAttributes.toMutableSet()
-            normalized.forEach { (key, value) ->
-                if (value == null) {
-                    nextAttributes.remove(key)
-                    nextUnset += key
-                } else {
-                    nextAttributes[key] = value
-                    nextUnset -= key
-                }
-            }
-            existing.copy(
-                attributes = nextAttributes.takeLastBounded(MAX_PENDING_ATTRIBUTES),
-                unsetAttributes = nextUnset.takeLastBounded(MAX_PENDING_ATTRIBUTES),
-            )
-        }
+        enqueueNormalizedAttributes(appUserId, normalized)
         flushPending(appUserId)
     }
 
@@ -145,11 +130,21 @@ internal class AppActorAttributesManager(
     }
 
     suspend fun collectAutomaticProfileContext(appUserId: String) {
-        setAttributes(
-            appUserId = appUserId,
-            attributes = buildAutomaticProfileContextAttributes(),
-            allowReservedKeys = true,
-        )
+        val normalized = normalizeAttributes(buildAutomaticProfileContextAttributes(), allowReservedKeys = true)
+        if (normalized.isEmpty()) return
+        enqueueNormalizedAttributes(appUserId, normalized)
+        try {
+            flushPending(appUserId)
+        } catch (throwable: Throwable) {
+            if (throwable is CancellationException) throw throwable
+            dropQueuedAttributeValues(
+                appUserId = appUserId,
+                attributes = normalized.mapNotNull { (key, value) ->
+                    value?.let { key to it }
+                }.toMap(),
+            )
+            AppActorLogger.debug("Automatic profile context failed permanently; pending context was dropped.")
+        }
     }
 
     suspend fun collectDeviceIdentifiers(appUserId: String) {
@@ -321,6 +316,47 @@ internal class AppActorAttributesManager(
             val existing = queueStore.load(appUserId) ?: AppActorQueuedAttributeMutation()
             val updated = transform(existing)
             queueStore.save(appUserId, updated.takeBounded())
+        }
+    }
+
+    private suspend fun enqueueNormalizedAttributes(
+        appUserId: String,
+        normalized: Map<String, JsonElement?>,
+    ) {
+        enqueue(appUserId) { existing ->
+            val nextAttributes = existing.attributes.toMutableMap()
+            val nextUnset = existing.unsetAttributes.toMutableSet()
+            normalized.forEach { (key, value) ->
+                if (value == null) {
+                    nextAttributes.remove(key)
+                    nextUnset += key
+                } else {
+                    nextAttributes[key] = value
+                    nextUnset -= key
+                }
+            }
+            existing.copy(
+                attributes = nextAttributes.takeLastBounded(MAX_PENDING_ATTRIBUTES),
+                unsetAttributes = nextUnset.takeLastBounded(MAX_PENDING_ATTRIBUTES),
+            )
+        }
+    }
+
+    private suspend fun dropQueuedAttributeValues(
+        appUserId: String,
+        attributes: Map<String, JsonElement>,
+    ) {
+        if (attributes.isEmpty()) return
+        queueMutex.withLock {
+            val current = queueStore.load(appUserId) ?: return@withLock
+            queueStore.save(
+                appUserId,
+                current.copy(
+                    attributes = current.attributes.filterNot { (key, value) ->
+                        attributes[key] == value
+                    },
+                ),
+            )
         }
     }
 
