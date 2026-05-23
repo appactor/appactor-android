@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.3.6
 
 - Automatically sync privacy-safe profile context during `configure()` while keeping identifier collection behind `collectDeviceIdentifiers()`.
 - Dropped invalid non-alpha-2 locale country values from automatic profile context so best-effort context cannot poison the attribute queue.
