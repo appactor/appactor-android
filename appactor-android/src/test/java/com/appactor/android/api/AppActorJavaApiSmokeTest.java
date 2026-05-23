@@ -86,6 +86,43 @@ public final class AppActorJavaApiSmokeTest {
             result -> { },
             error -> { }
         );
+        Runnable bridgePurchaseNullCallbackCompatibility = () -> AppActorBridge.purchase(
+            activity,
+            new AppActorPurchaseParams(
+                "com.appactor.pro.monthly",
+                "monthly_plan",
+                "monthly001",
+                "intro7d",
+                null,
+                null,
+                Collections.emptyMap(),
+                AppActorProductType.Subscription
+            ),
+            null
+        );
+        Runnable bridgePurchaseWithPlacement = () -> AppActorBridge.purchaseWithPlacement(
+            activity,
+            new AppActorPurchaseParams(
+                "com.appactor.pro.monthly",
+                "monthly_plan",
+                "monthly001",
+                "intro7d",
+                null,
+                null,
+                Collections.emptyMap(),
+                AppActorProductType.Subscription
+            ),
+            "paywall_hero",
+            result -> { },
+            error -> { }
+        );
+        Runnable javaPurchaseWithPlacement = () -> AppActorJava.purchaseAsyncWithPlacement(
+            activity,
+            null,
+            "paywall_hero",
+            result -> { },
+            error -> { }
+        );
         Runnable bridgeRestore = () -> AppActorBridge.restorePurchases(info -> { }, error -> { });
         Runnable bridgeSync = () -> AppActorBridge.syncPurchases(info -> { }, error -> { });
         Runnable bridgeQuietSync = () -> AppActorBridge.quietSyncPurchases(info -> { }, error -> { });
@@ -117,7 +154,8 @@ public final class AppActorJavaApiSmokeTest {
             bridgeLogIn == null || bridgeLogOut == null || bridgeOfferings == null ||
             bridgeCustomerInfo == null || bridgeRemoteConfigs == null || bridgeExperiment == null ||
             bridgeStorefront == null || bridgeStoreCapabilities == null || bridgePurchase == null ||
-            bridgeRestore == null || bridgeSync == null || bridgeQuietSync == null ||
+            bridgePurchaseNullCallbackCompatibility == null || bridgePurchaseWithPlacement == null ||
+            javaPurchaseWithPlacement == null || bridgeRestore == null || bridgeSync == null || bridgeQuietSync == null ||
             bridgeDrain == null || bridgeIntegrationId == null || bridgeIntegrationIdClear == null ||
             bridgeIntegrationHelperClear == null || bridgeMediaSource == null ||
             bridgeCampaign == null || bridgeClearListeners == null) {

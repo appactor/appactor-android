@@ -1,15 +1,22 @@
 package com.appactor.plugin.infrastructure
 
+import android.app.Activity
 import android.content.Context
 import com.appactor.android.api.AppActor
 import com.appactor.android.models.AppActorError
 import com.appactor.android.models.AppActorAttributeValue
 import com.appactor.android.models.AppActorAttribution
 import com.appactor.android.models.AppActorLogLevel
+import com.appactor.android.models.AppActorOffering
 import com.appactor.android.models.AppActorOfferings
 import com.appactor.android.models.AppActorOfferingsFetchPolicy
 import com.appactor.android.models.AppActorOptions
+import com.appactor.android.models.AppActorPackage
+import com.appactor.android.models.AppActorPackageType
 import com.appactor.android.models.AppActorPlatformInfo
+import com.appactor.android.models.AppActorProductType
+import com.appactor.android.models.AppActorPurchaseResult
+import com.appactor.android.models.AppActorStore
 import com.appactor.plugin.AppActorPlugin
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -354,6 +361,51 @@ class PluginRequestRouterTests {
         assertEquals(PluginError.SDK_VALIDATION, (invalidQuantity as PluginResult.Error).error.code)
         assertEquals(PluginError.SDK_VALIDATION, (unsupportedQuantity as PluginResult.Error).error.code)
         assertTrue(unsupportedQuantity.error.message.contains("quantity greater than 1"))
+    }
+
+    @Test
+    fun `purchase package forwards placement to native sdk`() = runBlocking {
+        val activity = Activity()
+        AppActorPlugin.setActivity(activity)
+        val monthlyPackage = AppActorPackage(
+            id = "monthly",
+            packageType = AppActorPackageType.Monthly,
+            store = AppActorStore.PlayStore,
+            productId = "com.appactor.pro.monthly",
+            productType = AppActorProductType.Subscription,
+            basePlanId = "monthly001",
+        )
+        val offerings = AppActorOfferings(
+            current = AppActorOffering(
+                id = "main",
+                packages = listOf(monthlyPackage),
+            ),
+            all = mapOf(
+                "main" to AppActorOffering(
+                    id = "main",
+                    packages = listOf(monthlyPackage),
+                )
+            ),
+        )
+
+        mockkObject(AppActor)
+        try {
+            every { AppActor.cachedOfferings } returns offerings
+            coEvery { AppActor.purchase(any(), any<AppActorPackage>(), any()) } returns AppActorPurchaseResult.Cancelled
+
+            val result = PluginRequestRouter.route(
+                "purchase_package",
+                """{"package_id":"monthly","offering_id":"main","placement":"paywall_hero"}""",
+            )
+
+            assertTrue(result is PluginResult.Success)
+            coVerify(exactly = 1) {
+                AppActor.purchase(activity, monthlyPackage, "paywall_hero")
+            }
+        } finally {
+            unmockkObject(AppActor)
+            AppActorPlugin.setActivity(null)
+        }
     }
 
     @Test

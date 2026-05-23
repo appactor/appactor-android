@@ -38,6 +38,7 @@ internal object AppActorReceiptRequestBuilder {
             clientObservedAt = item.clientObservedAt,
             clientDeliverySource = clientDeliverySource,
             clientPurchaseAttemptId = item.clientPurchaseAttemptId,
+            placement = item.placement.normalizePlacement(),
             sdkOriginated = item.sdkOriginated,
             sdkVersion = item.sdkVersion,
             idempotencyKey = item.idempotencyKey,
