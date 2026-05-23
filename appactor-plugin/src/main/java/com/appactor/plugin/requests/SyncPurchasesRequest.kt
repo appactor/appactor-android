@@ -7,7 +7,7 @@ import com.appactor.plugin.infrastructure.*
 internal class SyncPurchasesRequest : PluginRequest {
 
     override suspend fun execute(): PluginResult {
-        val info = AppActor.drainReceiptQueueAndRefreshCustomer()
+        val info = AppActor.syncPurchases()
         return PluginResult.encoding(CustomerInfoSurrogate.serializer(), CustomerInfoSurrogate(info))
     }
 

@@ -165,7 +165,7 @@ public object AppActorJava {
         onSuccess: AppActorSuccessCallback<AppActorCustomerInfo>? = null,
         onError: AppActorErrorCallback? = null,
     ): Unit = AppActor.launchAsync(
-        operation = { AppActor.drainReceiptQueueAndRefreshCustomer() },
+        operation = { AppActor.syncPurchases() },
         onSuccess = onSuccess,
         onError = onError,
     )
