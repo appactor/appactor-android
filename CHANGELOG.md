@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.3.5
+
+- Aligned bridge, Java facade, and plugin `syncPurchases` semantics with quiet purchase sync.
+- Kept `drainReceiptQueueAndRefreshCustomer` as the explicit queue-drain API for advanced/internal use.
+
 ## 2.3.4
 
 - Added optional purchase placement forwarding for explicit purchase receipts.
