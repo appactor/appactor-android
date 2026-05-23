@@ -263,7 +263,7 @@ public object AppActorBridge {
         onSuccess: AppActorSuccessCallback<AppActorCustomerInfo>? = null,
         onError: AppActorBridgeErrorCallback? = null,
     ): Unit = AppActor.launchAsync(
-        operation = { AppActor.drainReceiptQueueAndRefreshCustomer() },
+        operation = { AppActor.syncPurchases() },
         onSuccess = onSuccess,
         onError = onError.asSdkErrorCallback(),
     )
