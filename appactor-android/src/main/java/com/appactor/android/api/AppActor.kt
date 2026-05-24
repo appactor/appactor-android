@@ -490,7 +490,7 @@ public object AppActor {
 
     public suspend fun logIn(newAppUserId: String): AppActorCustomerInfo {
         awaitStartupBeforeTransition()
-        val (info, callbacks) = transitionMutex.withLock {
+        val (info, callbacks, profileContextTarget) = transitionMutex.withLock {
             bumpIdentityEpochLocked()
             val currentRuntime = requireConfiguredRuntime()
             AppActorValidation.validateAppUserId(newAppUserId)
@@ -524,19 +524,26 @@ public object AppActor {
             transitionResults.forEach { result ->
                 purchaseUpdatePublishCallbackIfCurrentLocked(currentRuntime, result)?.let(callbacks::add)
             }
-            info to callbacks
+            val targetAppUserId = currentRuntime.identityStore.currentAppUserId
+                ?: info.appUserId
+                ?: newAppUserId
+            Triple(info, callbacks, currentRuntime to targetAppUserId)
         }
         callbacks.forEach { (callback, callbackInfo) ->
             deliverOnMain {
                 callback?.invoke(callbackInfo)
             }
         }
+        scheduleAutomaticProfileContextSyncAfterIdentityTransition(
+            runtimeState = profileContextTarget.first,
+            appUserId = profileContextTarget.second,
+        )
         return info
     }
 
     public suspend fun logOut(): Boolean {
         awaitStartupBeforeTransition()
-        val callbacks = transitionMutex.withLock {
+        val (callbacks, profileContextTarget) = transitionMutex.withLock {
             bumpIdentityEpochLocked()
             val currentRuntime = requireConfiguredRuntime()
             val currentAppUserId = currentRuntime.identityStore.currentAppUserId
@@ -557,27 +564,31 @@ public object AppActor {
                 currentRuntime.experimentManager.clearCache(currentAppUserId)
                 val callbacks = mutableListOf<Pair<((AppActorCustomerInfo) -> Unit)?, AppActorCustomerInfo>>()
                 currentRuntime.identityStore.setAppUserId(null)
-                currentRuntime.identityStore.ensureAppUserId()
+                val newAppUserId = currentRuntime.identityStore.ensureAppUserId()
                 currentRuntime.identityStore.clearLegacyIdentityState()
                 callbacks += publishCustomerInfoLocked(
                     currentRuntime,
                     AppActorCustomerInfo.empty,
                     AppActorDiagnosticsDataSource.Unknown,
                 ) to AppActorCustomerInfo.empty
-                callbacks
+                callbacks to newAppUserId
             } finally {
                 transitionResults = currentRuntime.paymentProcessor.endIdentityTransition()
             }
             transitionResults.forEach { result ->
-                purchaseUpdatePublishCallbackIfCurrentLocked(currentRuntime, result)?.let(callbacks::add)
+                purchaseUpdatePublishCallbackIfCurrentLocked(currentRuntime, result)?.let(callbacks.first::add)
             }
-            callbacks
+            callbacks.first to (currentRuntime to callbacks.second)
         }
         callbacks.forEach { (callback, info) ->
             deliverOnMain {
                 callback?.invoke(info)
             }
         }
+        scheduleAutomaticProfileContextSyncAfterIdentityTransition(
+            runtimeState = profileContextTarget.first,
+            appUserId = profileContextTarget.second,
+        )
         return true
     }
 
@@ -1151,6 +1162,31 @@ public object AppActor {
 
     private suspend fun awaitStartupIfNeeded(currentRuntime: AppActorRuntimeState) {
         startupCoordinator.awaitStartupIfNeeded(currentRuntime)
+    }
+
+    private fun scheduleAutomaticProfileContextSyncAfterIdentityTransition(
+        runtimeState: AppActorRuntimeState,
+        appUserId: String,
+    ) {
+        runtimeState.scope.launch {
+            val shouldSync = synchronized(this@AppActor) {
+                runtime?.sessionId == runtimeState.sessionId &&
+                    runtimeState.identityStore.currentAppUserId == appUserId
+            }
+            if (!shouldSync) return@launch
+
+            try {
+                runtimeState.attributesManager.collectAutomaticProfileContext(appUserId)
+            } catch (throwable: Throwable) {
+                if (throwable is CancellationException) {
+                    AppActorLogger.debug("Automatic profile context sync was cancelled after identity transition.")
+                    return@launch
+                }
+                AppActorLogger.warn(
+                    "Automatic profile context sync failed after identity transition; continuing without blocking identity transition."
+                )
+            }
+        }
     }
 
     private suspend fun handlePurchaseResult(
