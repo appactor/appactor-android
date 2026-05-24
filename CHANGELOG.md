@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.3.7
+
+- Harden automatic profile context refreshes during identity transitions and keep the post-transition refresh off the `logIn`/`logOut` return path.
+
 ## 2.3.6
 
 - Automatically sync privacy-safe profile context during `configure()` while keeping identifier collection behind `collectDeviceIdentifiers()`.

@@ -20,7 +20,7 @@ AppActor handles in-app purchases, subscriptions, and entitlements so you can fo
 
 ```kotlin
 dependencies {
-    implementation("com.appactor:appactor-android:2.3.4")
+    implementation("com.appactor:appactor-android:2.3.7")
 }
 ```
 
