@@ -6,6 +6,7 @@ import com.appactor.android.billing.AppActorStorePurchase
 import com.appactor.android.billing.AppActorStorePurchaseState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -19,6 +20,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import java.util.Collections
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -157,6 +159,98 @@ class AppActorIdentityTransitionTests {
             assertTrue(AppActor.logOut())
             assertNull(preferences.getString("appactor_billing_server_user_id", null))
             assertTrue(AppActor.appUserId?.startsWith("appactor-anon-") == true)
+        }
+    }
+
+    @Test
+    fun `login refreshes automatic profile context for new identity`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val attributeRequests = CopyOnWriteArrayList<Pair<String, String>>()
+        AppActor.storeAdapterFactory = { FakeStoreAdapter() }
+
+        TestBackendServer { request ->
+            val path = request.path?.substringBefore("?") ?: ""
+            when {
+                path == "/v1/payment/offerings" -> {
+                    jsonResponse("""{"requestId":"req_off","data":{"offerings":[],"productEntitlements":{}}}""")
+                }
+                path == "/v1/payment/login" -> {
+                    jsonResponse(loginEnvelope(requestId = "req_login_profile_context", appUserId = "user_b"))
+                }
+                path.startsWith("/v1/payment/users/") && path.endsWith("/attributes") -> {
+                    attributeRequests += path to request.body.readUtf8()
+                    jsonResponse("""{"requestId":"req_attributes"}""")
+                }
+                else -> jsonResponse("{}", 404)
+            }
+        }.use { backend ->
+            AppActor.configure(
+                com.appactor.android.models.AppActorConfiguration(
+                    context = context,
+                    apiKey = "pk_test_123",
+                    appUserId = "user_a",
+                    baseUrl = backend.baseUrl,
+                    options = testOptionsForLocalBackend(),
+                )
+            )
+
+            val info = withTimeout(5_000L) { AppActor.logIn("user_b") }
+
+            assertEquals("user_b", info.appUserId)
+            withTimeout(5_000L) {
+                while (attributeRequests.none { (path, body) ->
+                        path == "/v1/payment/users/user_b/attributes" &&
+                            body.contains("\"\$sdkVersion\"") &&
+                            body.contains("\"\$platform\":\"android\"")
+                    }) {
+                    delay(25)
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `logout refreshes automatic profile context for new anonymous identity`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val attributeRequests = CopyOnWriteArrayList<Pair<String, String>>()
+        AppActor.storeAdapterFactory = { FakeStoreAdapter() }
+
+        TestBackendServer { request ->
+            val path = request.path?.substringBefore("?") ?: ""
+            when {
+                path == "/v1/payment/offerings" -> {
+                    jsonResponse("""{"requestId":"req_off","data":{"offerings":[],"productEntitlements":{}}}""")
+                }
+                path.startsWith("/v1/payment/users/") && path.endsWith("/attributes") -> {
+                    attributeRequests += path to request.body.readUtf8()
+                    jsonResponse("""{"requestId":"req_attributes"}""")
+                }
+                else -> jsonResponse("{}", 404)
+            }
+        }.use { backend ->
+            AppActor.configure(
+                com.appactor.android.models.AppActorConfiguration(
+                    context = context,
+                    apiKey = "pk_test_123",
+                    appUserId = "user_a",
+                    baseUrl = backend.baseUrl,
+                    options = testOptionsForLocalBackend(),
+                )
+            )
+
+            assertTrue(withTimeout(5_000L) { AppActor.logOut() })
+            val newAppUserId = AppActor.appUserId.orEmpty()
+
+            assertTrue(newAppUserId.startsWith("appactor-anon-"))
+            withTimeout(5_000L) {
+                while (attributeRequests.none { (path, body) ->
+                        path == "/v1/payment/users/$newAppUserId/attributes" &&
+                            body.contains("\"\$sdkVersion\"") &&
+                            body.contains("\"\$platform\":\"android\"")
+                    }) {
+                    delay(25)
+                }
+            }
         }
     }
 
