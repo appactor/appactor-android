@@ -29,11 +29,13 @@ tasks.register("verifyAndroidReleaseCandidate") {
     dependsOn(
         ":appactor-android:apiCheck",
         ":appactor-android:testDebugUnitTest",
+        ":appactor-plugin:testDebugUnitTest",
         ":appactor-android:assemble",
+        ":appactor-plugin:assemble",
         ":app:assembleDebug",
         ":appactor-android:assembleDebugAndroidTest",
-        ":appactor-android:publishReleasePublicationToMavenLocal",
-        ":appactor-android:publishReleasePublicationToAppactorLocalRepository",
+        ":appactor-android:publishMavenPublicationToMavenLocal",
+        ":appactor-plugin:publishMavenPublicationToMavenLocal",
         "verifyConnectedDeviceSmoke",
     )
 }

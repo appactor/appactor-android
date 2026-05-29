@@ -5,6 +5,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.appactor.android.api.AppActor
 import com.appactor.android.models.AppActorConfiguration
+import com.appactor.android.models.AppActorPackage
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -184,12 +185,29 @@ class ConnectedInteractiveSmokeTests {
         AppActorLiveSmokeSupport.configureSdk(config)
     }
 
+    private suspend fun resolvePackage(productId: String): AppActorPackage {
+        val offerings = AppActor.offerings(forceRefresh = true)
+        return requireNotNull(
+            offerings.current?.packages?.firstOrNull {
+                it.productId == productId || it.storeProductId == productId
+            } ?: offerings.all.values
+                .asSequence()
+                .flatMap { it.packages.asSequence() }
+                .firstOrNull { it.productId == productId || it.storeProductId == productId }
+        ) {
+            "No AppActor package found for productId=$productId in live offerings."
+        }
+    }
+
     @Test
     fun manualRawSubscriptionPurchaseSmoke() = runBlocking {
         var launchedActivity: TestBillingActivity? = null
         ActivityScenario.launch(TestBillingActivity::class.java).use { scenario ->
             scenario.onActivity { activity -> launchedActivity = activity }
-            val result = AppActor.purchase(requireNotNull(launchedActivity), config.subscriptionProductId.orEmpty())
+            val result = AppActor.purchase(
+                requireNotNull(launchedActivity),
+                resolvePackage(config.subscriptionProductId.orEmpty())
+            )
             assertNotNull(result)
         }
     }
@@ -201,7 +219,10 @@ class ConnectedInteractiveSmokeTests {
         var launchedActivity: TestBillingActivity? = null
         ActivityScenario.launch(TestBillingActivity::class.java).use { scenario ->
             scenario.onActivity { activity -> launchedActivity = activity }
-            val result = AppActor.purchase(requireNotNull(launchedActivity), config.inAppProductId.orEmpty())
+            val result = AppActor.purchase(
+                requireNotNull(launchedActivity),
+                resolvePackage(config.inAppProductId.orEmpty())
+            )
             assertNotNull(result)
         }
     }
@@ -215,7 +236,10 @@ class ConnectedInteractiveSmokeTests {
         var launchedActivity: TestBillingActivity? = null
         ActivityScenario.launch(TestBillingActivity::class.java).use { scenario ->
             scenario.onActivity { activity -> launchedActivity = activity }
-            val result = AppActor.purchase(requireNotNull(launchedActivity), config.inAppProductId.orEmpty())
+            val result = AppActor.purchase(
+                requireNotNull(launchedActivity),
+                resolvePackage(config.inAppProductId.orEmpty())
+            )
             assertNotNull(result)
         }
 
@@ -241,7 +265,10 @@ class ConnectedInteractiveSmokeTests {
         var launchedActivity: TestBillingActivity? = null
         ActivityScenario.launch(TestBillingActivity::class.java).use { scenario ->
             scenario.onActivity { activity -> launchedActivity = activity }
-            val result = AppActor.purchase(requireNotNull(launchedActivity), config.inAppProductId.orEmpty())
+            val result = AppActor.purchase(
+                requireNotNull(launchedActivity),
+                resolvePackage(config.inAppProductId.orEmpty())
+            )
             assertNotNull(result)
         }
 

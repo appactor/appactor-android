@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.3.8
+
+- Published the current Android SDK line with MIT-aligned Maven metadata so Central matches the repository license.
+
 ## 2.3.7
 
 - Harden automatic profile context refreshes during identity transitions and keep the post-transition refresh off the `logIn`/`logOut` return path.
