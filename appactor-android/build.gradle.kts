@@ -16,6 +16,13 @@ mavenPublishing {
     pom {
         name.set("AppActor Android SDK")
         description.set("Server-authoritative Google Play Billing SDK for AppActor.")
+        licenses {
+            license {
+                name.set("MIT License")
+                url.set("https://opensource.org/licenses/MIT")
+                distribution.set("repo")
+            }
+        }
     }
 }
 

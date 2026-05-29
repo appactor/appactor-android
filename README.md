@@ -9,7 +9,7 @@
 </h1>
 
 <p align="center">
-<a href="https://github.com/appactor/appactor-android/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg"></a>
+<a href="https://github.com/appactor/appactor-android/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
 <img src="https://img.shields.io/badge/Android-24%2B-green.svg">
 <img src="https://img.shields.io/badge/Kotlin-2.0%2B-purple.svg">
 </p>
@@ -104,4 +104,4 @@ Visit [appactor.com/docs](https://appactor.com/docs) for full documentation.
 
 ## License
 
-Apache License 2.0. See [LICENSE](LICENSE) for details.
+MIT License. See [LICENSE](LICENSE) for details.
