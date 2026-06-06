@@ -88,6 +88,46 @@ class AppActorOfflineEntitlementManagerTests {
     }
 
     @Test
+    fun `offline manager unions store-derived keys with server-granted cached keys`() = runBlocking {
+        // Local Play ownership resolves to coin_pack_100, while the cached server-authoritative
+        // customer holds a separate active entitlement (premium) that has no local Play purchase.
+        // The offline fallback must surface BOTH, not just the store-derived subset.
+        val now = System.currentTimeMillis()
+        val consumablePurchase = AppActorStorePurchase(
+            productId = "com.appactor.coins.100",
+            productType = AppActorProductType.Consumable,
+            purchaseToken = "token_coins_100",
+            orderId = "GPA.5555",
+            purchaseTimeMillis = 1_710_000_000_000,
+            purchaseState = com.appactor.android.billing.AppActorStorePurchaseState.Purchased,
+            basePlanId = null,
+        )
+        val seedStoreAdapter = createMockStoreAdapter(activePurchases = listOf(consumablePurchase))
+        val offeringsManager = createOfferingsManager(storeAdapter = seedStoreAdapter)
+        val testStoreAdapter = createMockStoreAdapter(activePurchases = listOf(consumablePurchase))
+        val customerCacheStore = createCustomerCacheStore()
+        customerCacheStore.save(
+            appUserId = "user_android_123",
+            payload = AppActorBackendJson.instance.encodeToString(
+                fixtureCustomer("fixtures/backend/customer_android_active.json")
+            ),
+            eTag = "\"etag_customer\"",
+            verified = true,
+        )
+        val manager = AppActorOfflineEntitlementManager(
+            customerCacheStore = customerCacheStore,
+            offlineProductCatalogStore = createOfflineProductCatalogStore(),
+            offeringsManager = offeringsManager,
+            storeAdapter = testStoreAdapter,
+            dateProviderMillis = { now },
+        )
+
+        val keys = manager.activeEntitlementKeysOffline("user_android_123")
+
+        assertEquals(setOf("coin_pack_100", "premium"), keys)
+    }
+
+    @Test
     fun `offline manager ignores stale cached customer fallback`() = runBlocking {
         val offeringsManager = createOfferingsManager()
         val customerCacheStore = createCustomerCacheStore()

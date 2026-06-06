@@ -3298,6 +3298,24 @@ class AppActorPaymentProcessorTests {
 
     // endregion
 
+    // TODO(android-6 coverage): lock in the retry-wake scheduler invariants once
+    // the scheduler exposes a deterministic seam. The two invariants are:
+    //   (a) launchRetryWake's completion cleanup must only clear retryWakeJob /
+    //       scheduledRetryAtMillis when `retryWakeJob === thisJob`, so a newer
+    //       schedule that replaced retryWakeJob after this wake started is never
+    //       clobbered (no lost-cancel / orphaned-coroutine).
+    //   (b) scheduleNextRetryWake's dedup-skip (scheduledRetryAtMillis == nextReadyAt
+    //       && retryWakeJob.isActive) must not spawn a duplicate concurrent wake job.
+    // These are NOT deterministically testable from here: retryWakeJob and
+    // scheduledRetryAtMillis are private with no @VisibleForTesting accessor or
+    // observable projection, createDependencies cannot inject a TestScope as the
+    // processor's backgroundScope, and the wakes run on the real Dispatchers.Default
+    // with delay() while this harness uses runBlocking — so the race needs sub-step
+    // interleaving control that is unavailable, and the only behavioral signal
+    // (drain/post count) is masked by posted-ledger dedup. Asserting either
+    // invariant today would require a Thread.sleep-and-hope (flaky) test or a
+    // production change to add a test seam; both are out of scope for this audit.
+
     // region — Dependencies
 
     private fun createDependencies(

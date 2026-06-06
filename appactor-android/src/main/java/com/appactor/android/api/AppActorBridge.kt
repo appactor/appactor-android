@@ -52,7 +52,6 @@ public object AppActorBridge {
         onComplete: AppActorCompletionCallback? = null,
         onError: AppActorBridgeErrorCallback? = null,
     ): Unit {
-        clearListeners()
         AppActor.launchAsync(
             operation = { AppActor.reset() },
             onComplete = onComplete,

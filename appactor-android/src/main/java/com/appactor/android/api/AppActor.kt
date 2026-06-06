@@ -317,10 +317,16 @@ public object AppActor {
         set(value) {
             synchronized(this) {
                 preconfiguredCallbacks = preconfiguredCallbacks.copy(onDeferredPurchaseResolved = value)
-                runtime?.paymentProcessor?.onDeferredPurchaseResolved = value?.let { callback ->
-                    { productId, customerInfo -> deliverOnMain { callback(productId, customerInfo) } }
+                val currentRuntime = runtime
+                currentRuntime?.paymentProcessor?.onDeferredPurchaseResolved = value?.let { callback ->
+                    val runtimeSessionId = currentRuntime.sessionId
+                    { productId, customerInfo ->
+                        deliverOnMainIfCurrent(runtimeSessionId) {
+                            callback(productId, customerInfo)
+                        }
+                    }
                 }
-                runtime = runtime?.copy(onDeferredPurchaseResolved = value)
+                runtime = currentRuntime?.copy(onDeferredPurchaseResolved = value)
             }
         }
 
@@ -424,7 +430,6 @@ public object AppActor {
             bumpIdentityEpochLocked()
             isResetting = true
             val currentRuntime = runtime ?: run {
-                preconfiguredCallbacks = AppActorCallbackState()
                 preconfiguredFallbackOfferingsDTO = null
                 isResetting = false
                 return@withLock null
@@ -452,7 +457,6 @@ public object AppActor {
             currentRuntime.eTagManager.clearAll()
             installReferrerEnabled.set(false)
             synchronized(this) {
-                preconfiguredCallbacks = AppActorCallbackState()
                 preconfiguredFallbackOfferingsDTO = null
             }
             AppActorAtomicJsonReceiptQueueStore.deletePersistedFile(currentRuntime.configuration.applicationContext)
@@ -496,7 +500,7 @@ public object AppActor {
             AppActorValidation.validateAppUserId(newAppUserId)
             val currentAppUserId = currentRuntime.identityStore.currentAppUserId
                 ?: currentRuntime.identityStore.ensureAppUserId()
-            val callbacks = mutableListOf<Pair<((AppActorCustomerInfo) -> Unit)?, AppActorCustomerInfo>>()
+            val callbacks = mutableListOf<Triple<((AppActorCustomerInfo) -> Unit)?, AppActorCustomerInfo, Long>>()
             var transitionResults = emptyList<AppActorPurchaseUpdateProcessingResult>()
             currentRuntime.paymentProcessor.beginIdentityTransition()
             val info = try {
@@ -512,11 +516,15 @@ public object AppActor {
                     newAppUserId = newAppUserId,
                 )
                 persistCustomerInfoLocked(currentRuntime, info)
-                callbacks += publishCustomerInfoLocked(
-                    currentRuntime = currentRuntime,
-                    info = info,
-                    source = currentRuntime.customerManager.lastLoadSource(),
-                ) to info
+                callbacks += Triple(
+                    publishCustomerInfoLocked(
+                        currentRuntime = currentRuntime,
+                        info = info,
+                        source = currentRuntime.customerManager.lastLoadSource(),
+                    ),
+                    info,
+                    identityEpoch,
+                )
                 info
             } finally {
                 transitionResults = currentRuntime.paymentProcessor.endIdentityTransition()
@@ -529,8 +537,8 @@ public object AppActor {
                 ?: newAppUserId
             Triple(info, callbacks, currentRuntime to targetAppUserId)
         }
-        callbacks.forEach { (callback, callbackInfo) ->
-            deliverOnMain {
+        callbacks.forEach { (callback, callbackInfo, epoch) ->
+            deliverOnMainIfCurrent(profileContextTarget.first.sessionId, epoch) {
                 callback?.invoke(callbackInfo)
             }
         }
@@ -562,15 +570,19 @@ public object AppActor {
                 currentRuntime.customerManager.clearCache(currentAppUserId)
                 currentRuntime.remoteConfigManager.clearCache(currentAppUserId)
                 currentRuntime.experimentManager.clearCache(currentAppUserId)
-                val callbacks = mutableListOf<Pair<((AppActorCustomerInfo) -> Unit)?, AppActorCustomerInfo>>()
+                val callbacks = mutableListOf<Triple<((AppActorCustomerInfo) -> Unit)?, AppActorCustomerInfo, Long>>()
                 currentRuntime.identityStore.setAppUserId(null)
                 val newAppUserId = currentRuntime.identityStore.ensureAppUserId()
                 currentRuntime.identityStore.clearLegacyIdentityState()
-                callbacks += publishCustomerInfoLocked(
-                    currentRuntime,
+                callbacks += Triple(
+                    publishCustomerInfoLocked(
+                        currentRuntime,
+                        AppActorCustomerInfo.empty,
+                        AppActorDiagnosticsDataSource.Unknown,
+                    ),
                     AppActorCustomerInfo.empty,
-                    AppActorDiagnosticsDataSource.Unknown,
-                ) to AppActorCustomerInfo.empty
+                    identityEpoch,
+                )
                 callbacks to newAppUserId
             } finally {
                 transitionResults = currentRuntime.paymentProcessor.endIdentityTransition()
@@ -580,8 +592,8 @@ public object AppActor {
             }
             callbacks.first to (currentRuntime to callbacks.second)
         }
-        callbacks.forEach { (callback, info) ->
-            deliverOnMain {
+        callbacks.forEach { (callback, info, epoch) ->
+            deliverOnMainIfCurrent(profileContextTarget.first.sessionId, epoch) {
                 callback?.invoke(info)
             }
         }
@@ -1090,7 +1102,9 @@ public object AppActor {
         }
         callbackState.onDeferredPurchaseResolved?.let { callback ->
             newRuntime.paymentProcessor.onDeferredPurchaseResolved = { productId, customerInfo ->
-                deliverOnMain { callback(productId, customerInfo) }
+                deliverOnMainIfCurrent(runtimeSessionId) {
+                    callback(productId, customerInfo)
+                }
             }
         }
         val lifecycleCallbacks = lifecycleCoordinator.registerLifecycleCallbacksIfNeeded(newRuntime)
@@ -1245,7 +1259,7 @@ public object AppActor {
             }
             currentRuntime.onReceiptPipelineEvent to currentRuntime.configuration.options.platformInfo
         }
-        deliverOnMain {
+        deliverOnMainIfCurrent(runtimeSessionId) {
             callback?.invoke(event)
         }
         emitDebugEvent(
@@ -1370,7 +1384,7 @@ public object AppActor {
             }
             publishCustomerInfoLocked(currentRuntime, info, source)
         }
-        deliverOnMain {
+        deliverOnMainIfCurrent(snapshot.runtime.sessionId, snapshot.epoch) {
             callback?.invoke(info)
         }
         return callback != null
@@ -1388,8 +1402,8 @@ public object AppActor {
             }
             purchaseUpdatePublishCallbackIfCurrentLocked(currentRuntime, result, source)
         } ?: return false
-        val (callback, info) = callbackAndInfo
-        deliverOnMain {
+        val (callback, info, epoch) = callbackAndInfo
+        deliverOnMainIfCurrent(runtimeState.sessionId, epoch) {
             callback?.invoke(info)
         }
         return callback != null
@@ -1399,7 +1413,7 @@ public object AppActor {
         currentRuntime: AppActorRuntimeState,
         result: AppActorPurchaseUpdateProcessingResult,
         source: AppActorDiagnosticsDataSource = AppActorDiagnosticsDataSource.Network,
-    ): Pair<((AppActorCustomerInfo) -> Unit)?, AppActorCustomerInfo>? {
+    ): Triple<((AppActorCustomerInfo) -> Unit)?, AppActorCustomerInfo, Long>? {
         val info = result.customerInfo ?: return null
         val currentAppUserId = currentRuntime.identityStore.currentAppUserId
             ?: return null
@@ -1408,7 +1422,7 @@ public object AppActor {
             return null
         }
         persistCustomerInfoLocked(currentRuntime, info)
-        return publishCustomerInfoLocked(currentRuntime, info, source) to info
+        return Triple(publishCustomerInfoLocked(currentRuntime, info, source), info, identityEpoch)
     }
 
     private suspend fun persistLastRequestIdIfCurrent(
@@ -1517,6 +1531,24 @@ public object AppActor {
             block()
         } else {
             Handler(mainLooper).post(block)
+        }
+    }
+
+    internal fun deliverOnMainIfCurrent(
+        runtimeSessionId: Long,
+        expectedEpoch: Long? = null,
+        block: () -> Unit,
+    ) {
+        deliverOnMain {
+            val isCurrent = synchronized(this) {
+                val currentRuntime = runtime ?: return@synchronized false
+                currentRuntime.sessionId == runtimeSessionId &&
+                    (expectedEpoch == null || identityEpoch == expectedEpoch)
+            }
+            if (!isCurrent) {
+                return@deliverOnMain
+            }
+            block()
         }
     }
 
@@ -1644,6 +1676,7 @@ private fun Throwable.toPublicAppActorError(
             }
         }
 
+        is IllegalArgumentException -> AppActorError.InvalidConfiguration(message ?: defaultMessage)
         else -> AppActorError.Unknown(message ?: defaultMessage, this)
     }
 }

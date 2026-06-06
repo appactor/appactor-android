@@ -3,6 +3,7 @@ package com.appactor.android.backend
 import com.appactor.android.backend.client.buildAppActorUrl
 import com.appactor.android.backend.client.AppActorBackendJson
 import com.appactor.android.backend.dto.AppActorCustomerEnvelopeDTO
+import com.appactor.android.backend.dto.AppActorEntitlementDTO
 import com.appactor.android.backend.dto.AppActorGoogleReceiptRequestDTO
 import com.appactor.android.backend.dto.AppActorOfferingDTO
 import com.appactor.android.backend.dto.AppActorOfferingsPayloadDTO
@@ -226,6 +227,33 @@ class AppActorBackendContractTests {
         assertEquals(2, result.restoredCount)
         assertFalse(result.transferred)
         assertTrue(result.customerInfo.hasActiveEntitlement("premium"))
+    }
+
+    @Test
+    fun `entitlement willRenew derives from entitled status and absent unsubscribe signal`() {
+        val active = AppActorEntitlementDTO(
+            isActive = true,
+            status = "active",
+            productId = "com.appactor.pro.monthly",
+            unsubscribeDetectedAt = null,
+        ).toModel("premium")
+        assertTrue(active.willRenew)
+
+        val cancelledButActive = AppActorEntitlementDTO(
+            isActive = true,
+            status = "active",
+            productId = "com.appactor.pro.monthly",
+            unsubscribeDetectedAt = "2026-03-14T12:00:00.000Z",
+        ).toModel("premium")
+        assertFalse(cancelledButActive.willRenew)
+
+        val cancelledInGracePeriod = AppActorEntitlementDTO(
+            isActive = true,
+            status = "grace_period",
+            productId = "com.appactor.pro.monthly",
+            unsubscribeDetectedAt = "2026-03-14T12:00:00.000Z",
+        ).toModel("premium")
+        assertFalse(cancelledInGracePeriod.willRenew)
     }
 
     @Test

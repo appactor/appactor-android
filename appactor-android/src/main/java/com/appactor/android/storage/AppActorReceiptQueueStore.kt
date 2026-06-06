@@ -442,8 +442,17 @@ internal class AppActorAtomicJsonReceiptQueueStore(
         val writeSucceeded = runCatching {
             tempFile.writeText(encoded)
             if (!tempFile.renameTo(file)) {
-                file.writeText(encoded)
-                tempFile.delete()
+                // renameTo can fail when the destination already exists on some
+                // filesystems. Delete the stale target and retry the atomic
+                // rename rather than truncating the live file in place: an
+                // in-place writeText that is interrupted by a crash or power
+                // loss leaves a half-written, unparseable canonical file, which
+                // the decode-failure path then deletes (losing all receipts).
+                file.delete()
+                if (!tempFile.renameTo(file)) {
+                    tempFile.delete()
+                    error("Receipt queue rename failed after deleting stale target")
+                }
             }
         }.onFailure { AppActorLogger.warn("[$TAG] Receipt queue persist failed: ${it.message}") }
             .isSuccess

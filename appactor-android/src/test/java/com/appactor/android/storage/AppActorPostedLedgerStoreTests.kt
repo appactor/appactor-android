@@ -55,6 +55,31 @@ class AppActorPostedLedgerStoreTests {
     }
 
     @Test
+    fun `posted ledger keeps prior markers intact when atomic write fails`() {
+        val directory = tempDirectory("ledger-atomic-fail")
+        val store = AppActorAtomicJsonPostedLedgerStore(context, directory)
+        store.markPosted("google:purchase:token_a", postedAtMillis = 1_710_000_000_000L)
+
+        // Pre-create a directory at the temp-file target so the next atomic
+        // write cannot truncate the canonical file: tempFile.writeText fails,
+        // persist reports failure, and the canonical posted_ledger.json keeps
+        // the previously persisted marker rather than becoming half-written.
+        assertTrue(File(directory, "posted_ledger.json.tmp").mkdirs())
+
+        store.markPosted("google:purchase:token_b", postedAtMillis = 1_710_000_005_000L)
+
+        // The failed write must not advance in-memory state with the new marker.
+        assertTrue(store.isPosted("google:purchase:token_a"))
+        assertFalse(store.isPosted("google:purchase:token_b"))
+
+        // The canonical file is not corrupted: the prior marker still loads.
+        val reloaded = AppActorAtomicJsonPostedLedgerStore(context, directory)
+        assertTrue(reloaded.isPosted("google:purchase:token_a"))
+        assertFalse(reloaded.isPosted("google:purchase:token_b"))
+        assertEquals(1, reloaded.snapshot().size)
+    }
+
+    @Test
     fun `posted ledger purges expired entries on load`() {
         val directory = tempDirectory("ledger-load-retention")
         val oldTime = System.currentTimeMillis() - AppActorAtomicJsonPostedLedgerStore.LEDGER_RETENTION_MILLIS - 1_000

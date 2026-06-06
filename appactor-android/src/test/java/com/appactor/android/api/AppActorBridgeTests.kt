@@ -1,6 +1,7 @@
 package com.appactor.android.api
 
 import android.os.Looper
+import com.appactor.android.models.AppActorCompletionCallback
 import com.appactor.android.models.AppActorBridgeError
 import com.appactor.android.models.AppActorBridgeErrorCallback
 import com.appactor.android.models.AppActorBridgeReceiptEvent
@@ -126,5 +127,22 @@ class AppActorBridgeTests {
 
         assertNull(AppActor.onCustomerInfoChanged)
         assertNull(AppActor.onReceiptPipelineEvent)
+    }
+
+    @Test
+    fun `bridge reset preserves listeners for future reconfigure`() {
+        val latch = CountDownLatch(1)
+
+        AppActorBridge.setCustomerInfoListener(AppActorSuccessCallback { })
+        AppActorBridge.setReceiptPipelineListener(AppActorSuccessCallback { })
+
+        AppActorBridge.reset(
+            onComplete = AppActorCompletionCallback { latch.countDown() },
+            onError = AppActorBridgeErrorCallback { latch.countDown() },
+        )
+
+        assertTrue(awaitMainThreadCallback(latch))
+        assertTrue(AppActor.onCustomerInfoChanged != null)
+        assertTrue(AppActor.onReceiptPipelineEvent != null)
     }
 }
