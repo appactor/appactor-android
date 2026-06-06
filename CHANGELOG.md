@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.3.9
+
+- Fixed: offline entitlement fallback now unions store-derived keys with the cached server-authoritative set instead of returning only store-derived keys, so promo/grant/cross-platform entitlements are no longer dropped offline. (audit android-3)
+- Fixed: entitlement `willRenew` is now `false` when `unsubscribeDetectedAt` is set (was derived from active/grace status, so cancelled-but-active subscriptions wrongly reported `willRenew = true`). (audit android-4)
+- Fixed: the retry-wake scheduler guards all shared state under a dedicated lock with an identity-checked completion cleanup, closing a data race. (audit android-6)
+- Fixed: blank-argument validation errors now surface as `CODE_VALIDATION` (`InvalidConfiguration`) instead of `CODE_UNKNOWN`. (audit android-10)
+- Fixed: the receipt-queue and posted-ledger stores retry the atomic rename instead of falling back to an in-place `writeText`, so a failed rename can no longer truncate the durable file. (audit android-19)
+
 ## 2.3.8
 
 - Published the current Android SDK line with MIT-aligned Maven metadata so Central matches the repository license.
