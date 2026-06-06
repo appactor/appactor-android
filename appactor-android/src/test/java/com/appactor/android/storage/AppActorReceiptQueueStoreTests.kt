@@ -111,6 +111,34 @@ class AppActorReceiptQueueStoreTests {
     }
 
     @Test
+    fun `queue store keeps prior items intact when atomic write fails`() {
+        val directory = tempDirectory("queue-atomic-fail")
+        val store = AppActorAtomicJsonReceiptQueueStore(context, directory)
+        val createdAt = 1_710_000_000_000L
+        val item = queueItem(createdAtMillis = createdAt)
+        store.upsert(item)
+
+        // Pre-create a directory at the temp-file target so the next atomic
+        // write cannot truncate the canonical file: tempFile.writeText fails,
+        // persist reports failure, and the canonical receipt_queue.json keeps
+        // the previously persisted item rather than becoming half-written.
+        assertTrue(File(directory, "receipt_queue.json.tmp").mkdirs())
+
+        // claimReady only succeeds if it can persist the Posting transition; on
+        // a failed write it must return empty and leave in-memory state at the
+        // prior NeedsPost item rather than advancing to the unpersisted claim.
+        val claimed = store.claimReady(limit = 10, nowMillis = createdAt + 1_000)
+        assertTrue(claimed.isEmpty())
+        assertEquals(1, store.pendingCount())
+        assertEquals(listOf(item.key), store.snapshot().map { it.key })
+
+        // The canonical file is not corrupted: the original item still loads.
+        val reloaded = AppActorAtomicJsonReceiptQueueStore(context, directory)
+        assertEquals(1, reloaded.pendingCount())
+        assertEquals(item.key, reloaded.snapshot().single().key)
+    }
+
+    @Test
     fun `queue store purges expired dead lettered items on load`() {
         val directory = tempDirectory("queue-dead-letter-retention")
         val now = System.currentTimeMillis()
