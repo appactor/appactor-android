@@ -19,8 +19,8 @@ internal class AppActorOfflineEntitlementManager(
 
     suspend fun activeEntitlementKeysOffline(appUserId: String): Set<String> {
         val productEntitlements = currentProductEntitlements()
-        if (productEntitlements.isNotEmpty()) {
-            val derivedKeys = runCatching { storeAdapter.queryActivePurchases() }
+        val derivedKeys = if (productEntitlements.isNotEmpty()) {
+            runCatching { storeAdapter.queryActivePurchases() }
                 .getOrDefault(emptyList())
                 .flatMap { purchase ->
                     AppActorEntitlementKeyResolver.entitlementKeysForPurchase(
@@ -29,12 +29,17 @@ internal class AppActorOfflineEntitlementManager(
                     )
                 }
                 .toSet()
-            if (derivedKeys.isNotEmpty()) {
-                return derivedKeys
-            }
+        } else {
+            emptySet()
         }
 
-        return freshCachedCustomer(appUserId)?.activeEntitlementKeys.orEmpty()
+        // The store-derived set is only the subset Google Play locally owns; the cached
+        // customer's activeEntitlementKeys is the complete server-authoritative active set,
+        // including server-only grants (promotional/backend grants, cross-platform/web
+        // purchases) that have no local Play purchase. Union both so offline fallback never
+        // drops legitimately owned entitlements.
+        val cachedKeys = freshCachedCustomer(appUserId)?.activeEntitlementKeys.orEmpty()
+        return derivedKeys + cachedKeys
     }
 
     fun freshCachedCustomer(appUserId: String): AppActorCustomerInfo? {

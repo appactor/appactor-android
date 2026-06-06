@@ -133,6 +133,12 @@ internal fun AppActorCustomerDTO.toModel(
 
 internal fun AppActorEntitlementDTO.toModel(identifier: String): AppActorEntitlementInfo {
     val subscriptionStatus = AppActorSubscriptionStatus.fromWireValue(status)
+    // The entitlement DTO carries no autoRenew flag, so derive willRenew from a real
+    // auto-renew signal: an entitled status with no unsubscribe detected. A cancelled-but-
+    // still-entitled subscription (unsubscribeDetectedAt set) must report willRenew=false to
+    // stay consistent with AppActorSubscriptionInfo.willRenew (autoRenew ?: false). A billing
+    // issue alone does not turn off auto-renew (renewal is being retried), so it is not used.
+    val willRenew = subscriptionStatus.isEntitled && unsubscribeDetectedAt == null
     return AppActorEntitlementInfo(
         identifier = identifier,
         isActive = isActive,
@@ -141,7 +147,7 @@ internal fun AppActorEntitlementDTO.toModel(identifier: String): AppActorEntitle
         grantedBy = grantedBy,
         ownershipType = AppActorOwnershipType.fromWireValue(ownershipType),
         periodType = AppActorPeriodType.fromWireValue(periodType),
-        willRenew = subscriptionStatus.isEntitled,
+        willRenew = willRenew,
         subscriptionStatus = subscriptionStatus,
         store = AppActorStore.fromWireValue(store),
         basePlanId = basePlanId,

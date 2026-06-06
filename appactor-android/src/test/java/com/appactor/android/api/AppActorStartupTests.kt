@@ -1,15 +1,18 @@
 package com.appactor.android.api
 
 import android.content.Context
+import android.os.Looper
 import androidx.test.core.app.ApplicationProvider
 import com.appactor.android.backend.client.AppActorBackendJson
 import com.appactor.android.backend.dto.AppActorGoogleReceiptRequestDTO
 import com.appactor.android.billing.AppActorStoreProduct
 import com.appactor.android.models.AppActorConfiguration
 import com.appactor.android.models.AppActorProductType
+import com.appactor.android.models.AppActorReceiptPipelineEvent
 import com.appactor.android.models.AppActorStore
 import com.appactor.android.models.AppActorStoreCapability
 import com.appactor.android.models.AppActorStorefront
+import com.appactor.android.models.appActorPublicReceiptId
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
@@ -21,7 +24,9 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
@@ -311,6 +316,125 @@ class AppActorStartupTests {
         }
 
         assertTrue(AppActor.onReceiptPipelineEvent === callback)
+    }
+
+    @Test
+    fun `customer info callback survives reset and fires again after reconfigure`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val deliveredUserIds = ConcurrentHashMap.newKeySet<String>()
+        val callbackLatch = CountDownLatch(1)
+        val fakeStoreAdapter = FakeStoreAdapter()
+        AppActor.storeAdapterFactory = { fakeStoreAdapter }
+
+        AppActor.onCustomerInfoChanged = { info ->
+            val appUserId = info.appUserId
+            if (appUserId == "user_reset_b" && deliveredUserIds.add(appUserId)) {
+                callbackLatch.countDown()
+            }
+        }
+
+        TestBackendServer { request ->
+            when (val path = request.path?.substringBefore("?")) {
+                "/v1/payment/offerings" -> jsonResponse(
+                    """
+                        {
+                          "requestId": "req_offerings_callback_reconfigure",
+                          "data": {
+                            "offerings": [],
+                            "productEntitlements": {}
+                          }
+                        }
+                    """.trimIndent(),
+                )
+
+                else -> if (path?.startsWith("/v1/customers/") == true) {
+                    val appUserId = path.substringAfter("/v1/customers/")
+                    customerEnvelope(
+                        requestId = "req_customer_callback_reconfigure_$appUserId",
+                        appUserId = appUserId,
+                    ).let(::jsonResponse)
+                } else {
+                    jsonResponse("{}", 404)
+                }
+            }
+        }.use { backend ->
+            AppActor.configure(
+                AppActorConfiguration(
+                    context = context,
+                    apiKey = "pk_test_123",
+                    appUserId = "user_reset_a",
+                    baseUrl = backend.baseUrl,
+                    options = testOptionsForLocalBackend(),
+                )
+            )
+
+            AppActor.reset()
+
+            AppActor.configure(
+                AppActorConfiguration(
+                    context = context,
+                    apiKey = "pk_test_123",
+                    appUserId = "user_reset_b",
+                    baseUrl = backend.baseUrl,
+                    options = testOptionsForLocalBackend(),
+                )
+            )
+        }
+
+        assertTrue(awaitMainThreadCallback(callbackLatch))
+        assertTrue(deliveredUserIds.contains("user_reset_b"))
+    }
+
+    @Test
+    fun `queued receipt callback from a previous runtime is dropped after reset`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val callbackLatch = CountDownLatch(1)
+
+        AppActor.onReceiptPipelineEvent = {
+            callbackLatch.countDown()
+        }
+
+        stubBackend().use { backend ->
+            AppActor.configure(
+                AppActorConfiguration(
+                    context = context,
+                    apiKey = "pk_test_123",
+                    appUserId = "user_runtime_a",
+                    baseUrl = backend.baseUrl,
+                    options = testOptionsForLocalBackend(),
+                )
+            )
+
+            val publishMethod = AppActor::class.java.getDeclaredMethod(
+                "publishReceiptPipelineEvent",
+                java.lang.Long.TYPE,
+                AppActorReceiptPipelineEvent::class.java,
+            ).apply {
+                isAccessible = true
+            }
+
+            shadowOf(Looper.getMainLooper()).pause()
+            Thread {
+                publishMethod.invoke(
+                    AppActor,
+                    currentRuntimeSessionId(),
+                    AppActorReceiptPipelineEvent.RetryScheduled(
+                        key = appActorPublicReceiptId("raw_receipt_key_runtime_a"),
+                        productId = "com.appactor.pro.monthly",
+                        retryCount = 1,
+                        nextRetryAtMillis = 1_234L,
+                        errorCode = "NETWORK_TIMEOUT",
+                        appUserId = "user_runtime_a",
+                    ),
+                )
+            }.apply {
+                start()
+                join()
+            }
+
+            AppActor.reset()
+            assertFalse(awaitMainThreadCallback(callbackLatch, timeoutMillis = 500L))
+        }
     }
 
     @Test

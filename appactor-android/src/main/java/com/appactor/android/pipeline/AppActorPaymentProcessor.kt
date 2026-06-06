@@ -44,6 +44,7 @@ import com.appactor.android.storage.AppActorReceiptQueuePhase
 import com.appactor.android.storage.AppActorReceiptQueueStore
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -84,6 +85,13 @@ internal class AppActorPaymentProcessor(
     // Keep receipt reconciliation single-flight so purchase updates, startup sync,
     // restore, and foreground drains can't race each other.
     private val pipelineMutex = Mutex()
+    // Dedicated monitor guarding the retry-wake scheduler state below. All
+    // reads/writes of retryWakeJob and scheduledRetryAtMillis — including the
+    // cancel+assign sequence in scheduleNextRetryWake() and the cleanup inside
+    // the launched wake coroutines — must happen under this lock so they share a
+    // consistent happens-before relationship regardless of the calling thread or
+    // whether pipelineMutex is held. (See audit android-6.)
+    private val retryWakeLock = Any()
     private var retryWakeJob: Job? = null
     private var scheduledRetryAtMillis: Long? = null
     // Key: purchaseToken, Value: legacy "productId|timestampMillis" or
@@ -1902,46 +1910,76 @@ internal class AppActorPaymentProcessor(
 
     private fun scheduleNextRetryWake(limit: Int = 20) {
         val now = dateProviderMillis()
-        val nextReadyAt = nextReadyAtMillis(now) ?: run {
-            retryWakeJob?.cancel()
-            retryWakeJob = null
-            scheduledRetryAtMillis = null
-            return
-        }
-
-        if (nextReadyAt <= now) {
-            val runningImmediateDrain = scheduledRetryAtMillis == null && retryWakeJob?.isActive == true
-            if (runningImmediateDrain) {
+        // All inspection and mutation of retryWakeJob/scheduledRetryAtMillis is
+        // funnelled through this monitor so the cancel+assign is atomic and
+        // visible across the coroutine Mutex callers, the lock-free callers, and
+        // the background wake threads. The drain itself is launched (not run)
+        // inside the lock, so we never hold the monitor across suspension.
+        synchronized(retryWakeLock) {
+            val nextReadyAt = nextReadyAtMillis(now) ?: run {
+                retryWakeJob?.cancel()
+                retryWakeJob = null
+                scheduledRetryAtMillis = null
                 return
             }
-            retryWakeJob?.cancel()
-            scheduledRetryAtMillis = null
-            retryWakeJob = backgroundScope.launch {
-                pipelineMutex.withLock {
-                    drainAllLocked(limit)
+
+            if (nextReadyAt <= now) {
+                val runningImmediateDrain = scheduledRetryAtMillis == null && retryWakeJob?.isActive == true
+                if (runningImmediateDrain) {
+                    return
                 }
-                retryWakeJob = null
-                scheduleNextRetryWake(limit)
+                retryWakeJob?.cancel()
+                scheduledRetryAtMillis = null
+                launchRetryWake(limit, delayMillis = 0L)
+                return
             }
-            return
-        }
 
-        if (scheduledRetryAtMillis == nextReadyAt && retryWakeJob?.isActive == true) {
-            return
-        }
+            if (scheduledRetryAtMillis == nextReadyAt && retryWakeJob?.isActive == true) {
+                return
+            }
 
-        retryWakeJob?.cancel()
-        scheduledRetryAtMillis = nextReadyAt
-        val delayMillis = maxOf(nextReadyAt - now, 250L)
-        retryWakeJob = backgroundScope.launch {
-            delay(delayMillis)
+            retryWakeJob?.cancel()
+            scheduledRetryAtMillis = nextReadyAt
+            launchRetryWake(limit, delayMillis = maxOf(nextReadyAt - now, 250L))
+        }
+    }
+
+    /**
+     * Launches a single wake coroutine and atomically records it as the active
+     * [retryWakeJob]. Must be called while holding [retryWakeLock].
+     *
+     * The completion cleanup re-acquires [retryWakeLock] and only clears the
+     * scheduler fields when they still reference *this* job, so a newer schedule
+     * that replaced [retryWakeJob] after this one started is never clobbered —
+     * preventing the lost-cancel / orphaned-coroutine race (audit android-6).
+     */
+    private fun launchRetryWake(limit: Int, delayMillis: Long) {
+        // Started lazily so the field assignment below completes before the
+        // coroutine body can read `thisJob`, guaranteeing the identity check in
+        // the completion cleanup observes an initialized reference.
+        lateinit var thisJob: Job
+        thisJob = backgroundScope.launch(start = CoroutineStart.LAZY) {
+            if (delayMillis > 0L) {
+                delay(delayMillis)
+            }
             pipelineMutex.withLock {
                 drainAllLocked(limit)
             }
-            retryWakeJob = null
-            scheduledRetryAtMillis = null
-            scheduleNextRetryWake(limit)
+            val isStillActiveJob = synchronized(retryWakeLock) {
+                if (retryWakeJob === thisJob) {
+                    retryWakeJob = null
+                    scheduledRetryAtMillis = null
+                    true
+                } else {
+                    false
+                }
+            }
+            if (isStillActiveJob) {
+                scheduleNextRetryWake(limit)
+            }
         }
+        retryWakeJob = thisJob
+        thisJob.start()
     }
 
     private fun buildOfflineCustomerInfo(
