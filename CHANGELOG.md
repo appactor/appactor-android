@@ -7,6 +7,7 @@
 - Fixed: the retry-wake scheduler guards all shared state under a dedicated lock with an identity-checked completion cleanup, closing a data race. (audit android-6)
 - Fixed: blank-argument validation errors now surface as `CODE_VALIDATION` (`InvalidConfiguration`) instead of `CODE_UNKNOWN`. (audit android-10)
 - Fixed: the receipt-queue and posted-ledger stores retry the atomic rename instead of falling back to an in-place `writeText`, so a failed rename can no longer truncate the durable file. (audit android-19)
+- Changed: `reset()` / `AppActorBridge.reset()` no longer clear registered listeners, so customer-info / receipt-pipeline / deferred-purchase callbacks keep working after a reconfigure (previously they could go silent because event listening is idempotent). Callback delivery is now session+identity-epoch guarded, so stale callbacks from a superseded session/identity are dropped rather than fired.
 
 ## 2.3.8
 
