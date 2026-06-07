@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.3.10
+
+- Refactor: decomposed the 2357-line `AppActorPaymentProcessor` god-class into a ~1082-line orchestrator + 6 focused collaborators (`AppActorReceiptQueueDrainer`, `AppActorRestoreSyncCoordinator`, `AppActorRetryWakeScheduler`, `AppActorIdentityTransitionBuffer`, `AppActorPendingPurchaseRegistry`, `AppActorOfflineCustomerInfoBuilder`). Strictly behavior-preserving (no logic, ordering, error-handling, or lock-semantics change; shared `pipelineMutex` stays in the orchestrator, exclusive locks moved with their state). Internal-only — public API unchanged. (audit android-1)
+
 ## 2.3.9
 
 - Fixed: offline entitlement fallback now unions store-derived keys with the cached server-authoritative set instead of returning only store-derived keys, so promo/grant/cross-platform entitlements are no longer dropped offline. (audit android-3)
