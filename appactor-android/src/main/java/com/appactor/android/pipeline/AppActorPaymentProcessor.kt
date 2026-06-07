@@ -3,13 +3,7 @@ package com.appactor.android.pipeline
 import android.app.Activity
 import com.appactor.android.backend.client.AppActorBackendClient
 import com.appactor.android.internal.logging.AppActorLogger
-import com.appactor.android.backend.client.AppActorBackendException
-import com.appactor.android.backend.dto.AppActorCustomerEnvelopeDTO
-import com.appactor.android.backend.dto.AppActorGoogleBatchResultDTO
 import com.appactor.android.backend.dto.AppActorGoogleReceiptResponseDTO
-import com.appactor.android.backend.dto.AppActorGoogleRestorePurchaseDTO
-import com.appactor.android.backend.dto.AppActorGoogleRestoreRequestDTO
-import com.appactor.android.backend.dto.AppActorGoogleSyncRequestDTO
 import com.appactor.android.billing.AppActorStoreAdapter
 import com.appactor.android.billing.AppActorStorePurchase
 import com.appactor.android.billing.AppActorStorePurchaseLaunchResult
@@ -19,22 +13,15 @@ import com.appactor.android.managers.AppActorOfferingsManager
 import com.appactor.android.models.AppActorResolvedPurchaseTarget
 import com.appactor.android.models.AppActorConfiguration
 import com.appactor.android.models.AppActorCustomerInfo
-import com.appactor.android.models.AppActorEntitlementInfo
-import com.appactor.android.models.AppActorEntitlementKeyResolver
 import com.appactor.android.models.AppActorEnvironment
 import com.appactor.android.models.AppActorError
-import com.appactor.android.models.AppActorOwnershipType
 import com.appactor.android.models.AppActorPackage
-import com.appactor.android.models.AppActorPeriodType
 import com.appactor.android.models.AppActorProductType
 import com.appactor.android.models.AppActorPurchaseInfo
 import com.appactor.android.models.AppActorPurchaseResult
 import com.appactor.android.models.AppActorReceiptPipelineEvent
-import com.appactor.android.models.appActorGoogleObfuscatedAccountId
 import com.appactor.android.models.AppActorSubscriptionReplacementMode
 import com.appactor.android.models.AppActorStore
-import com.appactor.android.models.AppActorSubscriptionStatus
-import com.appactor.android.models.AppActorVerificationResult
 import com.appactor.android.models.toResolvedPurchaseTarget
 import com.appactor.android.storage.AppActorIdentityStore
 import com.appactor.android.storage.AppActorAtomicJsonReceiptQueueStore
@@ -85,113 +72,167 @@ internal class AppActorPaymentProcessor(
     // Keep receipt reconciliation single-flight so purchase updates, startup sync,
     // restore, and foreground drains can't race each other.
     private val pipelineMutex = Mutex()
-    // Dedicated monitor guarding the retry-wake scheduler state below. All
-    // reads/writes of retryWakeJob and scheduledRetryAtMillis — including the
-    // cancel+assign sequence in scheduleNextRetryWake() and the cleanup inside
-    // the launched wake coroutines — must happen under this lock so they share a
-    // consistent happens-before relationship regardless of the calling thread or
-    // whether pipelineMutex is held. (See audit android-6.)
-    private val retryWakeLock = Any()
-    private var retryWakeJob: Job? = null
-    private var scheduledRetryAtMillis: Long? = null
-    // Key: purchaseToken, Value: legacy "productId|timestampMillis" or
-    // "productId|recordedAtMillis|attemptStartedAtMillis|attemptId".
-    private val pendingPurchaseTokens = java.util.concurrent.ConcurrentHashMap<String, String>()
-    private val foregroundPurchaseProductExpiries = java.util.concurrent.ConcurrentHashMap<String, Long>()
-    private val foregroundPurchaseProductContexts = java.util.concurrent.ConcurrentHashMap<String, AppActorClientPurchaseContext>()
-    private val pendingPrefs = configuration.applicationContext.getSharedPreferences(
-        PENDING_PREFS_NAME, android.content.Context.MODE_PRIVATE,
+    // Owns pending-purchase token persistence + recent-foreground-purchase
+    // markers. The maps inside are ConcurrentHashMaps (no extra lock); its
+    // methods are synchronous and lock-free, so they're safe to call while
+    // holding pipelineMutex.
+    private val pendingPurchaseRegistry = AppActorPendingPurchaseRegistry(
+        configuration = configuration,
+        dateProviderMillis = dateProviderMillis,
     )
 
-    init {
-        // Restore persisted pending purchase state from previous session
-        val now = dateProviderMillis()
-        pendingPrefs.all.forEach { (token, value) ->
-            val entry = value as? String ?: return@forEach
-            val pendingEntry = PendingPurchaseEntry.parse(entry) ?: return@forEach
-            if (now - pendingEntry.recordedAtMillis < PENDING_EXPIRY_MILLIS) {
-                pendingPurchaseTokens[token] = entry
-            }
-        }
-    }
+    private val offlineCustomerInfoBuilder = AppActorOfflineCustomerInfoBuilder(
+        configuration = configuration,
+    )
 
     @Volatile
     var onDeferredPurchaseResolved: ((productId: String, customerInfo: AppActorCustomerInfo) -> Unit)? = null
 
     // Identity transition buffering — prevents wrong-user attribution
-    // when purchases arrive between drainAll() and identity switch.
-    private val transitionMutex = Mutex()
-    private var identityTransitionAppUserId: String? = null
-    private val identityTransitionBuffer = mutableListOf<BufferedPurchase>()
-    private val maxTransitionBufferSize = 50
-
-    private data class BufferedPurchase(
-        val purchase: AppActorStorePurchase,
-        val capturedAppUserId: String,
-        val purchaseUpdateContext: PurchaseUpdateContext,
+    // when purchases arrive between drainAll() and identity switch. The
+    // collaborator owns its own dedicated transitionMutex + buffer state.
+    private val identityTransitionBuffer = AppActorIdentityTransitionBuffer(
+        identityStore = identityStore,
     )
 
-    private data class PurchaseUpdateContext(
+    // Owns the retry-wake scheduler state: retryWakeJob, scheduledRetryAtMillis,
+    // and its exclusive retryWakeLock (audit android-6). The drain it triggers
+    // runs under the shared pipelineMutex via the supplied callback — the
+    // orchestrator keeps the mutex; the scheduler never touches it. The
+    // rate-limit cooldown check lives in the receipt-queue drainer (shared with
+    // hasReadyWork and the locked drain) and is supplied as a synchronous
+    // callback that delegates to it. Both callbacks are evaluated lazily at
+    // runtime, so the mutual reference with receiptQueueDrainer is safe despite
+    // declaration order.
+    private val retryWakeScheduler: AppActorRetryWakeScheduler = AppActorRetryWakeScheduler(
+        queueStore = queueStore,
+        backgroundScope = backgroundScope,
+        dateProviderMillis = dateProviderMillis,
+        activeRateLimitCooldown = { nowMillis -> receiptQueueDrainer.activeRateLimitCooldown(nowMillis) },
+        runDrainUnderPipelineLock = { limit ->
+            pipelineMutex.withLock {
+                receiptQueueDrainer.drainAllAssumingLocked(limit)
+            }
+        },
+    )
+
+    // Owns the receipt-queue drain / retry / dead-letter engine. The shared
+    // pipelineMutex is NOT moved here — it STAYS in this orchestrator. The
+    // drainer's *AssumingLocked methods assume the caller already holds
+    // pipelineMutex; this orchestrator acquires the mutex and then calls them.
+    // Shared logic (entitlement resolution, queue-item normalization, posted-
+    // ledger keying, retry-wake rescheduling, deferred-callback resolution)
+    // stays in this orchestrator and is supplied as callbacks so there is a
+    // single implementation.
+    private val receiptQueueDrainer: AppActorReceiptQueueDrainer = AppActorReceiptQueueDrainer(
+        backendClient = backendClient,
+        storeAdapter = storeAdapter,
+        queueStore = queueStore,
+        customerManager = customerManager,
+        identityStore = identityStore,
+        offlineCustomerInfoBuilder = offlineCustomerInfoBuilder,
+        onPipelineEvent = onPipelineEvent,
+        dateProviderMillis = dateProviderMillis,
+        ensureProductEntitlements = { ensureProductEntitlements() },
+        normalizeQueueItemForPosting = { item, productEntitlements ->
+            normalizeQueueItemForPosting(item, productEntitlements)
+        },
+        isPurchasePosted = { item -> isPurchasePosted(item) },
+        markPurchasePosted = { item -> markPurchasePosted(item) },
+        finalizePostedPurchase = { item -> finalizePostedPurchase(item) },
+        resolveDeferredPurchaseCallbackIfNeeded = { purchaseToken, customerInfo, emitCallback ->
+            resolveDeferredPurchaseCallbackIfNeeded(
+                purchaseToken = purchaseToken,
+                customerInfo = customerInfo,
+                emitCallback = emitCallback,
+            )
+        },
+        scheduleNextRetryWake = { retryWakeScheduler.scheduleNextRetryWake() },
+    )
+
+    // Owns restore + startup/foreground-sync PLANNING (bulk-restore batch builder,
+    // foreground-sync orchestration, finalize/enqueue helpers). Same pipelineMutex
+    // rule as the drainer: the shared lock STAYS in this orchestrator; the
+    // coordinator's *AssumingLocked entry points assume the caller already holds
+    // pipelineMutex, and the orchestrator acquires it before calling them. Shared
+    // logic (entitlement resolution, enqueue-and-process, queue-item construction,
+    // posted-ledger finalization, deferred-callback resolution) stays here and is
+    // supplied as callbacks so there is a single implementation. The post-lock
+    // retry-wake scheduling also stays in this orchestrator.
+    private val restoreSyncCoordinator: AppActorRestoreSyncCoordinator = AppActorRestoreSyncCoordinator(
+        backendClient = backendClient,
+        storeAdapter = storeAdapter,
+        queueStore = queueStore,
+        customerManager = customerManager,
+        identityStore = identityStore,
+        pendingPurchaseRegistry = pendingPurchaseRegistry,
+        receiptQueueDrainer = receiptQueueDrainer,
+        dateProviderMillis = dateProviderMillis,
+        ensureProductEntitlements = { refreshIfMissing ->
+            ensureProductEntitlements(refreshIfMissing = refreshIfMissing)
+        },
+        enqueueAndProcess = { purchase, productEntitlements, appUserIdOverride, sourceIntent, clientPurchaseContext ->
+            enqueueAndProcess(
+                purchase = purchase,
+                productEntitlements = productEntitlements,
+                appUserIdOverride = appUserIdOverride,
+                sourceIntent = sourceIntent,
+                clientPurchaseContext = clientPurchaseContext,
+            )
+        },
+        normalizePurchaseForPosting = { purchase -> normalizePurchaseForPosting(purchase) },
+        resolveUnknownOneTimePurchase = { purchase, productEntitlements ->
+            resolveUnknownOneTimePurchase(
+                purchase = purchase,
+                productEntitlements = productEntitlements,
+            )
+        },
+        consumePendingPurchaseUpdateContext = { purchase -> consumePendingPurchaseUpdateContext(purchase) },
+        fireDeferredPurchaseCallbackIfNeeded = { purchase, customerInfo, emitCallback ->
+            fireDeferredPurchaseCallbackIfNeeded(
+                purchase = purchase,
+                customerInfo = customerInfo,
+                emitCallback = emitCallback,
+            )
+        },
+        resolveDeferredPurchaseCallbackIfNeeded = { purchaseToken, customerInfo, emitCallback ->
+            resolveDeferredPurchaseCallbackIfNeeded(
+                purchaseToken = purchaseToken,
+                customerInfo = customerInfo,
+                emitCallback = emitCallback,
+            )
+        },
+        markPurchasePosted = { item -> markPurchasePosted(item) },
+        finalizePostedPurchase = { item -> finalizePostedPurchase(item) },
+        makeQueueItem = { purchase, appUserIdOverride, sourceIntent ->
+            makeQueueItem(
+                purchase = purchase,
+                appUserIdOverride = appUserIdOverride,
+                sourceIntent = sourceIntent,
+            )
+        },
+        queueItemForIncomingPurchase = { item -> queueItemForIncomingPurchase(item) },
+    )
+
+    internal data class PurchaseUpdateContext(
         val sourceIntent: String,
         val clientPurchaseContext: AppActorClientPurchaseContext?,
         val appUserId: String? = null,
     )
 
-    private data class CurrentPurchasesSyncMetadata(
-        val sourceIntent: String,
-        val source: String,
-        val clientDeliverySource: AppActorClientDeliverySource,
-    ) {
-        fun clientPurchaseContext(observedAtMillis: Long): AppActorClientPurchaseContext {
-            return AppActorClientPurchaseContext(
-                clientObservedAtMillis = observedAtMillis,
-                clientDeliverySource = clientDeliverySource,
-            )
-        }
-
-        companion object {
-            fun foregroundSync(): CurrentPurchasesSyncMetadata {
-                return CurrentPurchasesSyncMetadata(
-                    sourceIntent = SOURCE_INTENT_SYNC,
-                    source = "foreground_sync",
-                    clientDeliverySource = AppActorClientDeliverySource.ForegroundSync,
-                )
-            }
-
-            fun restoreFallback(): CurrentPurchasesSyncMetadata {
-                return CurrentPurchasesSyncMetadata(
-                    sourceIntent = SOURCE_INTENT_RESTORE,
-                    source = "user_restore",
-                    clientDeliverySource = AppActorClientDeliverySource.RestoreFlow,
-                )
-            }
-        }
-    }
-
     suspend fun beginIdentityTransition() {
-        transitionMutex.withLock {
-            identityTransitionAppUserId = identityStore.currentAppUserId
-                ?: identityStore.ensureAppUserId()
-        }
+        identityTransitionBuffer.begin()
     }
 
     suspend fun endIdentityTransition(): List<AppActorPurchaseUpdateProcessingResult> {
-        val buffered = transitionMutex.withLock {
-            val items = identityTransitionBuffer.toList()
-            identityTransitionBuffer.clear()
-            identityTransitionAppUserId = null
-            items
+        return identityTransitionBuffer.end { userId, purchases, contextOverrides, emitDeferredPurchaseCallback ->
+            processPurchaseUpdatesInternal(
+                purchases = purchases,
+                appUserIdOverride = userId,
+                purchaseUpdateContextOverrides = contextOverrides,
+                emitDeferredPurchaseCallback = emitDeferredPurchaseCallback,
+            )
         }
-        val currentAppUserId = identityStore.currentAppUserId
-        return buffered.groupBy { it.capturedAppUserId }
-            .mapNotNull { (userId, items) ->
-                processPurchaseUpdatesInternal(
-                    purchases = items.map { it.purchase },
-                    appUserIdOverride = userId,
-                    purchaseUpdateContextOverrides = items.associate { it.purchase.purchaseToken to it.purchaseUpdateContext },
-                    emitDeferredPurchaseCallback = currentAppUserId == userId,
-                )
-            }
     }
 
     suspend fun purchase(
@@ -275,21 +316,11 @@ internal class AppActorPaymentProcessor(
     ): AppActorPurchaseUpdateProcessingResult? {
         if (purchases.isEmpty()) return null
         if (appUserIdOverride == null) {
-            val overflow = transitionMutex.withLock {
-                val userId = identityTransitionAppUserId ?: return@withLock null
-                val overflowPurchases = mutableListOf<BufferedPurchase>()
-                purchases.forEach { purchase ->
-                    val updateContext = purchaseUpdateContextOverrides[purchase.purchaseToken]
-                        ?: resolvePurchaseUpdateContext(purchase)
-                    if (identityTransitionBuffer.size < maxTransitionBufferSize) {
-                        identityTransitionBuffer.add(BufferedPurchase(purchase, userId, updateContext))
-                    } else {
-                        overflowPurchases.add(BufferedPurchase(purchase, userId, updateContext))
-                        AppActorLogger.warn("[PaymentProcessor] Transition buffer full ($maxTransitionBufferSize), purchase ${purchase.productId} will be processed immediately with captured identity")
-                    }
-                }
-                overflowPurchases
-            }
+            val overflow = identityTransitionBuffer.bufferIfTransitioning(
+                purchases = purchases,
+                purchaseUpdateContextOverrides = purchaseUpdateContextOverrides,
+                resolveContext = { purchase -> resolvePurchaseUpdateContext(purchase) },
+            )
             if (overflow == null) {
                 // Fall through — no identity transition active.
             } else if (overflow.isEmpty()) {
@@ -352,7 +383,7 @@ internal class AppActorPaymentProcessor(
             }
             latestCustomer
         }
-        scheduleNextRetryWake()
+        retryWakeScheduler.scheduleNextRetryWake()
         return AppActorPurchaseUpdateProcessingResult(
             customerInfo = result,
             appUserId = processedAppUserId ?: return null,
@@ -380,20 +411,23 @@ internal class AppActorPaymentProcessor(
             placement = placement,
         )
         var keepForegroundMarker = false
-        markForegroundPurchaseProduct(foregroundProductId, clientPurchaseContext = clientPurchaseContext)
+        pendingPurchaseRegistry.markForegroundPurchaseProduct(foregroundProductId, clientPurchaseContext = clientPurchaseContext)
         try {
             return when (val launchResult = storeAdapter.launchPurchase(activity, resolvedRequest)) {
                 is AppActorStorePurchaseLaunchResult.Cancelled -> AppActorPurchaseResult.Cancelled
                 is AppActorStorePurchaseLaunchResult.Pending -> {
                     val now = dateProviderMillis()
                     launchResult.purchases.forEach { purchase ->
-                        pendingPurchaseTokens[purchase.purchaseToken] = clientPurchaseContext.toPendingEntry(
-                            productId = purchase.productId,
-                            recordedAtMillis = now,
-                            appUserId = appUserId,
+                        pendingPurchaseRegistry.putPendingEntry(
+                            purchase.purchaseToken,
+                            clientPurchaseContext.toPendingEntry(
+                                productId = purchase.productId,
+                                recordedAtMillis = now,
+                                appUserId = appUserId,
+                            ),
                         )
                     }
-                    persistPendingState()
+                    pendingPurchaseRegistry.persist()
                     AppActorPurchaseResult.Pending
                 }
                 is AppActorStorePurchaseLaunchResult.Failed -> throw when (launchResult.error) {
@@ -437,7 +471,7 @@ internal class AppActorPaymentProcessor(
                             )
 
                             is ProcessingOutcome.Queued -> {
-                                val offline = buildOfflineCustomerInfo(
+                                val offline = offlineCustomerInfoBuilder.buildOfflineCustomerInfo(
                                     purchase = primaryPurchase,
                                     appUserId = appUserId,
                                     productEntitlements = productEntitlements,
@@ -464,12 +498,12 @@ internal class AppActorPaymentProcessor(
                             )
                         }
                     }
-                    scheduleNextRetryWake()
+                    retryWakeScheduler.scheduleNextRetryWake()
                     purchaseResult
                 }
             }
         } catch (error: CancellationException) {
-            markForegroundPurchaseProduct(
+            pendingPurchaseRegistry.markForegroundPurchaseProduct(
                 productId = foregroundProductId,
                 ttlMillis = FOREGROUND_PURCHASE_CANCELLATION_GRACE_MILLIS,
             )
@@ -477,7 +511,7 @@ internal class AppActorPaymentProcessor(
             throw error
         } finally {
             if (!keepForegroundMarker) {
-                clearForegroundPurchaseProduct(foregroundProductId)
+                pendingPurchaseRegistry.clearForegroundPurchaseProduct(foregroundProductId)
             }
         }
     }
@@ -488,179 +522,14 @@ internal class AppActorPaymentProcessor(
         refreshEntitlementsIfMissing: Boolean = true,
     ): AppActorCustomerInfo? {
         val result = pipelineMutex.withLock {
-            syncCurrentPurchasesLocked(
+            restoreSyncCoordinator.syncCurrentPurchasesAssumingLocked(
                 limit = limit,
                 appUserIdOverride = appUserIdOverride,
                 refreshEntitlementsIfMissing = refreshEntitlementsIfMissing,
             )
         }
-        scheduleNextRetryWake(limit)
+        retryWakeScheduler.scheduleNextRetryWake(limit)
         return result
-    }
-
-    private suspend fun syncCurrentPurchasesLocked(
-        limit: Int = 20,
-        appUserIdOverride: String? = null,
-        excludedPurchaseTokens: Set<String> = emptySet(),
-        refreshEntitlementsIfMissing: Boolean = true,
-        metadata: CurrentPurchasesSyncMetadata = CurrentPurchasesSyncMetadata.foregroundSync(),
-    ): AppActorCustomerInfo? {
-        val appUserId = appUserIdOverride
-            ?.takeIf { it.isNotBlank() }
-            ?: identityStore.currentAppUserId
-            ?: identityStore.ensureAppUserId()
-        val productEntitlements = ensureProductEntitlements(
-            refreshIfMissing = refreshEntitlementsIfMissing,
-        )
-        var latestCustomer: AppActorCustomerInfo? = null
-        val syncCandidates = mutableListOf<AppActorStorePurchase>()
-
-        val allProcessedPurchases = mutableListOf<AppActorStorePurchase>()
-
-        storeAdapter.queryActivePurchases().forEach { purchase ->
-            val normalized = normalizePurchaseForPosting(purchase)
-            if (excludedPurchaseTokens.contains(normalized.purchaseToken)) {
-                return@forEach
-            }
-            allProcessedPurchases += normalized
-            val pendingUpdateContext = consumePendingPurchaseUpdateContext(normalized)
-            if (pendingUpdateContext != null) {
-                val pendingAppUserId = pendingUpdateContext.appUserId?.takeIf { it.isNotBlank() } ?: appUserId
-                when (val outcome = enqueueAndProcess(
-                    normalized,
-                    productEntitlements,
-                    pendingAppUserId,
-                    sourceIntent = pendingUpdateContext.sourceIntent,
-                    clientPurchaseContext = pendingUpdateContext.clientPurchaseContext,
-                )) {
-                    is ProcessingOutcome.Success -> {
-                        latestCustomer = outcome.customerInfo
-                        fireDeferredPurchaseCallbackIfNeeded(
-                            normalized,
-                            outcome.customerInfo,
-                            emitCallback = identityStore.currentAppUserId == pendingAppUserId,
-                        )
-                    }
-                    is ProcessingOutcome.AlreadyPosted -> {
-                        latestCustomer = outcome.customerInfo
-                        fireDeferredPurchaseCallbackIfNeeded(
-                            normalized,
-                            outcome.customerInfo,
-                            emitCallback = identityStore.currentAppUserId == pendingAppUserId,
-                        )
-                    }
-                    is ProcessingOutcome.Queued,
-                    is ProcessingOutcome.PermanentFailure -> Unit
-                }
-                return@forEach
-            }
-            if (normalized.productType == AppActorProductType.Unknown) {
-                when (val outcome = enqueueAndProcess(
-                    normalized,
-                    productEntitlements,
-                    appUserId,
-                    sourceIntent = metadata.sourceIntent,
-                    clientPurchaseContext = metadata.clientPurchaseContext(dateProviderMillis()),
-                )) {
-                    is ProcessingOutcome.Success -> latestCustomer = outcome.customerInfo
-                    is ProcessingOutcome.AlreadyPosted -> latestCustomer = outcome.customerInfo
-                    is ProcessingOutcome.Queued,
-                    is ProcessingOutcome.PermanentFailure -> Unit
-                }
-            } else {
-                syncCandidates += normalized
-            }
-        }
-
-        if (syncCandidates.isNotEmpty()) {
-            try {
-                val syncContext = metadata.clientPurchaseContext(dateProviderMillis())
-                val response = backendClient.postGoogleSync(
-                    AppActorGoogleSyncRequestDTO(
-                        appUserId = appUserId,
-                        obfuscatedAccountId = appActorGoogleObfuscatedAccountId(appUserId),
-                        obfuscatedProfileId = null,
-                        sourceIntent = metadata.sourceIntent,
-                        source = metadata.source,
-                        observedAt = isoNow(),
-                        clientPurchaseAttemptStartedAt = syncContext.clientPurchaseAttemptStartedAt,
-                        clientObservedAt = syncContext.clientObservedAt,
-                        clientDeliverySource = syncContext.clientDeliverySource.wireValue,
-                        clientPurchaseAttemptId = syncContext.clientPurchaseAttemptId,
-                        sdkOriginated = syncContext.sdkOriginated,
-                        sdkVersion = syncContext.sdkVersion,
-                        purchases = syncCandidates.map { it.toRestorePurchaseDTO() },
-                    )
-                )
-                val body = requireNotNull(response.body) { "Google sync response body was null." }
-                val resolvedAppUserId = adoptResolvedAppUserId(
-                    requestedAppUserId = appUserId,
-                    resolvedAppUserId = body.appUserId,
-                )
-                customerManager.seedEnvelope(
-                    appUserId = resolvedAppUserId,
-                    envelope = AppActorCustomerEnvelopeDTO(
-                        requestId = body.requestId,
-                        appUserId = resolvedAppUserId,
-                        customer = body.customer,
-                    ),
-                    eTag = null,
-                    verified = response.signatureVerified,
-                )
-                val successfulPurchaseKeys = successfulBatchPurchaseKeys(
-                    purchases = syncCandidates,
-                    successCount = body.syncedCount,
-                    results = body.results,
-                )
-                finalizeRestoredActivePurchases(
-                    purchases = syncCandidates.filter { purchase ->
-                        successfulPurchaseKeys.contains(batchPurchaseKey(purchase))
-                    },
-                    appUserId = resolvedAppUserId,
-                )
-                enqueueFailedBatchPurchases(
-                    syncCandidates,
-                    successfulPurchaseKeys,
-                    productEntitlements,
-                    resolvedAppUserId,
-                    metadata.sourceIntent,
-                    syncContext,
-                )
-                latestCustomer = customerManager.cachedInfo(resolvedAppUserId)
-            } catch (throwable: Throwable) {
-                if (throwable is CancellationException) throw throwable
-                syncCandidates.forEach { purchase ->
-                    when (
-                        val outcome = enqueueAndProcess(
-                            purchase,
-                            productEntitlements,
-                            appUserId,
-                            sourceIntent = metadata.sourceIntent,
-                            clientPurchaseContext = metadata.clientPurchaseContext(dateProviderMillis()),
-                        )
-                    ) {
-                        is ProcessingOutcome.Success -> latestCustomer = outcome.customerInfo
-                        is ProcessingOutcome.AlreadyPosted -> latestCustomer = outcome.customerInfo
-                        is ProcessingOutcome.Queued,
-                        is ProcessingOutcome.PermanentFailure -> Unit
-                    }
-                }
-            }
-        }
-
-        val drained = drainAllLocked(limit)
-        if (drained != null) {
-            latestCustomer = drained
-        }
-
-        // Fire deferred purchase callbacks for any pending purchases that were resolved during sync
-        if (latestCustomer != null && pendingPurchaseTokens.isNotEmpty()) {
-            allProcessedPurchases.forEach { purchase ->
-                fireDeferredPurchaseCallbackIfNeeded(purchase, latestCustomer!!)
-            }
-        }
-
-        return latestCustomer
     }
 
     suspend fun restorePurchases(
@@ -668,228 +537,30 @@ internal class AppActorPaymentProcessor(
         appUserIdOverride: String? = null,
     ): AppActorCustomerInfo {
         val result = pipelineMutex.withLock {
-            restorePurchasesLocked(maxPurchases = maxPurchases, appUserIdOverride = appUserIdOverride)
+            restoreSyncCoordinator.restorePurchasesAssumingLocked(
+                maxPurchases = maxPurchases,
+                appUserIdOverride = appUserIdOverride,
+            )
         }
-        scheduleNextRetryWake()
+        retryWakeScheduler.scheduleNextRetryWake()
         return result
-    }
-
-    private suspend fun restorePurchasesLocked(
-        maxPurchases: Int = 500,
-        appUserIdOverride: String? = null,
-    ): AppActorCustomerInfo {
-        val batchSize = maxPurchases.coerceAtLeast(1)
-        var currentAppUserId = appUserIdOverride
-            ?.takeIf { it.isNotBlank() }
-            ?: identityStore.currentAppUserId
-            ?: identityStore.ensureAppUserId()
-        val activePurchases = storeAdapter.queryActivePurchases()
-        val historyPurchases = storeAdapter.queryPurchaseHistory()
-        if (activePurchases.isEmpty() && historyPurchases.isEmpty()) {
-            return customerManager.getCustomerInfo(currentAppUserId, forceRefresh = true)
-        }
-
-        val productEntitlements = ensureProductEntitlements()
-        val restorePlan = buildRestorePlan(
-            activePurchases = activePurchases,
-            historyPurchases = historyPurchases,
-            productEntitlements = productEntitlements,
-        )
-        if (restorePlan.bulkCandidates.isEmpty()) {
-            val syncCustomer = if (restorePlan.followUpSyncRequired) {
-                syncCurrentPurchasesLocked(
-                    limit = batchSize,
-                    appUserIdOverride = currentAppUserId,
-                    metadata = CurrentPurchasesSyncMetadata.restoreFallback(),
-                )
-            } else {
-                null
-            }
-            currentAppUserId = identityStore.currentAppUserId ?: currentAppUserId
-            if (syncCustomer != null) {
-                return syncCustomer
-            }
-            return customerManager.getCustomerInfo(
-                currentAppUserId,
-                forceRefresh = true,
-                persistIdentityState = false,
-            )
-        }
-
-        val restoreBatches = restorePlan.bulkCandidates.chunked(batchSize)
-        val shouldRunFollowUpSync = restorePlan.followUpSyncRequired
-
-        var latestBatchCustomer: AppActorCustomerInfo? = null
-        for (batchIndex in restoreBatches.indices) {
-            val batch = restoreBatches[batchIndex]
-            try {
-                val restoreContext = AppActorClientPurchaseContext.restoreFlow(dateProviderMillis())
-                val activeCandidates = batch
-                    .filter { it.isActive }
-                    .map { it.purchase }
-                val response = backendClient.postGoogleRestore(
-                    AppActorGoogleRestoreRequestDTO(
-                        appUserId = currentAppUserId,
-                        obfuscatedAccountId = appActorGoogleObfuscatedAccountId(currentAppUserId),
-                        obfuscatedProfileId = null,
-                        sourceIntent = SOURCE_INTENT_RESTORE,
-                        source = "user_restore",
-                        observedAt = isoNow(),
-                        clientPurchaseAttemptStartedAt = restoreContext.clientPurchaseAttemptStartedAt,
-                        clientObservedAt = restoreContext.clientObservedAt,
-                        clientDeliverySource = restoreContext.clientDeliverySource.wireValue,
-                        clientPurchaseAttemptId = restoreContext.clientPurchaseAttemptId,
-                        sdkOriginated = restoreContext.sdkOriginated,
-                        sdkVersion = restoreContext.sdkVersion,
-                        purchases = batch.map { it.purchase.toRestorePurchaseDTO() },
-                    )
-                )
-                val body = requireNotNull(response.body) { "Google restore response body was null." }
-                val resolvedAppUserId = adoptResolvedAppUserId(
-                    requestedAppUserId = currentAppUserId,
-                    resolvedAppUserId = body.appUserId,
-                )
-                currentAppUserId = resolvedAppUserId
-                customerManager.seedEnvelope(
-                    appUserId = resolvedAppUserId,
-                    envelope = AppActorCustomerEnvelopeDTO(
-                        requestId = body.requestId,
-                        appUserId = resolvedAppUserId,
-                        customer = body.customer,
-                    ),
-                    eTag = null,
-                    verified = response.signatureVerified,
-                )
-                val successfulPurchaseKeys = successfulBatchPurchaseKeys(
-                    purchases = activeCandidates,
-                    successCount = body.restoredCount,
-                    results = body.results,
-                )
-                val successfullyRestoredActivePurchases = activeCandidates.filter { purchase ->
-                    successfulPurchaseKeys.contains(batchPurchaseKey(purchase))
-                }
-                finalizeRestoredActivePurchases(
-                    purchases = successfullyRestoredActivePurchases,
-                    appUserId = resolvedAppUserId,
-                )
-                enqueueFailedBatchPurchases(
-                    activeCandidates,
-                    successfulPurchaseKeys,
-                    productEntitlements,
-                    resolvedAppUserId,
-                    SOURCE_INTENT_RESTORE,
-                    restoreContext,
-                )
-                val restoredCustomer = customerManager.cachedInfo(resolvedAppUserId)
-                latestBatchCustomer = restoredCustomer
-                if (restoredCustomer != null) {
-                    successfullyRestoredActivePurchases.forEach { purchase ->
-                        resolveDeferredPurchaseCallbackIfNeeded(
-                            purchaseToken = purchase.purchaseToken,
-                            customerInfo = restoredCustomer,
-                        )
-                    }
-                }
-            } catch (throwable: Throwable) {
-                if (throwable is CancellationException) throw throwable
-                val fallbackCustomer = runCatching {
-                    val syncCustomer = syncCurrentPurchasesLocked(
-                        limit = batchSize,
-                        appUserIdOverride = currentAppUserId,
-                        metadata = CurrentPurchasesSyncMetadata.restoreFallback(),
-                    )
-                    currentAppUserId = identityStore.currentAppUserId ?: currentAppUserId
-                    syncCustomer ?: customerManager.getCustomerInfo(
-                        currentAppUserId,
-                        forceRefresh = true,
-                        persistIdentityState = false,
-                    )
-                }
-                val remainingHistoryRestore = restoreBatches
-                    .subList(batchIndex, restoreBatches.size)
-                    .any { remainingBatch -> remainingBatch.any { !it.isActive } }
-                if (remainingHistoryRestore) {
-                    fallbackCustomer.exceptionOrNull()?.let(throwable::addSuppressed)
-                    throw restoreFailure(
-                        throwable,
-                        "Failed to restore full Google Play purchase history."
-                    )
-                }
-                return fallbackCustomer.getOrElse { syncThrowable ->
-                    throw restoreFailure(
-                        syncThrowable,
-                        "Failed to restore Google Play purchases."
-                    )
-                }
-            }
-        }
-        val followUpCustomer = if (shouldRunFollowUpSync) {
-            syncCurrentPurchasesLocked(
-                limit = batchSize,
-                appUserIdOverride = currentAppUserId,
-                excludedPurchaseTokens = restorePlan.restoredActivePurchaseTokens,
-                metadata = CurrentPurchasesSyncMetadata.restoreFallback(),
-            )
-        } else {
-            null
-        }
-        return followUpCustomer
-            ?: latestBatchCustomer
-            ?: customerManager.getCustomerInfo(
-                currentAppUserId,
-                forceRefresh = true,
-                persistIdentityState = false,
-            )
     }
 
     suspend fun drainReadyQueue(limit: Int = 20): AppActorCustomerInfo? {
         val result = pipelineMutex.withLock {
-            drainReadyQueueLocked(limit)
+            receiptQueueDrainer.drainReadyQueueAssumingLocked(limit)
         }
-        scheduleNextRetryWake(limit)
+        retryWakeScheduler.scheduleNextRetryWake(limit)
         return result
-    }
-
-    private suspend fun drainReadyQueueLocked(limit: Int = 20): AppActorCustomerInfo? {
-        val now = dateProviderMillis()
-        if (activeRateLimitCooldown(now) != null) return null
-        val claimed = queueStore.claimReady(limit = limit, nowMillis = now)
-        if (claimed.isEmpty()) return null
-
-        val productEntitlements = ensureProductEntitlements()
-        var latestCustomer: AppActorCustomerInfo? = null
-        claimed.forEach { item ->
-            when (val outcome = processClaimedItem(item, productEntitlements)) {
-                is ProcessingOutcome.Success -> {
-                    latestCustomer = outcome.customerInfo
-                    resolveDeferredPurchaseCallbackIfNeeded(
-                        purchaseToken = item.purchaseToken,
-                        customerInfo = outcome.customerInfo,
-                        emitCallback = identityStore.currentAppUserId == item.appUserId,
-                    )
-                }
-                is ProcessingOutcome.AlreadyPosted -> {
-                    latestCustomer = outcome.customerInfo
-                    resolveDeferredPurchaseCallbackIfNeeded(
-                        purchaseToken = item.purchaseToken,
-                        customerInfo = outcome.customerInfo,
-                        emitCallback = identityStore.currentAppUserId == item.appUserId,
-                    )
-                }
-                is ProcessingOutcome.Queued,
-                is ProcessingOutcome.PermanentFailure -> Unit
-            }
-        }
-        return latestCustomer
     }
 
     suspend fun drainAll(
         limit: Int = 20,
     ): AppActorCustomerInfo? {
         val result = pipelineMutex.withLock {
-            drainAllLocked(limit)
+            receiptQueueDrainer.drainAllAssumingLocked(limit)
         }
-        scheduleNextRetryWake(limit)
+        retryWakeScheduler.scheduleNextRetryWake(limit)
         return result
     }
 
@@ -935,26 +606,10 @@ internal class AppActorPaymentProcessor(
             )
         }
         val result = pipelineMutex.withLock {
-            drainAllLocked(limit)
+            receiptQueueDrainer.drainAllAssumingLocked(limit)
         }
-        scheduleNextRetryWake(limit)
+        retryWakeScheduler.scheduleNextRetryWake(limit)
         return result
-    }
-
-    private suspend fun drainAllLocked(
-        limit: Int = 20,
-    ): AppActorCustomerInfo? {
-        var latestCustomer: AppActorCustomerInfo? = null
-        while (true) {
-            val drained = drainReadyQueueLocked(limit)
-            if (drained != null) {
-                latestCustomer = drained
-            }
-            if (drained == null || !hasReadyWork()) {
-                break
-            }
-        }
-        return latestCustomer
     }
 
     private suspend fun enqueueAndProcess(
@@ -978,7 +633,7 @@ internal class AppActorPaymentProcessor(
         val item = queueItemForIncomingPurchase(rawItem)
         val existing = queueStore.get(item.key)
         if (existing?.phase == AppActorReceiptQueuePhase.DeadLettered) {
-            val revived = reviveRecoverableDeadLetter(
+            val revived = receiptQueueDrainer.reviveRecoverableDeadLetter(
                 existing = existing,
                 incoming = item,
                 productEntitlements = productEntitlements,
@@ -996,7 +651,7 @@ internal class AppActorPaymentProcessor(
                         orderId = revived.orderId,
                     )
                 )
-                return processClaimedItem(
+                return receiptQueueDrainer.processClaimedItem(
                     revived.copy(
                         phase = AppActorReceiptQueuePhase.Posting,
                         claimedAtMillis = dateProviderMillis(),
@@ -1021,490 +676,7 @@ internal class AppActorPaymentProcessor(
         }
         queueStore.upsert(item)
         val mergedItem = queueStore.get(item.key) ?: item
-        return processClaimedItem(mergedItem.copy(phase = AppActorReceiptQueuePhase.Posting), productEntitlements)
-    }
-
-    private suspend fun reviveRecoverableDeadLetter(
-        existing: AppActorReceiptQueueItem,
-        incoming: AppActorReceiptQueueItem,
-        productEntitlements: Map<String, List<String>>,
-    ): AppActorReceiptQueueItem? {
-        if (existing.productType != AppActorProductType.Unknown.wireValue) {
-            return null
-        }
-
-        val now = dateProviderMillis()
-        val adoptClientContext = shouldAdoptDeadLetterClientPurchaseContext(existing, incoming)
-        val baseline = existing.copy(
-            appUserId = incoming.appUserId,
-            environment = incoming.environment,
-            purchaseState = incoming.purchaseState,
-            orderId = incoming.orderId ?: existing.orderId,
-            obfuscatedAccountId = incoming.obfuscatedAccountId ?: existing.obfuscatedAccountId,
-            rawPurchaseData = incoming.rawPurchaseData ?: existing.rawPurchaseData,
-            purchaseSignature = incoming.purchaseSignature ?: existing.purchaseSignature,
-            isAutoRenewing = incoming.isAutoRenewing ?: existing.isAutoRenewing,
-            priceAmountMicros = incoming.priceAmountMicros ?: existing.priceAmountMicros,
-            currencyCode = incoming.currencyCode ?: existing.currencyCode,
-            offeringId = incoming.offeringId ?: existing.offeringId,
-            packageId = incoming.packageId ?: existing.packageId,
-            sourceIntent = mergeDeadLetterSourceIntent(existing, incoming),
-            clientPurchaseAttemptStartedAt = if (adoptClientContext) {
-                incoming.clientPurchaseAttemptStartedAt
-            } else {
-                existing.clientPurchaseAttemptStartedAt
-            },
-            clientObservedAt = if (adoptClientContext) incoming.clientObservedAt else existing.clientObservedAt,
-            clientDeliverySource = if (adoptClientContext) incoming.clientDeliverySource else existing.clientDeliverySource,
-            clientPurchaseAttemptId = if (adoptClientContext) incoming.clientPurchaseAttemptId else existing.clientPurchaseAttemptId,
-            placement = existing.placement ?: incoming.placement,
-            sdkOriginated = if (adoptClientContext) incoming.sdkOriginated else existing.sdkOriginated,
-            sdkVersion = if (adoptClientContext) incoming.sdkVersion else existing.sdkVersion,
-            isAcknowledged = existing.isAcknowledged || incoming.isAcknowledged,
-            retryCount = 0,
-            nextRetryAtMillis = 0L,
-            claimedAtMillis = null,
-            phase = AppActorReceiptQueuePhase.NeedsPost,
-            lastUpdatedAtMillis = now,
-            lastError = null,
-        )
-
-        val resolved = if (incoming.productType != AppActorProductType.Unknown.wireValue) {
-            baseline.copy(
-                productType = incoming.productType,
-                basePlanId = incoming.basePlanId,
-                offerId = incoming.offerId,
-            )
-        } else {
-            normalizeQueueItemForPosting(baseline, productEntitlements)
-        }
-
-        return resolved.takeIf { it.productType != AppActorProductType.Unknown.wireValue }
-    }
-
-    private fun mergeDeadLetterSourceIntent(
-        existing: AppActorReceiptQueueItem,
-        incoming: AppActorReceiptQueueItem,
-    ): String {
-        val priority = mapOf(
-            SOURCE_INTENT_QUEUE to 0,
-            SOURCE_INTENT_SYNC to 1,
-            SOURCE_INTENT_RESTORE to 2,
-            SOURCE_INTENT_PURCHASE to 3,
-        )
-        val existingPriority = priority[existing.sourceIntent] ?: 0
-        val incomingPriority = priority[incoming.sourceIntent] ?: 0
-        return if (incomingPriority > existingPriority) incoming.sourceIntent else existing.sourceIntent
-    }
-
-    private fun shouldAdoptDeadLetterClientPurchaseContext(
-        existing: AppActorReceiptQueueItem,
-        incoming: AppActorReceiptQueueItem,
-    ): Boolean {
-        val incomingHasAttempt = incoming.clientPurchaseAttemptStartedAt != null &&
-            !incoming.clientPurchaseAttemptId.isNullOrBlank()
-        val incomingHasAnyContext = incoming.clientDeliverySource != null ||
-            incoming.clientPurchaseAttemptStartedAt != null ||
-            incoming.clientPurchaseAttemptId != null ||
-            incoming.clientObservedAt != null
-        if (!incomingHasAnyContext) return false
-
-        val existingHasAnyContext = existing.clientDeliverySource != null ||
-            existing.clientPurchaseAttemptStartedAt != null ||
-            existing.clientPurchaseAttemptId != null ||
-            existing.clientObservedAt != null
-        if (!existingHasAnyContext) {
-            return incomingHasAttempt || incoming.clientDeliverySource != AppActorClientDeliverySource.TransactionUpdates.wireValue
-        }
-
-        val existingHasAttempt = existing.clientPurchaseAttemptStartedAt != null &&
-            !existing.clientPurchaseAttemptId.isNullOrBlank()
-        if (incomingHasAttempt && !existingHasAttempt) return true
-        return incomingHasAttempt &&
-            incoming.clientDeliverySource == AppActorClientDeliverySource.PurchaseFlow.wireValue &&
-            existing.clientDeliverySource != AppActorClientDeliverySource.PurchaseFlow.wireValue
-    }
-
-    private suspend fun buildRestorePlan(
-        activePurchases: List<AppActorStorePurchase>,
-        historyPurchases: List<com.appactor.android.billing.AppActorStorePurchaseHistoryRecord>,
-        productEntitlements: Map<String, List<String>>,
-    ): RestorePlan {
-        val normalizedHistory = LinkedHashMap<String, AppActorStorePurchase>()
-        historyPurchases.forEach { historyRecord ->
-            val normalized = normalizeHistoryPurchaseForRestore(historyRecord, productEntitlements)
-            normalizedHistory[restoreDedupKey(normalized)] = normalized
-        }
-
-        val normalizedActive = LinkedHashMap<String, AppActorStorePurchase>()
-        activePurchases.forEach { activePurchase ->
-            val normalized = normalizePurchaseForPosting(activePurchase)
-            normalizedActive[restoreDedupKey(normalized)] = normalized
-        }
-
-        val orderedKeys = linkedSetOf<String>().apply {
-            addAll(normalizedHistory.keys)
-            addAll(normalizedActive.keys)
-        }
-        val bulkCandidates = mutableListOf<RestoreCandidate>()
-        var followUpSyncRequired = false
-
-        orderedKeys.forEach { key ->
-            val active = normalizedActive[key]
-            val history = normalizedHistory[key]
-            if (active != null) {
-                val merged = mergeRestorePurchases(active = active, history = history)
-                if (merged.productType == AppActorProductType.Unknown) {
-                    followUpSyncRequired = true
-                } else {
-                    bulkCandidates += RestoreCandidate(
-                        purchase = merged,
-                        isActive = true,
-                    )
-                }
-            } else if (history != null && history.productType != AppActorProductType.Unknown) {
-                bulkCandidates += RestoreCandidate(
-                    purchase = history,
-                    isActive = false,
-                )
-            } else if (history != null) {
-                // History-only purchase with Unknown type — cannot be sent in bulk
-                // restore. Defer to follow-up sync which will pick it up if the
-                // product metadata becomes available.
-                followUpSyncRequired = true
-            }
-        }
-
-        return RestorePlan(
-            bulkCandidates = bulkCandidates,
-            followUpSyncRequired = followUpSyncRequired,
-            restoredActivePurchaseTokens = bulkCandidates
-                .asSequence()
-                .filter { it.isActive }
-                .map { it.purchase.purchaseToken }
-                .toSet(),
-        )
-    }
-
-    private suspend fun normalizeHistoryPurchaseForRestore(
-        historyRecord: com.appactor.android.billing.AppActorStorePurchaseHistoryRecord,
-        productEntitlements: Map<String, List<String>>,
-    ): AppActorStorePurchase {
-        val historyPurchase = historyRecord.toStorePurchase()
-        if (historyPurchase.productType != AppActorProductType.Unknown) {
-            return historyPurchase
-        }
-        return resolveUnknownOneTimePurchase(
-            purchase = historyPurchase,
-            productEntitlements = productEntitlements,
-        ) ?: historyPurchase
-    }
-
-    private fun mergeRestorePurchases(
-        active: AppActorStorePurchase,
-        history: AppActorStorePurchase?,
-    ): AppActorStorePurchase {
-        if (history == null) return active
-        return active.copy(
-            productType = if (active.productType != AppActorProductType.Unknown) {
-                active.productType
-            } else {
-                history.productType
-            },
-            orderId = active.orderId ?: history.orderId,
-            basePlanId = active.basePlanId ?: history.basePlanId,
-            offerId = active.offerId ?: history.offerId,
-            priceAmountMicros = active.priceAmountMicros ?: history.priceAmountMicros,
-            currencyCode = active.currencyCode ?: history.currencyCode,
-            isAutoRenewing = active.isAutoRenewing ?: history.isAutoRenewing,
-            obfuscatedAccountId = active.obfuscatedAccountId ?: history.obfuscatedAccountId,
-            rawPurchaseData = active.rawPurchaseData ?: history.rawPurchaseData,
-            purchaseSignature = active.purchaseSignature ?: history.purchaseSignature,
-        )
-    }
-
-    private suspend fun finalizeRestoredActivePurchases(
-        purchases: List<AppActorStorePurchase>,
-        appUserId: String,
-    ) {
-        purchases.forEach { purchase ->
-            val finishItem = buildRestoreFinishItem(
-                purchase = purchase,
-                appUserId = appUserId,
-            )
-            markPurchasePosted(finishItem)
-            queueStore.update(finishItem)
-            val finished = finalizePostedPurchase(finishItem)
-            if (finished) {
-                queueStore.remove(finishItem.key)
-            } else {
-                queueStore.update(
-                    finishItem.copy(
-                        nextRetryAtMillis = dateProviderMillis(),
-                        lastUpdatedAtMillis = dateProviderMillis(),
-                    )
-                )
-            }
-        }
-    }
-
-    /**
-     * Enqueue purchases that failed in a batch sync/restore individually so they
-     * enter the normal pipeline and are eventually finalized at Google. Without
-     * this, partial-success batches leave purchases unacknowledged and Google
-     * auto-refunds them after 3 days.
-     */
-    private suspend fun enqueueFailedBatchPurchases(
-        candidates: List<AppActorStorePurchase>,
-        successfulKeys: Set<String>,
-        productEntitlements: Map<String, List<String>>,
-        appUserId: String,
-        sourceIntent: String,
-        clientPurchaseContext: AppActorClientPurchaseContext,
-    ) {
-        candidates.filter { !successfulKeys.contains(batchPurchaseKey(it)) }
-            .forEach {
-                enqueueAndProcess(
-                    it,
-                    productEntitlements,
-                    appUserId,
-                    sourceIntent = sourceIntent,
-                    clientPurchaseContext = clientPurchaseContext,
-                )
-            }
-    }
-
-    private fun adoptResolvedAppUserId(
-        requestedAppUserId: String,
-        resolvedAppUserId: String?,
-    ): String {
-        val finalAppUserId = resolvedAppUserId?.takeIf { it.isNotBlank() } ?: requestedAppUserId
-        if (finalAppUserId != requestedAppUserId) {
-            customerManager.clearCache(requestedAppUserId)
-            identityStore.setAppUserId(finalAppUserId)
-        }
-        return finalAppUserId
-    }
-
-    private fun buildRestoreFinishItem(
-        purchase: AppActorStorePurchase,
-        appUserId: String,
-    ): AppActorReceiptQueueItem {
-        val now = dateProviderMillis()
-        val restoreItem = makeQueueItem(
-            purchase = purchase,
-            appUserIdOverride = appUserId,
-            sourceIntent = SOURCE_INTENT_RESTORE,
-        ).copy(
-            shouldAcknowledge = purchase.productType == AppActorProductType.Subscription ||
-                purchase.productType == AppActorProductType.NonConsumable,
-            shouldConsume = purchase.productType == AppActorProductType.Consumable,
-            phase = AppActorReceiptQueuePhase.NeedsFinish,
-            nextRetryAtMillis = 0L,
-            claimedAtMillis = null,
-            lastUpdatedAtMillis = now,
-            lastError = null,
-        )
-        val keyedRestoreItem = queueItemForIncomingPurchase(restoreItem)
-        val existing = queueStore.get(keyedRestoreItem.key) ?: return keyedRestoreItem
-        return existing.copy(
-            appUserId = keyedRestoreItem.appUserId,
-            packageName = keyedRestoreItem.packageName,
-            environment = keyedRestoreItem.environment,
-            productId = keyedRestoreItem.productId,
-            productType = if (restoreItem.productType != AppActorProductType.Unknown.wireValue) {
-                keyedRestoreItem.productType
-            } else {
-                existing.productType
-            },
-            purchaseToken = keyedRestoreItem.purchaseToken,
-            purchaseTime = keyedRestoreItem.purchaseTime,
-            purchaseState = keyedRestoreItem.purchaseState,
-            orderId = keyedRestoreItem.orderId ?: existing.orderId,
-            basePlanId = keyedRestoreItem.basePlanId ?: existing.basePlanId,
-            offerId = keyedRestoreItem.offerId ?: existing.offerId,
-            priceAmountMicros = keyedRestoreItem.priceAmountMicros ?: existing.priceAmountMicros,
-            currencyCode = keyedRestoreItem.currencyCode ?: existing.currencyCode,
-            isAutoRenewing = keyedRestoreItem.isAutoRenewing ?: existing.isAutoRenewing,
-            obfuscatedAccountId = keyedRestoreItem.obfuscatedAccountId ?: existing.obfuscatedAccountId,
-            sourceIntent = existing.sourceIntent,
-            idempotencyKey = keyedRestoreItem.idempotencyKey,
-            rawPurchaseData = keyedRestoreItem.rawPurchaseData ?: existing.rawPurchaseData,
-            purchaseSignature = keyedRestoreItem.purchaseSignature ?: existing.purchaseSignature,
-            clientPurchaseAttemptStartedAt = keyedRestoreItem.clientPurchaseAttemptStartedAt ?: existing.clientPurchaseAttemptStartedAt,
-            clientObservedAt = keyedRestoreItem.clientObservedAt ?: existing.clientObservedAt,
-            clientDeliverySource = keyedRestoreItem.clientDeliverySource ?: existing.clientDeliverySource,
-            clientPurchaseAttemptId = keyedRestoreItem.clientPurchaseAttemptId ?: existing.clientPurchaseAttemptId,
-            placement = existing.placement,
-            sdkOriginated = keyedRestoreItem.sdkOriginated ?: existing.sdkOriginated,
-            sdkVersion = keyedRestoreItem.sdkVersion ?: existing.sdkVersion,
-            isAcknowledged = existing.isAcknowledged || keyedRestoreItem.isAcknowledged,
-            shouldAcknowledge = existing.shouldAcknowledge || keyedRestoreItem.shouldAcknowledge,
-            shouldConsume = existing.shouldConsume || keyedRestoreItem.shouldConsume,
-            retryCount = existing.retryCount,
-            nextRetryAtMillis = 0L,
-            createdAtMillis = existing.createdAtMillis,
-            lastUpdatedAtMillis = now,
-            claimedAtMillis = null,
-            phase = AppActorReceiptQueuePhase.NeedsFinish,
-            lastError = null,
-        )
-    }
-
-    private suspend fun processClaimedItem(
-        item: AppActorReceiptQueueItem,
-        productEntitlements: Map<String, List<String>>,
-    ): ProcessingOutcome {
-        val normalizedItem = normalizeQueueItemForPosting(item, productEntitlements)
-        if (normalizedItem.productType == AppActorProductType.Unknown.wireValue) {
-            return scheduleRetryOrDeadLetter(
-                item = normalizedItem,
-                retryAfterSeconds = null,
-                errorCode = "unknown_product_type",
-                errorMessage = "Unable to resolve Google Play one-time product type for ${normalizedItem.productId}.",
-            )
-        }
-
-        if (normalizedItem != item) {
-            queueStore.update(normalizedItem)
-        }
-
-        if (isPurchasePosted(normalizedItem)) {
-            return finishAlreadyPostedItem(normalizedItem, productEntitlements)
-        }
-
-        return try {
-            val response = backendClient.postGoogleReceipt(
-                AppActorReceiptRequestBuilder.buildGoogleReceiptRequest(normalizedItem)
-            )
-            val body = requireNotNull(response.body) { "Google receipt response body was null." }
-            when (val result = body.toPipelineStatus()) {
-                is ReceiptPipelineStatus.Success -> {
-                    val customerDTO = requireNotNull(body.customer) {
-                        "Receipt response success was missing customer info."
-                    }
-                    markPurchasePosted(normalizedItem)
-                    customerManager.seedEnvelope(
-                        appUserId = normalizedItem.appUserId,
-                        envelope = AppActorCustomerEnvelopeDTO(
-                            requestId = result.requestId,
-                            appUserId = normalizedItem.appUserId,
-                            customer = customerDTO,
-                        ),
-                        eTag = null,
-                        verified = response.signatureVerified,
-                    )
-                    val customerInfo = customerManager.cachedInfo(normalizedItem.appUserId)
-                        ?: throw IllegalStateException("Receipt response success was missing customer info.")
-                    val finishItem = normalizedItem.copy(
-                        shouldAcknowledge = result.acknowledgePurchase,
-                        shouldConsume = result.consumePurchase,
-                        phase = AppActorReceiptQueuePhase.NeedsFinish,
-                        claimedAtMillis = null,
-                        lastUpdatedAtMillis = dateProviderMillis(),
-                    )
-                    val finished = finalizePostedPurchase(finishItem)
-                    if (finished) {
-                        queueStore.remove(normalizedItem.key)
-                    } else {
-                        queueStore.update(finishItem.copy(nextRetryAtMillis = dateProviderMillis()))
-                    }
-                    onPipelineEvent(
-                        AppActorReceiptPipelineEvent.PostedOk(
-                            key = appActorPublicReceiptId(normalizedItem.key),
-                            productId = normalizedItem.productId,
-                            requestId = result.requestId,
-                            appUserId = normalizedItem.appUserId,
-                            orderId = normalizedItem.orderId,
-                        )
-                    )
-                    ProcessingOutcome.Success(customerInfo = customerInfo)
-                }
-
-                is ReceiptPipelineStatus.RetryableError -> {
-                    scheduleRetryOrDeadLetter(
-                        item = normalizedItem,
-                        retryAfterSeconds = result.retryAfterSeconds,
-                        errorCode = result.errorCode,
-                        errorMessage = result.errorMessage,
-                    )
-                }
-
-                is ReceiptPipelineStatus.PermanentError -> {
-                    deadLetter(
-                        item = normalizedItem,
-                        code = result.errorCode,
-                        message = result.errorMessage,
-                    )
-                    ProcessingOutcome.PermanentFailure(
-                        code = result.errorCode,
-                        message = result.errorMessage,
-                    )
-                }
-            }
-        } catch (throwable: Throwable) {
-            if (throwable is CancellationException) throw throwable
-            if (throwable is AppActorBackendException.Http && throwable.statusCode in 400..499) {
-                deadLetter(
-                    item = normalizedItem,
-                    code = throwable.error?.code ?: throwable.statusCode.toString(),
-                    message = throwable.error?.message ?: throwable.message,
-                )
-                ProcessingOutcome.PermanentFailure(
-                    code = throwable.error?.code,
-                    message = throwable.error?.message ?: throwable.message,
-                )
-            } else {
-                scheduleRetryOrDeadLetter(
-                    item = normalizedItem,
-                    retryAfterSeconds = null,
-                    errorCode = (throwable as? AppActorBackendException.Http)?.error?.code,
-                    errorMessage = throwable.message,
-                )
-            }
-        }
-    }
-
-    private suspend fun finishAlreadyPostedItem(
-        item: AppActorReceiptQueueItem,
-        productEntitlements: Map<String, List<String>>,
-    ): ProcessingOutcome {
-        val finished = finalizePostedPurchase(item)
-        if (finished) {
-            queueStore.remove(item.key)
-        } else {
-            scheduleRetryOrDeadLetter(
-                item = item,
-                retryAfterSeconds = null,
-                errorCode = "finish_failed",
-                errorMessage = "Failed to finalize an already-posted purchase.",
-            )
-        }
-
-        val authoritative = runCatching {
-            customerManager.getCustomerInfo(
-                item.appUserId,
-                forceRefresh = true,
-                persistIdentityState = false,
-            )
-        }.getOrNull()
-            ?: customerManager.cachedInfo(item.appUserId)
-            ?: buildOfflineCustomerInfo(
-                purchase = item.toStorePurchase(),
-                appUserId = item.appUserId,
-                productEntitlements = productEntitlements,
-            )
-            ?: AppActorCustomerInfo.empty
-
-        onPipelineEvent(
-            AppActorReceiptPipelineEvent.DuplicateSkipped(
-                key = appActorPublicReceiptId(item.key),
-                productId = item.productId,
-                appUserId = item.appUserId,
-            )
-        )
-
-        return ProcessingOutcome.AlreadyPosted(authoritative)
+        return receiptQueueDrainer.processClaimedItem(mergedItem.copy(phase = AppActorReceiptQueuePhase.Posting), productEntitlements)
     }
 
     private suspend fun finalizePostedPurchase(item: AppActorReceiptQueueItem): Boolean {
@@ -1516,145 +688,6 @@ internal class AppActorPaymentProcessor(
             }
             true
         }.getOrElse { false }
-    }
-
-    private suspend fun scheduleRetryOrDeadLetter(
-        item: AppActorReceiptQueueItem,
-        retryAfterSeconds: Double?,
-        errorCode: String?,
-        errorMessage: String?,
-    ): ProcessingOutcome {
-        val now = dateProviderMillis()
-        val nextRetryCount = item.retryCount + 1
-        val lastError = buildLastError(errorCode, errorMessage, nextRetryCount)
-        val nextRetryAt = AppActorRetryPolicy.nextRetryAtMillis(
-            nowMillis = now,
-            retryCount = nextRetryCount,
-            retryAfterSeconds = retryAfterSeconds,
-        )
-        if (errorCode == "RATE_LIMIT" || errorCode == "RATE_LIMIT_EXCEEDED") {
-            queueStore.setRateLimitCooldownMillis(nextRetryAt)
-        }
-        val updated = item.copy(
-            retryCount = nextRetryCount,
-            nextRetryAtMillis = nextRetryAt,
-            claimedAtMillis = null,
-            phase = if (isPurchasePosted(item)) {
-                AppActorReceiptQueuePhase.NeedsFinish
-            } else {
-                AppActorReceiptQueuePhase.NeedsPost
-            },
-            lastUpdatedAtMillis = now,
-            lastError = lastError,
-        )
-        queueStore.update(updated)
-        onPipelineEvent(
-            AppActorReceiptPipelineEvent.RetryScheduled(
-                key = appActorPublicReceiptId(updated.key),
-                productId = updated.productId,
-                retryCount = updated.retryCount,
-                nextRetryAtMillis = updated.nextRetryAtMillis,
-                errorCode = errorCode,
-                appUserId = updated.appUserId,
-                orderId = updated.orderId,
-            )
-        )
-        scheduleNextRetryWake()
-        return ProcessingOutcome.Queued
-    }
-
-    private suspend fun deadLetter(
-        item: AppActorReceiptQueueItem,
-        code: String?,
-        message: String?,
-    ) {
-        val finalized = finalizeDeadLetteredPurchase(item)
-        if (finalized) {
-            markPurchasePosted(item)
-        }
-        val updated = item.copy(
-            phase = AppActorReceiptQueuePhase.DeadLettered,
-            claimedAtMillis = null,
-            nextRetryAtMillis = 0L,
-            lastUpdatedAtMillis = dateProviderMillis(),
-            lastError = buildDeadLetterError(
-                code = code,
-                message = message,
-                retryCount = item.retryCount,
-                finalized = finalized,
-            ),
-        )
-        queueStore.update(updated)
-        onPipelineEvent(
-            AppActorReceiptPipelineEvent.PermanentlyRejected(
-                key = appActorPublicReceiptId(updated.key),
-                productId = updated.productId,
-                code = code,
-                message = message,
-                appUserId = updated.appUserId,
-                orderId = updated.orderId,
-            )
-        )
-        onPipelineEvent(
-            AppActorReceiptPipelineEvent.DeadLettered(
-                key = appActorPublicReceiptId(updated.key),
-                productId = updated.productId,
-                retryCount = updated.retryCount,
-                lastError = updated.lastError,
-                appUserId = updated.appUserId,
-                orderId = updated.orderId,
-            )
-        )
-        scheduleNextRetryWake()
-    }
-
-    private suspend fun finalizeDeadLetteredPurchase(item: AppActorReceiptQueueItem): Boolean {
-        val shouldConsume = item.shouldConsume || item.productType == AppActorProductType.Consumable.wireValue
-        val shouldAcknowledge = item.shouldAcknowledge ||
-            (item.productType == AppActorProductType.Subscription.wireValue ||
-                item.productType == AppActorProductType.NonConsumable.wireValue)
-
-        if (!shouldConsume && (!shouldAcknowledge || item.isAcknowledged)) {
-            return item.productType != AppActorProductType.Unknown.wireValue
-        }
-
-        return runCatching {
-            if (shouldConsume) {
-                storeAdapter.consumePurchase(item.purchaseToken)
-            } else if (!item.isAcknowledged) {
-                storeAdapter.acknowledgePurchase(item.purchaseToken)
-            }
-            true
-        }.getOrElse { false }
-    }
-
-    private fun buildLastError(
-        code: String?,
-        message: String?,
-        retryCount: Int,
-    ): String? {
-        val resolved = listOfNotNull(code?.takeIf { it.isNotBlank() }, message?.takeIf { it.isNotBlank() })
-            .joinToString(": ")
-            .ifBlank { null }
-        return when {
-            resolved == null -> null
-            else -> resolved
-        }
-    }
-
-    private fun buildDeadLetterError(
-        code: String?,
-        message: String?,
-        retryCount: Int,
-        finalized: Boolean,
-    ): String? {
-        val base = buildLastError(code, message, retryCount)
-        return when {
-            base == null && finalized -> "dead-letter finalized locally"
-            base == null -> "dead-letter finalization failed"
-            finalized -> "$base (finalized locally)"
-            else -> "$base (local finalization failed)"
-        }
     }
 
     private fun fireDeferredPurchaseCallbackIfNeeded(
@@ -1674,52 +707,12 @@ internal class AppActorPaymentProcessor(
         customerInfo: AppActorCustomerInfo,
         emitCallback: Boolean = true,
     ) {
-        var resolvedProductId: String? = null
-        pendingPurchaseTokens.compute(purchaseToken) { _, entry ->
-            if (entry == null) return@compute null
-            val pendingEntry = PendingPurchaseEntry.parse(entry) ?: return@compute null
-            if (dateProviderMillis() - pendingEntry.recordedAtMillis > PENDING_EXPIRY_MILLIS) {
-                null // Expired — stale entry from abandoned pending purchase
-            } else {
-                resolvedProductId = pendingEntry.productId
-                null // Remove — resolved
-            }
-        }
+        val resolvedProductId = pendingPurchaseRegistry.resolveDeferredEntry(purchaseToken)
         if (resolvedProductId != null) {
-            persistPendingState()
             if (emitCallback) {
-                onDeferredPurchaseResolved?.invoke(resolvedProductId!!, customerInfo)
+                onDeferredPurchaseResolved?.invoke(resolvedProductId, customerInfo)
             }
         }
-    }
-
-    private fun markForegroundPurchaseProduct(
-        productId: String,
-        ttlMillis: Long = FOREGROUND_PURCHASE_EXPIRY_MILLIS,
-        clientPurchaseContext: AppActorClientPurchaseContext? = null,
-    ) {
-        val now = dateProviderMillis()
-        foregroundPurchaseProductExpiries.entries.removeIf { it.value <= now }
-        foregroundPurchaseProductExpiries[productId] = now + ttlMillis
-        if (clientPurchaseContext != null) {
-            foregroundPurchaseProductContexts[productId] = clientPurchaseContext
-        }
-    }
-
-    private fun clearForegroundPurchaseProduct(productId: String) {
-        foregroundPurchaseProductExpiries.remove(productId)
-        foregroundPurchaseProductContexts.remove(productId)
-    }
-
-    private fun consumeRecentForegroundPurchaseContext(productId: String): AppActorClientPurchaseContext? {
-        val expiresAt = foregroundPurchaseProductExpiries[productId] ?: return null
-        if (dateProviderMillis() >= expiresAt) {
-            foregroundPurchaseProductExpiries.remove(productId)
-            foregroundPurchaseProductContexts.remove(productId)
-            return null
-        }
-        foregroundPurchaseProductExpiries.remove(productId)
-        return foregroundPurchaseProductContexts.remove(productId)
     }
 
     private fun resolvePurchaseUpdateContext(purchase: AppActorStorePurchase): PurchaseUpdateContext {
@@ -1728,7 +721,7 @@ internal class AppActorPaymentProcessor(
             return pendingContext
         }
 
-        val foregroundContext = consumeRecentForegroundPurchaseContext(purchase.productId)
+        val foregroundContext = pendingPurchaseRegistry.consumeRecentForegroundPurchaseContext(purchase.productId)
         if (foregroundContext != null) {
             return PurchaseUpdateContext(
                 sourceIntent = SOURCE_INTENT_PURCHASE,
@@ -1746,27 +739,13 @@ internal class AppActorPaymentProcessor(
     }
 
     private fun consumePendingPurchaseUpdateContext(purchase: AppActorStorePurchase): PurchaseUpdateContext? {
-        val rawEntry = pendingPurchaseTokens[purchase.purchaseToken] ?: return null
-        val entry = PendingPurchaseEntry.parse(rawEntry)
-        val now = dateProviderMillis()
-        if (entry != null && now - entry.recordedAtMillis <= PENDING_EXPIRY_MILLIS) {
-            return PurchaseUpdateContext(
-                sourceIntent = SOURCE_INTENT_PURCHASE,
-                clientPurchaseContext = AppActorClientPurchaseContext.fromPendingEntry(entry, observedAtMillis = now),
-                appUserId = entry.appUserId,
-            )
-        }
-        pendingPurchaseTokens.remove(purchase.purchaseToken)
-        persistPendingState()
-        return null
-    }
-
-    private fun persistPendingState() {
-        pendingPrefs.edit().apply {
-            clear()
-            pendingPurchaseTokens.forEach { (token, entry) -> putString(token, entry) }
-            apply()
-        }
+        val (entry, now) = pendingPurchaseRegistry.takePendingEntryIfValid(purchase.purchaseToken)
+            ?: return null
+        return PurchaseUpdateContext(
+            sourceIntent = SOURCE_INTENT_PURCHASE,
+            clientPurchaseContext = AppActorClientPurchaseContext.fromPendingEntry(entry, observedAtMillis = now),
+            appUserId = entry.appUserId,
+        )
     }
 
     private suspend fun ensureProductEntitlements(
@@ -1853,188 +832,6 @@ internal class AppActorPaymentProcessor(
         } else {
             null
         }
-    }
-
-    private fun hasReadyWork(nowMillis: Long = dateProviderMillis()): Boolean {
-        if (activeRateLimitCooldown(nowMillis) != null) return false
-        val stalePostingThreshold = nowMillis - AppActorAtomicJsonReceiptQueueStore.STALE_CLAIM_THRESHOLD_MILLIS
-        return queueStore.snapshot().any { item ->
-            when (item.phase) {
-                AppActorReceiptQueuePhase.NeedsPost -> item.nextRetryAtMillis <= nowMillis
-                AppActorReceiptQueuePhase.Posting -> (item.claimedAtMillis ?: 0L) <= stalePostingThreshold
-                AppActorReceiptQueuePhase.NeedsFinish -> item.nextRetryAtMillis <= nowMillis
-                AppActorReceiptQueuePhase.DeadLettered -> false
-            }
-        }
-    }
-
-    private fun nextReadyAtMillis(nowMillis: Long = dateProviderMillis()): Long? {
-        val stalePostingThreshold = nowMillis - AppActorAtomicJsonReceiptQueueStore.STALE_CLAIM_THRESHOLD_MILLIS
-        val itemNextReady = queueStore.snapshot()
-            .mapNotNull { item ->
-                when (item.phase) {
-                    AppActorReceiptQueuePhase.DeadLettered -> null
-
-                    AppActorReceiptQueuePhase.NeedsPost,
-                    AppActorReceiptQueuePhase.NeedsFinish -> item.nextRetryAtMillis
-
-                    AppActorReceiptQueuePhase.Posting -> {
-                        val claimedAt = item.claimedAtMillis ?: return@mapNotNull nowMillis
-                        if (claimedAt <= stalePostingThreshold) {
-                            nowMillis
-                        } else {
-                            claimedAt + AppActorAtomicJsonReceiptQueueStore.STALE_CLAIM_THRESHOLD_MILLIS
-                        }
-                    }
-                }
-            }
-            .minOrNull()
-
-        val cooldown = activeRateLimitCooldown(nowMillis)
-        return when {
-            itemNextReady == null -> cooldown
-            cooldown == null -> itemNextReady
-            cooldown > nowMillis && itemNextReady < cooldown -> cooldown
-            else -> minOf(itemNextReady, cooldown)
-        }
-    }
-
-    private fun activeRateLimitCooldown(nowMillis: Long = dateProviderMillis()): Long? {
-        val cooldown = queueStore.getRateLimitCooldownMillis() ?: return null
-        if (cooldown <= nowMillis) {
-            queueStore.setRateLimitCooldownMillis(null)
-            return null
-        }
-        return cooldown
-    }
-
-    private fun scheduleNextRetryWake(limit: Int = 20) {
-        val now = dateProviderMillis()
-        // All inspection and mutation of retryWakeJob/scheduledRetryAtMillis is
-        // funnelled through this monitor so the cancel+assign is atomic and
-        // visible across the coroutine Mutex callers, the lock-free callers, and
-        // the background wake threads. The drain itself is launched (not run)
-        // inside the lock, so we never hold the monitor across suspension.
-        synchronized(retryWakeLock) {
-            val nextReadyAt = nextReadyAtMillis(now) ?: run {
-                retryWakeJob?.cancel()
-                retryWakeJob = null
-                scheduledRetryAtMillis = null
-                return
-            }
-
-            if (nextReadyAt <= now) {
-                val runningImmediateDrain = scheduledRetryAtMillis == null && retryWakeJob?.isActive == true
-                if (runningImmediateDrain) {
-                    return
-                }
-                retryWakeJob?.cancel()
-                scheduledRetryAtMillis = null
-                launchRetryWake(limit, delayMillis = 0L)
-                return
-            }
-
-            if (scheduledRetryAtMillis == nextReadyAt && retryWakeJob?.isActive == true) {
-                return
-            }
-
-            retryWakeJob?.cancel()
-            scheduledRetryAtMillis = nextReadyAt
-            launchRetryWake(limit, delayMillis = maxOf(nextReadyAt - now, 250L))
-        }
-    }
-
-    /**
-     * Launches a single wake coroutine and atomically records it as the active
-     * [retryWakeJob]. Must be called while holding [retryWakeLock].
-     *
-     * The completion cleanup re-acquires [retryWakeLock] and only clears the
-     * scheduler fields when they still reference *this* job, so a newer schedule
-     * that replaced [retryWakeJob] after this one started is never clobbered —
-     * preventing the lost-cancel / orphaned-coroutine race (audit android-6).
-     */
-    private fun launchRetryWake(limit: Int, delayMillis: Long) {
-        // Started lazily so the field assignment below completes before the
-        // coroutine body can read `thisJob`, guaranteeing the identity check in
-        // the completion cleanup observes an initialized reference.
-        lateinit var thisJob: Job
-        thisJob = backgroundScope.launch(start = CoroutineStart.LAZY) {
-            if (delayMillis > 0L) {
-                delay(delayMillis)
-            }
-            pipelineMutex.withLock {
-                drainAllLocked(limit)
-            }
-            val isStillActiveJob = synchronized(retryWakeLock) {
-                if (retryWakeJob === thisJob) {
-                    retryWakeJob = null
-                    scheduledRetryAtMillis = null
-                    true
-                } else {
-                    false
-                }
-            }
-            if (isStillActiveJob) {
-                scheduleNextRetryWake(limit)
-            }
-        }
-        retryWakeJob = thisJob
-        thisJob.start()
-    }
-
-    private fun buildOfflineCustomerInfo(
-        purchase: AppActorStorePurchase,
-        appUserId: String,
-        productEntitlements: Map<String, List<String>>,
-    ): AppActorCustomerInfo? {
-        val keys = entitlementKeysForPurchase(purchase, productEntitlements)
-        if (keys.isEmpty()) return null
-
-        val entitlements = linkedMapOf<String, AppActorEntitlementInfo>().apply {
-            keys.forEach { key ->
-                put(
-                    key,
-                    AppActorEntitlementInfo(
-                        identifier = key,
-                        isActive = true,
-                        status = "active",
-                        productIdentifier = purchase.productId,
-                        grantedBy = "purchase",
-                        ownershipType = AppActorOwnershipType.Purchased,
-                        periodType = AppActorPeriodType.Normal,
-                        willRenew = purchase.productType == AppActorProductType.Subscription,
-                        subscriptionStatus = AppActorSubscriptionStatus.Active,
-                        store = AppActorStore.PlayStore,
-                        basePlanId = purchase.basePlanId,
-                        offerId = purchase.offerId,
-                        isSandbox = configuration.environment == AppActorEnvironment.Sandbox,
-                        purchaseDate = purchase.purchaseDateString(),
-                        startsAt = purchase.purchaseDateString(),
-                        latestPurchaseDate = purchase.purchaseDateString(),
-                    )
-                )
-            }
-        }
-
-        return AppActorCustomerInfo(
-            entitlements = entitlements,
-            appUserId = appUserId,
-            snapshotDate = purchase.purchaseDateString(),
-            requestDate = purchase.purchaseDateString(),
-            isComputedOffline = true,
-            productEntitlements = productEntitlements,
-            verification = AppActorVerificationResult.VerifiedOnDevice,
-        )
-    }
-
-    private fun entitlementKeysForPurchase(
-        purchase: AppActorStorePurchase,
-        productEntitlements: Map<String, List<String>>,
-    ): List<String> {
-        return AppActorEntitlementKeyResolver.entitlementKeysForPurchase(
-            purchase = purchase,
-            productEntitlements = productEntitlements,
-        )
     }
 
     private fun makeQueueItem(
@@ -2175,30 +972,6 @@ internal class AppActorPaymentProcessor(
         )
     }
 
-    private sealed interface ProcessingOutcome {
-        data class Success(val customerInfo: AppActorCustomerInfo) : ProcessingOutcome
-        data object Queued : ProcessingOutcome
-        data class PermanentFailure(
-            val code: String?,
-            val message: String?,
-        ) : ProcessingOutcome
-
-        data class AlreadyPosted(
-            val customerInfo: AppActorCustomerInfo,
-        ) : ProcessingOutcome
-    }
-
-    private data class RestoreCandidate(
-        val purchase: AppActorStorePurchase,
-        val isActive: Boolean,
-    )
-
-    private data class RestorePlan(
-        val bulkCandidates: List<RestoreCandidate>,
-        val followUpSyncRequired: Boolean,
-        val restoredActivePurchaseTokens: Set<String>,
-    )
-
     sealed interface ReceiptPipelineStatus {
         val requestId: String?
 
@@ -2223,29 +996,26 @@ internal class AppActorPaymentProcessor(
     }
 
     private companion object {
-        const val PENDING_PREFS_NAME = "com.appactor.android.pending_purchases"
-        const val PENDING_EXPIRY_MILLIS: Long = 7 * 24 * 60 * 60 * 1_000L // 7 days
-        const val FOREGROUND_PURCHASE_EXPIRY_MILLIS: Long = 10 * 60 * 1_000L // 10 minutes
         const val FOREGROUND_PURCHASE_CANCELLATION_GRACE_MILLIS: Long = 30 * 1_000L // 30 seconds
         const val SOURCE_INTENT_PURCHASE = "purchase"
-        const val SOURCE_INTENT_RESTORE = "restore"
-        const val SOURCE_INTENT_SYNC = "sync"
         const val SOURCE_INTENT_QUEUE = "queue"
     }
 }
 
-private fun restoreFailure(
-    throwable: Throwable,
-    defaultMessage: String,
-): AppActorError {
-    return when (throwable) {
-        is AppActorError -> throwable
-        is AppActorBackendException.Network -> AppActorError.Network(defaultMessage, throwable)
-        else -> AppActorError.Unknown(defaultMessage, throwable)
-    }
+internal sealed interface ProcessingOutcome {
+    data class Success(val customerInfo: AppActorCustomerInfo) : ProcessingOutcome
+    data object Queued : ProcessingOutcome
+    data class PermanentFailure(
+        val code: String?,
+        val message: String?,
+    ) : ProcessingOutcome
+
+    data class AlreadyPosted(
+        val customerInfo: AppActorCustomerInfo,
+    ) : ProcessingOutcome
 }
 
-private fun AppActorGoogleReceiptResponseDTO.toPipelineStatus(): AppActorPaymentProcessor.ReceiptPipelineStatus {
+internal fun AppActorGoogleReceiptResponseDTO.toPipelineStatus(): AppActorPaymentProcessor.ReceiptPipelineStatus {
     return when (status) {
         "ok" -> AppActorPaymentProcessor.ReceiptPipelineStatus.Success(
             requestId = requestId,
@@ -2281,7 +1051,7 @@ private fun AppActorStorePurchase.toPurchaseInfo(
     )
 }
 
-private fun AppActorReceiptQueueItem.toStorePurchase(): AppActorStorePurchase {
+internal fun AppActorReceiptQueueItem.toStorePurchase(): AppActorStorePurchase {
     return AppActorStorePurchase(
         productId = productId,
         productType = AppActorProductType.fromWireValue(productType),
@@ -2305,91 +1075,8 @@ private fun AppActorReceiptQueueItem.toStorePurchase(): AppActorStorePurchase {
     )
 }
 
-private fun AppActorStorePurchase.purchaseDateString(): String {
+internal fun AppActorStorePurchase.purchaseDateString(): String {
     val formatter = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US)
     formatter.timeZone = TimeZone.getTimeZone("UTC")
     return formatter.format(Date(purchaseTimeMillis))
-}
-
-private fun AppActorStorePurchase.toRestorePurchaseDTO(): AppActorGoogleRestorePurchaseDTO {
-    return AppActorGoogleRestorePurchaseDTO(
-        productId = productId,
-        productType = productType.wireValue,
-        purchaseToken = purchaseToken,
-        purchaseTime = purchaseTimeMillis.toString(),
-        orderId = orderId,
-        basePlanId = basePlanId,
-        offerId = offerId,
-        priceAmountMicros = priceAmountMicros,
-        currency = currencyCode,
-        isAutoRenewing = isAutoRenewing,
-    )
-}
-
-private fun isoNow(): String = java.time.Instant.now().toString()
-
-private fun com.appactor.android.billing.AppActorStorePurchaseHistoryRecord.toStorePurchase(): AppActorStorePurchase {
-    return AppActorStorePurchase(
-        productId = productId,
-        productType = productType,
-        purchaseToken = purchaseToken,
-        orderId = orderId,
-        purchaseTimeMillis = purchaseTimeMillis,
-        purchaseState = com.appactor.android.billing.AppActorStorePurchaseState.Purchased,
-        basePlanId = basePlanId,
-        offerId = offerId,
-        priceAmountMicros = priceAmountMicros,
-        currencyCode = currencyCode,
-        isAcknowledged = false,
-        isAutoRenewing = isAutoRenewing,
-        obfuscatedAccountId = obfuscatedAccountId,
-        rawPurchaseData = rawPurchaseData,
-        purchaseSignature = purchaseSignature,
-    )
-}
-
-private fun restoreDedupKey(purchase: AppActorStorePurchase): String {
-    return listOf(
-        purchase.purchaseToken,
-        purchase.productId,
-        purchase.purchaseTimeMillis.toString(),
-    ).joinToString("|")
-}
-
-private fun batchPurchaseKey(purchase: AppActorStorePurchase): String {
-    return listOf(
-        purchase.purchaseToken,
-        purchase.productId,
-        purchase.basePlanId.orEmpty(),
-        purchase.offerId.orEmpty(),
-    ).joinToString("|")
-}
-
-private fun batchPurchaseKey(result: AppActorGoogleBatchResultDTO): String {
-    return listOf(
-        result.purchaseToken,
-        result.productId,
-        result.basePlanId.orEmpty(),
-        result.offerId.orEmpty(),
-    ).joinToString("|")
-}
-
-private fun successfulBatchPurchaseKeys(
-    purchases: List<AppActorStorePurchase>,
-    successCount: Int,
-    results: List<AppActorGoogleBatchResultDTO>,
-): Set<String> {
-    if (results.isNotEmpty()) {
-        return results
-            .asSequence()
-            .filter { it.status == "synced" }
-            .map(::batchPurchaseKey)
-            .toSet()
-    }
-
-    if (successCount < purchases.size) {
-        return emptySet()
-    }
-
-    return purchases.asSequence().map(::batchPurchaseKey).toSet()
 }
