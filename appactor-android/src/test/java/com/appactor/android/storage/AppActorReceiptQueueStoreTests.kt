@@ -37,7 +37,7 @@ class AppActorReceiptQueueStoreTests {
     }
 
     @Test
-    fun `queue store removes corrupt file and recovers cleanly`() {
+    fun `queue store quarantines corrupt file and recovers cleanly`() {
         val directory = tempDirectory("queue-corrupt")
         File(directory, "receipt_queue.json").apply {
             parentFile?.mkdirs()
@@ -46,9 +46,58 @@ class AppActorReceiptQueueStoreTests {
 
         val store = AppActorAtomicJsonReceiptQueueStore(context, directory)
 
+        // The unparseable file must NOT be deleted: a single malformed or
+        // forward-incompatible record would otherwise wipe every queued (paid)
+        // receipt. It is moved aside to a .corrupt sidecar (android-7).
         assertTrue(store.snapshot().isEmpty())
+        val sidecar = File(directory, "receipt_queue.json.corrupt")
+        assertTrue(sidecar.exists())
+        assertEquals("{broken", sidecar.readText())
+        assertFalse(File(directory, "receipt_queue.json").exists())
+
         store.upsert(queueItem())
         assertEquals(1, store.pendingCount())
+    }
+
+    @Test
+    fun `quarantine replaces a stale sidecar and clear purges it`() {
+        val directory = tempDirectory("queue-corrupt-replace")
+        val sidecar = File(directory, "receipt_queue.json.corrupt")
+        File(directory, "receipt_queue.json").apply {
+            parentFile?.mkdirs()
+            writeText("{first")
+        }
+
+        // First corruption quarantines to the sidecar.
+        AppActorAtomicJsonReceiptQueueStore(context, directory).snapshot()
+        assertEquals("{first", sidecar.readText())
+
+        // A repeat corruption replaces the stale sidecar with the new bad bytes
+        // (the rename target is deleted first, so it never keeps the old one).
+        File(directory, "receipt_queue.json").writeText("{second")
+        AppActorAtomicJsonReceiptQueueStore(context, directory).snapshot()
+        assertEquals("{second", sidecar.readText())
+
+        // clear() (logout/data-wipe) must purge the sidecar so no receipt data lingers.
+        val store = AppActorAtomicJsonReceiptQueueStore(context, directory)
+        store.upsert(queueItem())
+        store.clear()
+        assertFalse(sidecar.exists())
+    }
+
+    @Test
+    fun `deletePersistedFile removes the quarantined corrupt sidecar`() {
+        val appactorDir = File(context.filesDir, "appactor").apply { mkdirs() }
+        File(appactorDir, "receipt_queue.json").writeText("{broken")
+
+        // Quarantine it, then run the reset/logout cleanup path.
+        AppActorAtomicJsonReceiptQueueStore(context).snapshot()
+        val sidecar = File(appactorDir, "receipt_queue.json.corrupt")
+        assertTrue(sidecar.exists())
+
+        AppActorAtomicJsonReceiptQueueStore.deletePersistedFile(context)
+        assertFalse(sidecar.exists())
+        assertFalse(File(appactorDir, "receipt_queue.json").exists())
     }
 
     @Test

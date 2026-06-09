@@ -110,6 +110,7 @@ internal class AppActorAtomicJsonReceiptQueueStore(
 
     companion object {
         private const val TAG = "ReceiptQueueStore"
+        private const val CORRUPT_SIDECAR_SUFFIX = ".corrupt"
         const val STALE_CLAIM_THRESHOLD_MILLIS: Long = 2 * 60 * 1_000L
         const val DEAD_LETTER_RETENTION_MILLIS: Long = 30L * 24 * 60 * 60 * 1_000
         private val RECOVERABLE_PRODUCT_TYPE = com.appactor.android.models.AppActorProductType.Unknown.wireValue
@@ -123,6 +124,9 @@ internal class AppActorAtomicJsonReceiptQueueStore(
         fun deletePersistedFile(context: Context) {
             val file = File(File(context.filesDir, "appactor"), "receipt_queue.json")
             file.delete()
+            // Also purge the quarantined sidecar so a logout/reset fully wipes
+            // queued (paid) receipt data (android-7).
+            File(file.parentFile, file.name + CORRUPT_SIDECAR_SUFFIX).delete()
         }
 
         private fun mergeSourceIntent(
@@ -165,6 +169,7 @@ internal class AppActorAtomicJsonReceiptQueueStore(
 
     private val lock = ReentrantLock()
     private val file: File = File(directory, "receipt_queue.json")
+    private val corruptSidecarFile: File get() = File(file.parentFile, file.name + CORRUPT_SIDECAR_SUFFIX)
     private var items: MutableMap<String, AppActorReceiptQueueItem>? = null
     private var rateLimitCooldownMillis: Long? = null
     private var cooldownLoaded: Boolean = false
@@ -310,6 +315,9 @@ internal class AppActorAtomicJsonReceiptQueueStore(
                 map = linkedMapOf(),
                 cooldownMillis = null,
             )
+            // Drop any quarantined corrupt sidecar too, so an explicit clear
+            // (logout/reset) leaves no queued receipt data behind (android-7).
+            corruptSidecarFile.delete()
         }
     }
 
@@ -386,7 +394,7 @@ internal class AppActorAtomicJsonReceiptQueueStore(
         }
 
         if (persisted == null) {
-            file.delete()
+            quarantineCorruptFile()
             items = linkedMapOf()
             if (!cooldownLoaded) {
                 rateLimitCooldownMillis = null
@@ -409,6 +417,28 @@ internal class AppActorAtomicJsonReceiptQueueStore(
             cooldownLoaded = true
         }
         return finalMap
+    }
+
+    /**
+     * Moves an unparseable queue file aside instead of deleting it (android-7).
+     * A single malformed or forward-incompatible record would otherwise wipe
+     * every queued (paid) receipt. Quarantining to a `.corrupt` sidecar keeps
+     * the bytes recoverable for diagnostics while the store starts fresh.
+     */
+    private fun quarantineCorruptFile() {
+        val corruptFile = corruptSidecarFile
+        val moved = runCatching {
+            corruptFile.delete() // drop a stale quarantine from a previous failure
+            file.renameTo(corruptFile)
+        }.getOrDefault(false)
+        if (moved) {
+            AppActorLogger.warn("[$TAG] Receipt queue file unparseable; quarantined to ${corruptFile.name}")
+        } else {
+            // Rename can fail (e.g. cross-device or a locked target). Fall back to
+            // deletion so loadState does not loop forever on the same bad file.
+            runCatching { file.delete() }
+            AppActorLogger.warn("[$TAG] Receipt queue file unparseable; quarantine failed, deleted instead")
+        }
     }
 
     private fun purgeExpiredDeadLetteredItems(

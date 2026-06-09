@@ -41,11 +41,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import com.appactor.android.models.AppActorIso8601
 import com.appactor.android.models.appActorPublicReceiptId
-import java.text.SimpleDateFormat
 import java.util.Date
-import java.util.Locale
-import java.util.TimeZone
 
 internal data class AppActorPurchaseUpdateProcessingResult(
     val customerInfo: AppActorCustomerInfo?,
@@ -1075,8 +1073,7 @@ internal fun AppActorReceiptQueueItem.toStorePurchase(): AppActorStorePurchase {
     )
 }
 
-internal fun AppActorStorePurchase.purchaseDateString(): String {
-    val formatter = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US)
-    formatter.timeZone = TimeZone.getTimeZone("UTC")
-    return formatter.format(Date(purchaseTimeMillis))
-}
+// Uses the shared AppActorIso8601 converter (same "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"
+// UTC format) rather than re-implementing a per-call SimpleDateFormat (android-25).
+internal fun AppActorStorePurchase.purchaseDateString(): String =
+    AppActorIso8601.format(Date(purchaseTimeMillis))
