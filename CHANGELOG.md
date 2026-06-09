@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.3.11
+
+- Fixed: a corrupt or forward-incompatible `receipt_queue.json` is now quarantined to a `.corrupt` sidecar instead of being deleted, so a single bad record no longer wipes every queued (paid) receipt. The sidecar is purged on `clear()`/`reset()` so it never retains receipt data past a logout. (audit android-7)
+- Fixed: `AppActorBridge.setFallbackOfferings` now decodes off the caller thread and delivers callbacks on the main thread via `launchAsync`, matching every other bridge method; malformed JSON still surfaces as `CODE_DECODING`. (audit android-12)
+- Cleanup: `purchaseDateString()` delegates to the shared `AppActorIso8601` formatter instead of re-implementing a per-call `SimpleDateFormat` (byte-identical output). (audit android-25)
+
 ## 2.3.10
 
 - Refactor: decomposed the 2357-line `AppActorPaymentProcessor` god-class into a ~1082-line orchestrator + 6 focused collaborators (`AppActorReceiptQueueDrainer`, `AppActorRestoreSyncCoordinator`, `AppActorRetryWakeScheduler`, `AppActorIdentityTransitionBuffer`, `AppActorPendingPurchaseRegistry`, `AppActorOfflineCustomerInfoBuilder`). Strictly behavior-preserving (no logic, ordering, error-handling, or lock-semantics change; shared `pipelineMutex` stays in the orchestrator, exclusive locks moved with their state). Internal-only — public API unchanged. (audit android-1)
