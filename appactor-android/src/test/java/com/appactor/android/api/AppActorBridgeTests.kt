@@ -66,6 +66,47 @@ class AppActorBridgeTests {
     }
 
     @Test
+    fun `setFallbackOfferings delivers decoding errors on main thread`() {
+        val latch = CountDownLatch(1)
+        val callbackOnMain = AtomicReference<Boolean?>()
+        val capturedError = AtomicReference<AppActorBridgeError?>()
+
+        AppActorBridge.setFallbackOfferings(
+            jsonData = "{ not valid json".toByteArray(),
+            onSuccess = { latch.countDown() },
+            onError = AppActorBridgeErrorCallback { error ->
+                callbackOnMain.set(Looper.myLooper() == Looper.getMainLooper())
+                capturedError.set(error)
+                latch.countDown()
+            },
+        )
+
+        assertTrue(awaitMainThreadCallback(latch))
+        // Malformed JSON must keep surfacing as CODE_DECODING (not CODE_VALIDATION/
+        // CODE_UNKNOWN) even though decode now runs through launchAsync (android-12).
+        assertEquals(AppActorBridgeError.CODE_DECODING, capturedError.get()?.code)
+        assertEquals(true, callbackOnMain.get())
+    }
+
+    @Test
+    fun `setFallbackOfferings delivers success on main thread for valid json`() {
+        val latch = CountDownLatch(1)
+        val callbackOnMain = AtomicReference<Boolean?>()
+
+        AppActorBridge.setFallbackOfferings(
+            jsonData = """{"data":{}}""".toByteArray(),
+            onSuccess = {
+                callbackOnMain.set(Looper.myLooper() == Looper.getMainLooper())
+                latch.countDown()
+            },
+            onError = AppActorBridgeErrorCallback { latch.countDown() },
+        )
+
+        assertTrue(awaitMainThreadCallback(latch))
+        assertEquals(true, callbackOnMain.get())
+    }
+
+    @Test
     fun `bridge listener surfaces flatten receipt events and deliver on main thread`() {
         val customerLatch = CountDownLatch(1)
         val eventLatch = CountDownLatch(1)
