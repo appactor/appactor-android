@@ -169,6 +169,12 @@ public object AppActor {
                     return this@AppActor.publishCustomerInfoIfCurrent(snapshot, info, source)
                 }
 
+                override suspend fun seedOfflineCustomerInfoIfEmpty(
+                    snapshot: AppActorOperationSnapshot,
+                ): Boolean {
+                    return this@AppActor.seedOfflineCustomerInfoIfEmpty(snapshot)
+                }
+
                 override suspend fun persistOfferingsSource(
                     runtimeSessionId: Long,
                     source: AppActorDiagnosticsDataSource?,
@@ -675,24 +681,10 @@ public object AppActor {
                 val offlineKeys = snapshot.runtime.customerManager.activeEntitlementKeysOffline(snapshot.appUserId)
                 if (offlineKeys.isEmpty()) throw error
                 val baseCustomer = snapshot.runtime.lastCustomerInfo
-                AppActorCustomerInfo(
-                    entitlements = baseCustomer.entitlements + offlineKeys.associateWith { key ->
-                        AppActorEntitlementInfo(identifier = key, isActive = true)
-                    },
-                    subscriptions = baseCustomer.subscriptions,
-                    nonSubscriptions = baseCustomer.nonSubscriptions,
-                    consumableBalances = baseCustomer.consumableBalances,
-                    tokenBalance = baseCustomer.tokenBalance,
-                    snapshotDate = baseCustomer.snapshotDate,
+                buildOfflineCustomerInfo(
                     appUserId = snapshot.appUserId,
-                    requestId = baseCustomer.requestId,
-                    requestDate = baseCustomer.requestDate,
-                    firstSeen = baseCustomer.firstSeen,
-                    lastSeen = baseCustomer.lastSeen,
-                    managementUrl = baseCustomer.managementUrl,
-                    isComputedOffline = true,
-                    productEntitlements = baseCustomer.productEntitlements,
-                    verification = AppActorVerificationResult.VerifiedOnDevice,
+                    baseCustomer = baseCustomer,
+                    offlineKeys = offlineKeys,
                 ) to AppActorDiagnosticsDataSource.Offline
             }
 
@@ -701,6 +693,75 @@ public object AppActor {
             }
             info
         }
+    }
+
+    private fun buildOfflineCustomerInfo(
+        appUserId: String,
+        baseCustomer: AppActorCustomerInfo,
+        offlineKeys: Set<String>,
+    ): AppActorCustomerInfo {
+        return AppActorCustomerInfo(
+            entitlements = baseCustomer.entitlements + offlineKeys.associateWith { key ->
+                AppActorEntitlementInfo(identifier = key, isActive = true)
+            },
+            subscriptions = baseCustomer.subscriptions,
+            nonSubscriptions = baseCustomer.nonSubscriptions,
+            consumableBalances = baseCustomer.consumableBalances,
+            tokenBalance = baseCustomer.tokenBalance,
+            snapshotDate = baseCustomer.snapshotDate,
+            appUserId = appUserId,
+            requestId = baseCustomer.requestId,
+            requestDate = baseCustomer.requestDate,
+            firstSeen = baseCustomer.firstSeen,
+            lastSeen = baseCustomer.lastSeen,
+            managementUrl = baseCustomer.managementUrl,
+            isComputedOffline = true,
+            productEntitlements = baseCustomer.productEntitlements,
+            verification = AppActorVerificationResult.VerifiedOnDevice,
+        )
+    }
+
+    /**
+     * Cold-start offline seed: when no entitlement state has been published yet (e.g.
+     * reinstall with no cached customer), derive active entitlements from local Play
+     * Billing purchases and publish them so premium renders before the network refresh.
+     * Never downgrades a real value — only seeds while the published customer is still empty.
+     */
+    internal suspend fun seedOfflineCustomerInfoIfEmpty(snapshot: AppActorOperationSnapshot): Boolean {
+        // Cheap pre-check to skip the Play Billing query when a value is already published.
+        if ((currentRuntimeSnapshot()?.lastCustomerInfo ?: AppActorCustomerInfo.empty) != AppActorCustomerInfo.empty) {
+            return false
+        }
+        val offlineKeys = snapshot.runtime.customerManager.activeEntitlementKeysOffline(snapshot.appUserId)
+        if (offlineKeys.isEmpty()) return false
+
+        // Re-check emptiness and publish atomically under the same lock the concurrent
+        // purchase-update publisher uses, so the seed never overwrites a real value that
+        // landed while the Play Billing query above was in flight.
+        var publishedInfo: AppActorCustomerInfo? = null
+        val callback = transitionMutex.withLock {
+            val currentRuntime = runtime ?: return@withLock null
+            if (currentRuntime.sessionId != snapshot.runtime.sessionId || identityEpoch != snapshot.epoch) {
+                return@withLock null
+            }
+            if (currentRuntime.lastCustomerInfo != AppActorCustomerInfo.empty) {
+                return@withLock null
+            }
+            val info = buildOfflineCustomerInfo(
+                appUserId = snapshot.appUserId,
+                baseCustomer = currentRuntime.lastCustomerInfo,
+                offlineKeys = offlineKeys,
+            )
+            publishedInfo = info
+            publishCustomerInfoLocked(currentRuntime, info, AppActorDiagnosticsDataSource.Offline)
+        }
+        val info = publishedInfo
+        if (callback != null && info != null) {
+            deliverOnMainIfCurrent(snapshot.runtime.sessionId, snapshot.epoch) {
+                callback.invoke(info)
+            }
+        }
+        return callback != null
     }
 
     public suspend fun activeEntitlementKeysOffline(): Set<String> {

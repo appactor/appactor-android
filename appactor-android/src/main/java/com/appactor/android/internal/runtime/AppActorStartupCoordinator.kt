@@ -39,6 +39,10 @@ internal interface AppActorStartupCoordinatorHost {
         source: AppActorDiagnosticsDataSource? = null,
     ): Boolean
 
+    suspend fun seedOfflineCustomerInfoIfEmpty(
+        snapshot: AppActorOperationSnapshot,
+    ): Boolean
+
     suspend fun persistOfferingsSource(
         runtimeSessionId: Long,
         source: AppActorDiagnosticsDataSource?,
@@ -129,6 +133,7 @@ internal class AppActorStartupCoordinator(
         runStartupProfileContextSync(runtimeState)
         runStartupPurchaseSync(runtimeState)
         runStartupDeadLetterRetry(runtimeState)
+        runStartupOfflineSeed(runtimeState)
         runStartupCustomerRefresh(runtimeState)
     }
 
@@ -221,6 +226,19 @@ internal class AppActorStartupCoordinator(
                     source = AppActorDiagnosticsDataSource.Network,
                 )
             }
+        }
+    }
+
+    private suspend fun runStartupOfflineSeed(runtimeState: AppActorRuntimeState) {
+        timedPhase(runtimeState, "offline_seed", AppActorDebugCategory.Purchase) {
+            val snapshot = host.captureOperationSnapshot(
+                resolveAppUserId = true,
+                awaitBootstrapCompletion = false,
+            )
+            if (snapshot.runtime.sessionId != runtimeState.sessionId) {
+                return@timedPhase
+            }
+            host.seedOfflineCustomerInfoIfEmpty(snapshot)
         }
     }
 
