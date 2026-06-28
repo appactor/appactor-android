@@ -13,6 +13,9 @@ internal interface AppActorAttributeQueueStore {
     fun pendingAppUserIds(): List<String>
     fun loadAttributionSnapshot(appUserId: String): AppActorAttributionRequestDTO?
     fun saveAttributionSnapshot(appUserId: String, attribution: AppActorAttributionRequestDTO?)
+    /** Fingerprint of the last successfully delivered automatic device-attribute bucket. */
+    fun loadProfileContextFingerprint(appUserId: String): String?
+    fun saveProfileContextFingerprint(appUserId: String, fingerprint: String?)
     fun clearAll()
 }
 
@@ -82,6 +85,20 @@ internal class AppActorSharedPrefsAttributeQueueStore(
         }.apply()
     }
 
+    override fun loadProfileContextFingerprint(appUserId: String): String? =
+        preferences.getString(fingerprintKey(appUserId), null)
+
+    override fun saveProfileContextFingerprint(appUserId: String, fingerprint: String?) {
+        preferences.edit().apply {
+            if (fingerprint == null) {
+                remove(fingerprintKey(appUserId))
+            } else {
+                putString(fingerprintKey(appUserId), fingerprint)
+            }
+            trimToMaxUsers(this, keepAppUserId = appUserId, willHaveRecord = fingerprint != null)
+        }.apply()
+    }
+
     override fun clearAll() {
         preferences.edit().clear().apply()
     }
@@ -89,6 +106,8 @@ internal class AppActorSharedPrefsAttributeQueueStore(
     private fun key(appUserId: String): String = "$KEY_PREFIX$appUserId"
 
     private fun snapshotKey(appUserId: String): String = "$SNAPSHOT_PREFIX$appUserId"
+
+    private fun fingerprintKey(appUserId: String): String = "$FINGERPRINT_PREFIX$appUserId"
 
     private fun trimToMaxUsers(
         editor: SharedPreferences.Editor,
@@ -105,13 +124,20 @@ internal class AppActorSharedPrefsAttributeQueueStore(
         }
         val overflow = userIds.size - MAX_USERS
         if (overflow <= 0) return
+        // Evict users WITHOUT a pending mutation first (fingerprint/snapshot-only), so a
+        // lingering fingerprint never pushes out a not-yet-delivered pending bucket.
+        val pendingUserIds = preferences.all.keys
+            .filter { it.startsWith(KEY_PREFIX) }
+            .map { it.removePrefix(KEY_PREFIX) }
+            .toSet()
         userIds
             .filterNot { it == keepAppUserId }
-            .sorted()
+            .sortedWith(compareBy({ it in pendingUserIds }, { it }))
             .take(overflow)
             .forEach { appUserId ->
                 editor.remove(key(appUserId))
                 editor.remove(snapshotKey(appUserId))
+                editor.remove(fingerprintKey(appUserId))
             }
     }
 
@@ -119,6 +145,7 @@ internal class AppActorSharedPrefsAttributeQueueStore(
         return when {
             key.startsWith(KEY_PREFIX) -> key.removePrefix(KEY_PREFIX)
             key.startsWith(SNAPSHOT_PREFIX) -> key.removePrefix(SNAPSHOT_PREFIX)
+            key.startsWith(FINGERPRINT_PREFIX) -> key.removePrefix(FINGERPRINT_PREFIX)
             else -> null
         }
     }
@@ -127,6 +154,7 @@ internal class AppActorSharedPrefsAttributeQueueStore(
         const val PREFS_NAME = "appactor_attribute_queue"
         const val KEY_PREFIX = "pending:"
         const val SNAPSHOT_PREFIX = "attribution_snapshot:"
+        const val FINGERPRINT_PREFIX = "profile_fp:"
         const val MAX_USERS = 8
     }
 }

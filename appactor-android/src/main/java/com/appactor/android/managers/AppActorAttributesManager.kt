@@ -21,6 +21,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonElement
+import java.security.MessageDigest
 import java.util.Locale
 import java.util.TimeZone
 
@@ -132,9 +133,19 @@ internal class AppActorAttributesManager(
     suspend fun collectAutomaticProfileContext(appUserId: String) {
         val normalized = normalizeAttributes(buildAutomaticProfileContextAttributes(), allowReservedKeys = true)
         if (normalized.isEmpty()) return
+        // Change-detection: skip the redundant per-launch PATCH when the device context is
+        // identical to what was last confirmed delivered for this user.
+        val fingerprint = profileContextFingerprint(normalized)
+        if (queueStore.loadProfileContextFingerprint(appUserId) == fingerprint) {
+            AppActorLogger.debug("Automatic profile context unchanged since last delivery; skipping attribute write.")
+            return
+        }
         enqueueNormalizedAttributes(appUserId, normalized)
         try {
-            flushPending(appUserId)
+            // Persist the fingerprint only on confirmed delivery so a transient failure re-sends.
+            if (flushPending(appUserId)) {
+                queueStore.saveProfileContextFingerprint(appUserId, fingerprint)
+            }
         } catch (throwable: Throwable) {
             if (throwable is CancellationException) throw throwable
             dropQueuedAttributeValues(
@@ -187,6 +198,19 @@ internal class AppActorAttributesManager(
             }
         }
         return attributes
+    }
+
+    /**
+     * Stable fingerprint of an automatic device-attribute bucket. Deterministic across
+     * launches (sorted-key canonical form + SHA-256), used to skip the redundant
+     * per-launch attribute write when the device context hasn't changed.
+     */
+    private fun profileContextFingerprint(normalized: Map<String, JsonElement?>): String {
+        val canonical = normalized.entries
+            .sortedBy { it.key }
+            .joinToString("\n") { (key, value) -> "$key=${value?.toString() ?: " "}" }
+        val digest = MessageDigest.getInstance("SHA-256").digest(canonical.toByteArray(Charsets.UTF_8))
+        return digest.joinToString("") { "%02x".format(it) }
     }
 
     private fun MutableMap<String, AppActorAttributeValue>.putProfileString(
@@ -243,11 +267,18 @@ internal class AppActorAttributesManager(
         flushPending(appUserId)
     }
 
-    suspend fun flushPending(appUserId: String) {
-        val pending = queueMutex.withLock { queueStore.load(appUserId) } ?: return
+    /**
+     * Flushes queued mutations for [appUserId].
+     *
+     * @return `true` when everything pending was confirmed delivered (or there was nothing
+     *   to send), `false` when a transient failure left mutations queued for a later retry.
+     *   Throws on permanent (non-transient) failures.
+     */
+    suspend fun flushPending(appUserId: String): Boolean {
+        val pending = queueMutex.withLock { queueStore.load(appUserId) } ?: return true
         if (pending.isEmpty()) {
             queueMutex.withLock { queueStore.save(appUserId, null) }
-            return
+            return true
         }
 
         try {
@@ -285,12 +316,13 @@ internal class AppActorAttributesManager(
                 val current = queueStore.load(appUserId)
                 queueStore.save(appUserId, current?.removeFlushed(pending))
             }
+            return true
         } catch (throwable: Throwable) {
             if (throwable is CancellationException) throw throwable
             val error = throwable.toAppActorError(defaultMessage = "Attribute flush failed.")
             if (error.isTransient) {
                 AppActorLogger.debug("Attribute flush failed; pending mutations remain queued.")
-                return
+                return false
             }
             throw error
         }
