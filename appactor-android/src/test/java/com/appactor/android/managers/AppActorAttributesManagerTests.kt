@@ -178,6 +178,47 @@ class AppActorAttributesManagerTests {
     }
 
     @Test
+    fun `collectAutomaticProfileContext skips redundant write when device context unchanged`() = runBlocking {
+        val backend = FakeAttributesBackendClient()
+        val manager = manager(backend, InMemoryAttributeQueueStore())
+
+        manager.collectAutomaticProfileContext("user_a")
+        manager.collectAutomaticProfileContext("user_a")
+
+        // Second launch with identical device context must not issue another PATCH.
+        assertEquals(1, backend.patchRequests.size)
+    }
+
+    @Test
+    fun `collectAutomaticProfileContext resends when a device attribute changes`() = runBlocking {
+        val backend = FakeAttributesBackendClient()
+        var country = "TR"
+        val manager = manager(backend, InMemoryAttributeQueueStore(), countryProvider = { country })
+
+        manager.collectAutomaticProfileContext("user_a")
+        country = "US"
+        manager.collectAutomaticProfileContext("user_a")
+
+        assertEquals(2, backend.patchRequests.size)
+        assertEquals(JsonPrimitive("US"), backend.patchRequests.last().second.attributes["\$localeCountry"])
+    }
+
+    @Test
+    fun `collectAutomaticProfileContext resends after a transient failure`() = runBlocking {
+        val backend = FakeAttributesBackendClient(failMutations = true)
+        val manager = manager(backend, InMemoryAttributeQueueStore())
+
+        // First launch fails transiently: nothing delivered, so the fingerprint is not stored.
+        manager.collectAutomaticProfileContext("user_a")
+        assertEquals(0, backend.patchRequests.size)
+
+        // Next launch must re-attempt (not skipped) and now succeed.
+        backend.failMutations = false
+        manager.collectAutomaticProfileContext("user_a")
+        assertEquals(1, backend.patchRequests.size)
+    }
+
+    @Test
     fun `collectDeviceIdentifiers keeps manual integration id path`() = runBlocking {
         val backend = FakeAttributesBackendClient()
         val manager = manager(backend, InMemoryAttributeQueueStore())
@@ -481,12 +522,20 @@ class AppActorAttributesManagerTests {
             }
         }
 
+        override fun loadProfileContextFingerprint(appUserId: String): String? = fingerprints[appUserId]
+
+        override fun saveProfileContextFingerprint(appUserId: String, fingerprint: String?) {
+            if (fingerprint == null) fingerprints.remove(appUserId) else fingerprints[appUserId] = fingerprint
+        }
+
         override fun clearAll() {
             mutations.clear()
             snapshots.clear()
+            fingerprints.clear()
         }
 
         private val snapshots = linkedMapOf<String, AppActorAttributionRequestDTO>()
+        private val fingerprints = linkedMapOf<String, String>()
     }
 
     private class FakeAttributesBackendClient(

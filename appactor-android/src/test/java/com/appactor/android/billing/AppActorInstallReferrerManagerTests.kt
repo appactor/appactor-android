@@ -187,9 +187,18 @@ class AppActorInstallReferrerManagerTests {
             }
         }
 
+        override fun loadProfileContextFingerprint(appUserId: String): String? = fingerprints[appUserId]
+
+        override fun saveProfileContextFingerprint(appUserId: String, fingerprint: String?) {
+            if (fingerprint == null) fingerprints.remove(appUserId) else fingerprints[appUserId] = fingerprint
+        }
+
         override fun clearAll() {
             mutations.clear()
             snapshots.clear()
+            fingerprints.clear()
         }
+
+        private val fingerprints = linkedMapOf<String, String>()
     }
 }

@@ -64,6 +64,29 @@ class AppActorStartupCoordinatorTests {
     }
 
     @Test
+    fun `offline seed phase runs before the customer refresh`() = runBlocking {
+        val runtime = createRuntimeState(
+            options = runtimeTestOptions(),
+        )
+        val host = RecordingStartupHost(runtime).apply {
+            deferredStepsExpected = CountDownLatch(4)
+        }
+        val coordinator = AppActorStartupCoordinator(host)
+
+        val handles = coordinator.start(runtime)
+        handles.bootstrapCompletionJob?.join()
+
+        val order = host.operationOrder.toList()
+        assertEquals(1, host.seedOfflineCount.get())
+        assertTrue(order.contains("offline_seed"))
+        assertTrue(
+            "offline_seed must come before customer",
+            order.indexOf("offline_seed") < order.indexOf("customer"),
+        )
+        runtime.scope.cancel()
+    }
+
+    @Test
     fun `bootstrap completion does not wait for offerings prefetch warmup`() = runBlocking {
         val runtime = createRuntimeState(
             options = runtimeTestOptions(),
@@ -244,6 +267,7 @@ class AppActorStartupCoordinatorTests {
         val debugEvents = CopyOnWriteArrayList<Map<String, String>>()
         val processPurchaseUpdatesCount = AtomicInteger(0)
         val publishCustomerInfoCount = AtomicInteger(0)
+        val seedOfflineCount = AtomicInteger(0)
 
         var deferredStepsExpected: CountDownLatch? = null
         var purchaseUpdateProcessed: CountDownLatch? = null
@@ -320,6 +344,14 @@ class AppActorStartupCoordinatorTests {
         ): Boolean {
             publishCustomerInfoCount.incrementAndGet()
             return true
+        }
+
+        override suspend fun seedOfflineCustomerInfoIfEmpty(
+            snapshot: AppActorOperationSnapshot,
+        ): Boolean {
+            seedOfflineCount.incrementAndGet()
+            operationOrder += "offline_seed"
+            return false
         }
 
         override suspend fun persistOfferingsSource(
