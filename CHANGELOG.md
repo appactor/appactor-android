@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.3.12
+
+- Added: entitlement state now seeds from the persisted cache (and, on a cache miss, from local Play Billing purchases) at cold start, before the network refresh.
+- Improved: the automatic device-attribute sync is skipped when nothing changed since the last confirmed delivery, removing a redundant per-launch network write.
+
 ## 2.3.11
 
 - Fixed: a corrupt or forward-incompatible `receipt_queue.json` is now quarantined to a `.corrupt` sidecar instead of being deleted, so a single bad record no longer wipes every queued (paid) receipt. The sidecar is purged on `clear()`/`reset()` so it never retains receipt data past a logout. (audit android-7)
