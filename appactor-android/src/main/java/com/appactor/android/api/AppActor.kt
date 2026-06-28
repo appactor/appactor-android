@@ -735,33 +735,20 @@ public object AppActor {
         val offlineKeys = snapshot.runtime.customerManager.activeEntitlementKeysOffline(snapshot.appUserId)
         if (offlineKeys.isEmpty()) return false
 
-        // Re-check emptiness and publish atomically under the same lock the concurrent
-        // purchase-update publisher uses, so the seed never overwrites a real value that
-        // landed while the Play Billing query above was in flight.
-        var publishedInfo: AppActorCustomerInfo? = null
-        val callback = transitionMutex.withLock {
-            val currentRuntime = runtime ?: return@withLock null
-            if (currentRuntime.sessionId != snapshot.runtime.sessionId || identityEpoch != snapshot.epoch) {
-                return@withLock null
-            }
-            if (currentRuntime.lastCustomerInfo != AppActorCustomerInfo.empty) {
-                return@withLock null
-            }
-            val info = buildOfflineCustomerInfo(
-                appUserId = snapshot.appUserId,
-                baseCustomer = currentRuntime.lastCustomerInfo,
-                offlineKeys = offlineKeys,
-            )
-            publishedInfo = info
-            publishCustomerInfoLocked(currentRuntime, info, AppActorDiagnosticsDataSource.Offline)
-        }
-        val info = publishedInfo
-        if (callback != null && info != null) {
-            deliverOnMainIfCurrent(snapshot.runtime.sessionId, snapshot.epoch) {
-                callback.invoke(info)
-            }
-        }
-        return callback != null
+        // Publish from an empty base, re-checking emptiness inside the publish lock (the same
+        // lock the concurrent purchase-update publisher uses) so the seed never overwrites a
+        // real value that landed while the Play Billing query above was in flight.
+        val info = buildOfflineCustomerInfo(
+            appUserId = snapshot.appUserId,
+            baseCustomer = AppActorCustomerInfo.empty,
+            offlineKeys = offlineKeys,
+        )
+        return publishCustomerInfoIfCurrent(
+            snapshot = snapshot,
+            info = info,
+            source = AppActorDiagnosticsDataSource.Offline,
+            guard = { it.lastCustomerInfo == AppActorCustomerInfo.empty },
+        )
     }
 
     public suspend fun activeEntitlementKeysOffline(): Set<String> {
@@ -1437,10 +1424,14 @@ public object AppActor {
         snapshot: AppActorOperationSnapshot,
         info: AppActorCustomerInfo,
         source: AppActorDiagnosticsDataSource? = null,
+        guard: (AppActorRuntimeState) -> Boolean = { true },
     ): Boolean {
         val callback = transitionMutex.withLock {
             val currentRuntime = runtime ?: return@withLock null
             if (currentRuntime.sessionId != snapshot.runtime.sessionId || identityEpoch != snapshot.epoch) {
+                return@withLock null
+            }
+            if (!guard(currentRuntime)) {
                 return@withLock null
             }
             publishCustomerInfoLocked(currentRuntime, info, source)
