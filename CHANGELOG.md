@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.3.13
+
+- Fixed: a Google Play subscription purchase that names a specific offer (e.g. a free trial) now falls back to the base plan when Play does not return that offer for the user — most commonly a returning / trial-ineligible user for whom Play omits the offer. Previously the product was dropped or an `InvalidConfiguration` was thrown, so a returning user could not subscribe at all; now they are charged the standard base-plan price (matching RevenueCat and Adapty). The fallback only ever resolves to the base plan (never a different offer), and logs a warning so a misconfigured/typo'd offer id stays observable.
+
 ## 2.3.12
 
 - Added: entitlement state now seeds from the persisted cache (and, on a cache miss, from local Play Billing purchases) at cold start, before the network refresh.
