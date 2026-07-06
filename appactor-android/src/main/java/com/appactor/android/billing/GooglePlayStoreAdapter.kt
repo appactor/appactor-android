@@ -459,7 +459,7 @@ internal class GooglePlayStoreAdapter(
         val offers = payload.subscriptionOffers
         if (offers.isEmpty()) return null
 
-        return selectUniqueOffer(
+        val resolved = selectUniqueOffer(
             payload = payload,
             request = request,
             candidates = offers.filter { offer ->
@@ -490,6 +490,35 @@ internal class GooglePlayStoreAdapter(
             },
             ambiguityDescription = "matching offer id"
         )
+        if (resolved != null) return resolved
+
+        // Base-plan fallback: the request named a specific offer (e.g. a free trial / intro offer)
+        // that Play did not return for this user. The common cause is a returning / ineligible user
+        // for whom Play omits the offer from ProductDetails. Rather than fail the purchase and leave
+        // the user unable to subscribe, degrade to the base-plan token for the SAME base plan and let
+        // Play charge the standard price — matching RevenueCat and Adapty. This only falls back to the
+        // base plan (offerId == null); it never substitutes a *different* offer. A misconfigured /
+        // typo'd offerId also lands here (silent base-price charge), so we log a warning.
+        if (!request.offerId.isNullOrBlank()) {
+            val baseFallback = selectUniqueOffer(
+                payload = payload,
+                request = request,
+                candidates = offers.filter { offer ->
+                    offer.basePlanId == request.basePlanId && offer.offerId.isNullOrBlank()
+                },
+                ambiguityDescription = "base plan fallback (requested offer unavailable)"
+            )
+            if (baseFallback != null) {
+                AppActorLogger.warn(
+                    "[Billing] Requested Play offer unavailable for productId=${request.productId} " +
+                        "basePlanId=${request.basePlanId ?: "null"} offerId=${request.offerId ?: "null"}; " +
+                        "falling back to the base plan (standard price)."
+                )
+                return baseFallback
+            }
+        }
+
+        return null
     }
 
     private fun selectUniqueOffer(

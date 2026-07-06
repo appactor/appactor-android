@@ -749,7 +749,7 @@ class GooglePlayStoreAdapterTests {
     }
 
     @Test
-    fun `query product details does not fall back to the first subscription offer on mismatch`() = kotlinx.coroutines.runBlocking {
+    fun `query product details falls back to the base plan when the requested offer is unavailable (never another offer)`() = kotlinx.coroutines.runBlocking {
         val (billingClient, _) = createMockBillingClient(
             productDetails = listOf(
                 AppActorBillingProductDetailsPayload(
@@ -775,7 +775,55 @@ class GooglePlayStoreAdapterTests {
             )
         )
 
-        assertTrue(products.isEmpty())
+        // Requested offer is absent → fall back to the base plan (offerId null), never to the other
+        // offer (intro7d).
+        assertEquals(1, products.size)
+        assertEquals("monthly001", products.single().basePlanId)
+        assertNull(products.single().offerId)
+    }
+
+    @Test
+    fun `query product details falls back to base plan for a returning user whose trial offer is unavailable`() = kotlinx.coroutines.runBlocking {
+        val previousHandler = AppActorLogger.logHandler
+        val messages = mutableListOf<String>()
+        AppActorLogger.logHandler = { _, message, _, _ -> messages += message }
+        try {
+            val (billingClient, _) = createMockBillingClient(
+                productDetails = listOf(
+                    AppActorBillingProductDetailsPayload(
+                        productId = "com.appactor.weeklytrial",
+                        productType = AppActorProductType.Subscription,
+                        // Returning / trial-ineligible user: Play returns ONLY the base plan; the trial offer is omitted.
+                        subscriptionOffers = listOf(
+                            AppActorBillingSubscriptionOfferPayload(basePlanId = "weeklytrial", offerId = null, offerToken = "base"),
+                        ),
+                    )
+                )
+            )
+            val adapter = GooglePlayStoreAdapter(context, billingClient)
+
+            val products = adapter.queryProductDetails(
+                listOf(
+                    AppActorStoreProductRequest(
+                        productId = "com.appactor.weeklytrial",
+                        productType = AppActorProductType.Subscription,
+                        basePlanId = "weeklytrial",
+                        offerId = "trial",
+                    )
+                )
+            )
+
+            // The trial offer is unavailable to this user; the purchase must still resolve to the base
+            // plan (standard price) instead of dropping the product / failing.
+            assertEquals(1, products.size)
+            assertEquals("weeklytrial", products.single().basePlanId)
+            assertNull(products.single().offerId)
+            // The fallback must emit a WARN — the only audit signal that a requested offer was silently
+            // degraded to the base plan (this also fires on a misconfigured / typo'd offerId).
+            assertTrue(messages.any { it.contains("Requested Play offer unavailable") && it.contains("offerId=trial") })
+        } finally {
+            AppActorLogger.logHandler = previousHandler
+        }
     }
 
     @Test
