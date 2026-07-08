@@ -129,10 +129,6 @@ internal data class AppActorBillingQueryProduct(
 internal data class AppActorBillingPricingPhasePayload(
     val billingPeriod: String? = null,
     val priceAmountMicros: Long? = null,
-    val formattedPrice: String? = null,
-    val currencyCode: String? = null,
-    val billingCycleCount: Int = 0,
-    val recurrenceMode: Int? = null,
 )
 
 internal data class AppActorBillingSubscriptionOfferPayload(

@@ -695,10 +695,6 @@ private fun ProductDetails.toPayload(
                 AppActorBillingPricingPhasePayload(
                     billingPeriod = phase.billingPeriod,
                     priceAmountMicros = phase.priceAmountMicros,
-                    formattedPrice = phase.formattedPrice,
-                    currencyCode = phase.priceCurrencyCode,
-                    billingCycleCount = phase.billingCycleCount,
-                    recurrenceMode = phase.recurrenceMode,
                 )
             },
         )
