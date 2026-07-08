@@ -3,6 +3,7 @@ package com.appactor.android.billing
 import android.app.Activity
 import com.android.billingclient.api.BillingFlowParams
 import com.android.billingclient.api.ProductDetails
+import com.appactor.android.models.AppActorPricingPhase
 import com.appactor.android.models.AppActorProductType
 import com.appactor.android.models.AppActorStoreCapability
 import com.appactor.android.models.AppActorStorefront
@@ -63,6 +64,8 @@ internal data class AppActorStoreProduct(
     val title: String? = null,
     val displayName: String? = null,
     val description: String? = null,
+    /** Ordered pricing phases of the resolved subscription offer; empty for one-time products. */
+    val pricingPhases: List<AppActorPricingPhase> = emptyList(),
 )
 
 internal enum class AppActorStorePurchaseState {
@@ -129,7 +132,22 @@ internal data class AppActorBillingQueryProduct(
 internal data class AppActorBillingPricingPhasePayload(
     val billingPeriod: String? = null,
     val priceAmountMicros: Long? = null,
+    val formattedPrice: String? = null,
+    val currencyCode: String? = null,
+    val billingCycleCount: Int? = null,
+    val recurrenceMode: Int? = null,
 )
+
+/** Maps an internal Play pricing-phase payload to the public [AppActorPricingPhase] model. */
+internal fun AppActorBillingPricingPhasePayload.toAppActorPricingPhase(): AppActorPricingPhase =
+    AppActorPricingPhase(
+        billingPeriod = billingPeriod,
+        formattedPrice = formattedPrice,
+        priceAmountMicros = priceAmountMicros,
+        currencyCode = currencyCode,
+        billingCycleCount = billingCycleCount,
+        recurrenceMode = recurrenceMode,
+    )
 
 internal data class AppActorBillingSubscriptionOfferPayload(
     val basePlanId: String? = null,

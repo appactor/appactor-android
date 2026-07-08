@@ -301,6 +301,7 @@ package com.appactor.android.api {
   }
 
 }
+
 package com.appactor.android.models {
 
   public abstract sealed class AppActorAttributeValue {
@@ -1097,6 +1098,12 @@ package com.appactor.android.models {
     property public final String? storeTransactionIdentifier;
   }
 
+  public enum AppActorOfferPaymentMode {
+    enum_constant public static final com.appactor.android.models.AppActorOfferPaymentMode DiscountedRecurring;
+    enum_constant public static final com.appactor.android.models.AppActorOfferPaymentMode FreeTrial;
+    enum_constant public static final com.appactor.android.models.AppActorOfferPaymentMode SinglePayment;
+  }
+
   public final class AppActorOffering {
     ctor public AppActorOffering(String id, optional String displayName, optional boolean isCurrent, optional String? lookupKey, optional java.util.Map<java.lang.String,? extends java.lang.Object?> metadata, optional java.util.List<com.appactor.android.models.AppActorPackage> packages);
     method public String component1();
@@ -1194,7 +1201,7 @@ package com.appactor.android.models {
   }
 
   public final class AppActorPackage {
-    ctor public AppActorPackage(String id, optional com.appactor.android.models.AppActorPackageType packageType, optional String? customTypeIdentifier, com.appactor.android.models.AppActorStore store, String productId, optional String? storeProductId, optional com.appactor.android.models.AppActorProductType productType, optional String? basePlanId, optional String? offerId, optional String? localizedPriceString, optional Double? price, optional String? currencyCode, optional String? displayName, optional String? productName, optional String? productDescription, optional java.util.Map<java.lang.String,? extends java.lang.Object?> metadata, optional Integer? tokenAmount, optional Integer? position, optional String? oldPurchaseToken, optional com.appactor.android.models.AppActorSubscriptionReplacementMode? replacementMode, optional String? offeringId);
+    ctor public AppActorPackage(String id, optional com.appactor.android.models.AppActorPackageType packageType, optional String? customTypeIdentifier, com.appactor.android.models.AppActorStore store, String productId, optional String? storeProductId, optional com.appactor.android.models.AppActorProductType productType, optional String? basePlanId, optional String? offerId, optional String? localizedPriceString, optional Double? price, optional String? currencyCode, optional String? displayName, optional String? productName, optional String? productDescription, optional java.util.Map<java.lang.String,? extends java.lang.Object?> metadata, optional Integer? tokenAmount, optional Integer? position, optional String? oldPurchaseToken, optional com.appactor.android.models.AppActorSubscriptionReplacementMode? replacementMode, optional String? offeringId, optional java.util.List<com.appactor.android.models.AppActorPricingPhase> pricingPhases);
     method public String component1();
     method public String? component10();
     method public Double? component11();
@@ -1209,6 +1216,7 @@ package com.appactor.android.models {
     method public com.appactor.android.models.AppActorPackageType component2();
     method public com.appactor.android.models.AppActorSubscriptionReplacementMode? component20();
     method public String? component21();
+    method public java.util.List<com.appactor.android.models.AppActorPricingPhase> component22();
     method public String? component3();
     method public com.appactor.android.models.AppActorStore component4();
     method public String component5();
@@ -1216,13 +1224,17 @@ package com.appactor.android.models {
     method public com.appactor.android.models.AppActorProductType component7();
     method public String? component8();
     method public String? component9();
-    method public com.appactor.android.models.AppActorPackage copy(String id, com.appactor.android.models.AppActorPackageType packageType, String? customTypeIdentifier, com.appactor.android.models.AppActorStore store, String productId, String? storeProductId, com.appactor.android.models.AppActorProductType productType, String? basePlanId, String? offerId, String? localizedPriceString, Double? price, String? currencyCode, String? displayName, String? productName, String? productDescription, java.util.Map<java.lang.String,? extends java.lang.Object?> metadata, Integer? tokenAmount, Integer? position, String? oldPurchaseToken, com.appactor.android.models.AppActorSubscriptionReplacementMode? replacementMode, String? offeringId);
+    method public com.appactor.android.models.AppActorPackage copy(String id, com.appactor.android.models.AppActorPackageType packageType, String? customTypeIdentifier, com.appactor.android.models.AppActorStore store, String productId, String? storeProductId, com.appactor.android.models.AppActorProductType productType, String? basePlanId, String? offerId, String? localizedPriceString, Double? price, String? currencyCode, String? displayName, String? productName, String? productDescription, java.util.Map<java.lang.String,? extends java.lang.Object?> metadata, Integer? tokenAmount, Integer? position, String? oldPurchaseToken, com.appactor.android.models.AppActorSubscriptionReplacementMode? replacementMode, String? offeringId, java.util.List<com.appactor.android.models.AppActorPricingPhase> pricingPhases);
     method public String? getBasePlanId();
     method public String? getCurrencyCode();
     method public String? getCustomTypeIdentifier();
     method public String? getDisplayName();
+    method public com.appactor.android.models.AppActorPricingPhase? getFreePhase();
+    method public com.appactor.android.models.AppActorPricingPhase? getFullPricePhase();
+    method public boolean getHasFreeTrial();
     method public String getId();
     method public String getIdentifier();
+    method public com.appactor.android.models.AppActorPricingPhase? getIntroPhase();
     method public String? getLocalizedPriceString();
     method public java.util.Map<java.lang.String,java.lang.Object?> getMetadata();
     method public String? getOfferId();
@@ -1232,6 +1244,7 @@ package com.appactor.android.models {
     method public Integer? getPosition();
     method public Double? getPrice();
     method public Long? getPriceAmountMicros();
+    method public java.util.List<com.appactor.android.models.AppActorPricingPhase> getPricingPhases();
     method public String? getProductDescription();
     method public String getProductId();
     method public String? getProductName();
@@ -1244,8 +1257,12 @@ package com.appactor.android.models {
     property public final String? currencyCode;
     property public final String? customTypeIdentifier;
     property public final String? displayName;
+    property public final com.appactor.android.models.AppActorPricingPhase? freePhase;
+    property public final com.appactor.android.models.AppActorPricingPhase? fullPricePhase;
+    property public final boolean hasFreeTrial;
     property public final String id;
     property public final String identifier;
+    property public final com.appactor.android.models.AppActorPricingPhase? introPhase;
     property public final String? localizedPriceString;
     property public final java.util.Map<java.lang.String,java.lang.Object?> metadata;
     property public final String? offerId;
@@ -1255,6 +1272,7 @@ package com.appactor.android.models {
     property public final Integer? position;
     property public final Double? price;
     property public final Long? priceAmountMicros;
+    property public final java.util.List<com.appactor.android.models.AppActorPricingPhase> pricingPhases;
     property public final String? productDescription;
     property public final String productId;
     property public final String? productName;
@@ -1315,6 +1333,35 @@ package com.appactor.android.models {
     method public String? getVersion();
     property public final String flavor;
     property public final String? version;
+  }
+
+  public final class AppActorPricingPhase {
+    ctor public AppActorPricingPhase(optional String? billingPeriod, optional String? formattedPrice, optional Long? priceAmountMicros, optional String? currencyCode, optional Integer? billingCycleCount, optional Integer? recurrenceMode);
+    method public String? component1();
+    method public String? component2();
+    method public Long? component3();
+    method public String? component4();
+    method public Integer? component5();
+    method public Integer? component6();
+    method public com.appactor.android.models.AppActorPricingPhase copy(String? billingPeriod, String? formattedPrice, Long? priceAmountMicros, String? currencyCode, Integer? billingCycleCount, Integer? recurrenceMode);
+    method public Integer? getBillingCycleCount();
+    method public String? getBillingPeriod();
+    method public String? getCurrencyCode();
+    method public String? getFormattedPrice();
+    method public com.appactor.android.models.AppActorOfferPaymentMode? getPaymentMode();
+    method public com.appactor.android.models.AppActorSubscriptionPeriod? getPeriod();
+    method public Long? getPriceAmountMicros();
+    method public Integer? getRecurrenceMode();
+    method public boolean isFreeTrial();
+    property public final Integer? billingCycleCount;
+    property public final String? billingPeriod;
+    property public final String? currencyCode;
+    property public final String? formattedPrice;
+    property public final boolean isFreeTrial;
+    property public final com.appactor.android.models.AppActorOfferPaymentMode? paymentMode;
+    property public final com.appactor.android.models.AppActorSubscriptionPeriod? period;
+    property public final Long? priceAmountMicros;
+    property public final Integer? recurrenceMode;
   }
 
   public enum AppActorProductType {
@@ -1654,6 +1701,25 @@ package com.appactor.android.models {
     property public final boolean willRenew;
   }
 
+  public final class AppActorSubscriptionPeriod {
+    ctor public AppActorSubscriptionPeriod(com.appactor.android.models.AppActorSubscriptionPeriodUnit unit, int numberOfUnits);
+    method public com.appactor.android.models.AppActorSubscriptionPeriodUnit component1();
+    method public int component2();
+    method public com.appactor.android.models.AppActorSubscriptionPeriod copy(com.appactor.android.models.AppActorSubscriptionPeriodUnit unit, int numberOfUnits);
+    method public int getNumberOfUnits();
+    method public com.appactor.android.models.AppActorSubscriptionPeriodUnit getUnit();
+    property public final int numberOfUnits;
+    property public final com.appactor.android.models.AppActorSubscriptionPeriodUnit unit;
+  }
+
+  public enum AppActorSubscriptionPeriodUnit {
+    enum_constant public static final com.appactor.android.models.AppActorSubscriptionPeriodUnit Day;
+    enum_constant public static final com.appactor.android.models.AppActorSubscriptionPeriodUnit Month;
+    enum_constant public static final com.appactor.android.models.AppActorSubscriptionPeriodUnit Unknown;
+    enum_constant public static final com.appactor.android.models.AppActorSubscriptionPeriodUnit Week;
+    enum_constant public static final com.appactor.android.models.AppActorSubscriptionPeriodUnit Year;
+  }
+
   public enum AppActorSubscriptionReplacementMode {
     enum_constant public static final com.appactor.android.models.AppActorSubscriptionReplacementMode ChargeFullPrice;
     enum_constant public static final com.appactor.android.models.AppActorSubscriptionReplacementMode ChargeProrated;
@@ -1716,3 +1782,4 @@ package com.appactor.android.models {
   }
 
 }
+

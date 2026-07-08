@@ -1,5 +1,7 @@
 package com.appactor.android.billing
 
+import com.appactor.android.models.AppActorSubscriptionPeriod
+
 /**
  * Client-side auto-selection of the best eligible Google Play subscription offer for a base
  * plan, mirroring RevenueCat's default offer logic.
@@ -22,8 +24,6 @@ internal object SubscriptionOfferSelector {
 
     /** Play Console offer tag that opts an offer out of client-side auto-selection. */
     const val IGNORE_OFFER_TAG: String = "aa-ignore-offer"
-
-    private val ISO_8601_PERIOD = Regex("^P(?:(\\d+)Y)?(?:(\\d+)M)?(?:(\\d+)W)?(?:(\\d+)D)?$", RegexOption.IGNORE_CASE)
 
     /**
      * Selects the best eligible offer among [offers] (all entries are expected to belong to the
@@ -84,14 +84,10 @@ internal object SubscriptionOfferSelector {
     /**
      * Parses an ISO-8601 period (`P1W`, `P3D`, `P1M`, `P1Y`, combinations) into approximate days
      * for comparison (1M = 30d, 1Y = 365d). Returns `null` for unparseable or zero periods.
+     *
+     * Delegates to [AppActorSubscriptionPeriod.iso8601ToDays] so the ISO-8601 regex lives in
+     * exactly one place (shared with the public period model).
      */
-    internal fun iso8601PeriodToDays(period: String): Int? {
-        val match = ISO_8601_PERIOD.matchEntire(period.trim()) ?: return null
-        val (years, months, weeks, days) = match.destructured
-        val totalDays = (years.toIntOrNull() ?: 0) * 365 +
-            (months.toIntOrNull() ?: 0) * 30 +
-            (weeks.toIntOrNull() ?: 0) * 7 +
-            (days.toIntOrNull() ?: 0)
-        return totalDays.takeIf { it > 0 }
-    }
+    internal fun iso8601PeriodToDays(period: String): Int? =
+        AppActorSubscriptionPeriod.iso8601ToDays(period)
 }

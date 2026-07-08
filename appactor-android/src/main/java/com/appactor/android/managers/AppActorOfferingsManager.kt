@@ -760,6 +760,7 @@ internal class AppActorOfferingsManager(
             tokenAmount = tokenAmount,
             position = position,
             offeringId = offeringId,
+            pricingPhases = resolved.pricingPhases,
         )
     }
 

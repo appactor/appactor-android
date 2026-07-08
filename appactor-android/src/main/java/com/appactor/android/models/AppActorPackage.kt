@@ -24,6 +24,12 @@ public data class AppActorPackage(
     val oldPurchaseToken: String? = null,
     val replacementMode: AppActorSubscriptionReplacementMode? = null,
     val offeringId: String? = null,
+    /**
+     * Ordered pricing phases of the resolved subscription offer (trial / intro phases first,
+     * the full recurring price last). Empty for one-time products, Apple packages, and base
+     * plans without a resolved store offer.
+     */
+    val pricingPhases: List<AppActorPricingPhase> = emptyList(),
 ) {
     /**
      * Semantic identifier for package selection.
@@ -39,4 +45,29 @@ public data class AppActorPackage(
         get() = price
             ?.takeIf { it.isFinite() }
             ?.let { (it * 1_000_000).roundToLong() }
+
+    /**
+     * The full (recurring) price phase — the last phase of the offer. Mirrors RevenueCat's
+     * `SubscriptionOption.fullPricePhase`.
+     */
+    public val fullPricePhase: AppActorPricingPhase?
+        get() = pricingPhases.lastOrNull()
+
+    /**
+     * The free-trial phase — the first non-recurring phase priced at zero. `null` when the offer
+     * has no free trial. Mirrors RevenueCat's `SubscriptionOption.freePhase`.
+     */
+    public val freePhase: AppActorPricingPhase?
+        get() = pricingPhases.dropLast(1).firstOrNull { it.priceAmountMicros == 0L }
+
+    /**
+     * The introductory-price phase — the first non-recurring phase priced above zero. `null` when
+     * the offer has no intro price. Mirrors RevenueCat's `SubscriptionOption.introPhase`.
+     */
+    public val introPhase: AppActorPricingPhase?
+        get() = pricingPhases.dropLast(1).firstOrNull { (it.priceAmountMicros ?: 0L) > 0L }
+
+    /** `true` when the resolved offer includes a free-trial phase. */
+    public val hasFreeTrial: Boolean
+        get() = freePhase != null
 }

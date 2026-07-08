@@ -162,6 +162,89 @@ class GooglePlayStoreAdapterTests {
     }
 
     @Test
+    fun `auto-selected free-trial offer exposes its pricing phases on the resolved product`() = kotlinx.coroutines.runBlocking {
+        val (billingClient, _) = createMockBillingClient(
+            productDetails = listOf(
+                AppActorBillingProductDetailsPayload(
+                    productId = "com.appactor.pro.weekly",
+                    productType = AppActorProductType.Subscription,
+                    subscriptionOffers = listOf(
+                        AppActorBillingSubscriptionOfferPayload(
+                            basePlanId = "weekly001",
+                            offerId = null,
+                            offerToken = "base-plan-token",
+                            pricing = AppActorStorePricing(
+                                formattedPrice = "₺39.99",
+                                priceAmountMicros = 39_990_000,
+                                currencyCode = "TRY",
+                            ),
+                            pricingPhases = listOf(
+                                AppActorBillingPricingPhasePayload(
+                                    billingPeriod = "P1W",
+                                    priceAmountMicros = 39_990_000,
+                                    formattedPrice = "₺39.99",
+                                    currencyCode = "TRY",
+                                    recurrenceMode = 1,
+                                ),
+                            ),
+                        ),
+                        AppActorBillingSubscriptionOfferPayload(
+                            basePlanId = "weekly001",
+                            offerId = "trial3d",
+                            offerToken = "trial-token",
+                            pricing = AppActorStorePricing(
+                                formattedPrice = "₺39.99",
+                                priceAmountMicros = 39_990_000,
+                                currencyCode = "TRY",
+                            ),
+                            pricingPhases = listOf(
+                                AppActorBillingPricingPhasePayload(
+                                    billingPeriod = "P3D",
+                                    priceAmountMicros = 0,
+                                    formattedPrice = "Free",
+                                    currencyCode = "TRY",
+                                    billingCycleCount = 1,
+                                    recurrenceMode = 2,
+                                ),
+                                AppActorBillingPricingPhasePayload(
+                                    billingPeriod = "P1W",
+                                    priceAmountMicros = 39_990_000,
+                                    formattedPrice = "₺39.99",
+                                    currencyCode = "TRY",
+                                    recurrenceMode = 1,
+                                ),
+                            ),
+                        ),
+                    ),
+                )
+            )
+        )
+        val adapter = GooglePlayStoreAdapter(context, billingClient)
+
+        val products = adapter.queryProductDetails(
+            listOf(
+                AppActorStoreProductRequest(
+                    productId = "com.appactor.pro.weekly",
+                    productType = AppActorProductType.Subscription,
+                    basePlanId = "weekly001",
+                    offerId = null,
+                )
+            )
+        )
+
+        val resolved = products.single()
+        assertEquals("trial3d", resolved.offerId)
+        assertEquals(2, resolved.pricingPhases.size)
+        val trialPhase = resolved.pricingPhases.first()
+        assertTrue(trialPhase.isFreeTrial)
+        assertEquals("P3D", trialPhase.billingPeriod)
+        assertEquals(3, trialPhase.period?.numberOfUnits)
+        // Existing single-price fields still reflect the recurring price, unchanged.
+        assertEquals("₺39.99", resolved.localizedPrice)
+        assertEquals(39_990_000L, resolved.priceAmountMicros)
+    }
+
+    @Test
     fun `query product details resolves subscriptions even when request type is unknown`() = kotlinx.coroutines.runBlocking {
         val (billingClient, _) = createMockBillingClient(
             productDetails = listOf(
