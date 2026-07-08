@@ -1336,14 +1336,14 @@ package com.appactor.android.models {
   }
 
   public final class AppActorPricingPhase {
-    ctor public AppActorPricingPhase(optional String? billingPeriod, optional String? formattedPrice, optional Long? priceAmountMicros, optional String? currencyCode, optional Integer? billingCycleCount, optional Integer? recurrenceMode);
+    ctor public AppActorPricingPhase(optional String? billingPeriod, optional String? formattedPrice, optional Long? priceAmountMicros, optional String? currencyCode, optional Integer? billingCycleCount, optional com.appactor.android.models.AppActorRecurrenceMode? recurrenceMode);
     method public String? component1();
     method public String? component2();
     method public Long? component3();
     method public String? component4();
     method public Integer? component5();
-    method public Integer? component6();
-    method public com.appactor.android.models.AppActorPricingPhase copy(String? billingPeriod, String? formattedPrice, Long? priceAmountMicros, String? currencyCode, Integer? billingCycleCount, Integer? recurrenceMode);
+    method public com.appactor.android.models.AppActorRecurrenceMode? component6();
+    method public com.appactor.android.models.AppActorPricingPhase copy(String? billingPeriod, String? formattedPrice, Long? priceAmountMicros, String? currencyCode, Integer? billingCycleCount, com.appactor.android.models.AppActorRecurrenceMode? recurrenceMode);
     method public Integer? getBillingCycleCount();
     method public String? getBillingPeriod();
     method public String? getCurrencyCode();
@@ -1351,7 +1351,7 @@ package com.appactor.android.models {
     method public com.appactor.android.models.AppActorOfferPaymentMode? getPaymentMode();
     method public com.appactor.android.models.AppActorSubscriptionPeriod? getPeriod();
     method public Long? getPriceAmountMicros();
-    method public Integer? getRecurrenceMode();
+    method public com.appactor.android.models.AppActorRecurrenceMode? getRecurrenceMode();
     method public boolean isFreeTrial();
     property public final Integer? billingCycleCount;
     property public final String? billingPeriod;
@@ -1361,7 +1361,7 @@ package com.appactor.android.models {
     property public final com.appactor.android.models.AppActorOfferPaymentMode? paymentMode;
     property public final com.appactor.android.models.AppActorSubscriptionPeriod? period;
     property public final Long? priceAmountMicros;
-    property public final Integer? recurrenceMode;
+    property public final com.appactor.android.models.AppActorRecurrenceMode? recurrenceMode;
   }
 
   public enum AppActorProductType {
@@ -1568,6 +1568,12 @@ package com.appactor.android.models {
     property public final String? orderId;
     property public final String productId;
     property public final int retryCount;
+  }
+
+  public enum AppActorRecurrenceMode {
+    enum_constant public static final com.appactor.android.models.AppActorRecurrenceMode FiniteRecurring;
+    enum_constant public static final com.appactor.android.models.AppActorRecurrenceMode InfiniteRecurring;
+    enum_constant public static final com.appactor.android.models.AppActorRecurrenceMode NonRecurring;
   }
 
   public final class AppActorRemoteConfigItem {

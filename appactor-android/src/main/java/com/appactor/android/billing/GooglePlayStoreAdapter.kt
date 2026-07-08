@@ -383,23 +383,7 @@ internal class GooglePlayStoreAdapter(
             )
             return null
         }
-        return ResolvedProduct(
-            product = AppActorStoreProduct(
-                productId = payload.productId,
-                productType = AppActorProductType.Subscription,
-                basePlanId = resolvedOffer.basePlanId,
-                offerId = resolvedOffer.offerId,
-                localizedPrice = resolvedOffer.pricing?.formattedPrice,
-                priceAmountMicros = resolvedOffer.pricing?.priceAmountMicros,
-                currencyCode = resolvedOffer.pricing?.currencyCode,
-                title = payload.title,
-                displayName = payload.displayName,
-                description = payload.description,
-                pricingPhases = resolvedOffer.pricingPhases.map { it.toAppActorPricingPhase() },
-            ),
-            nativeProductDetails = payload.nativeProductDetails,
-            offerToken = resolvedOffer.offerToken,
-        )
+        return subscriptionProduct(payload, resolvedOffer)
     }
 
     private fun resolveSingleSubscriptionPayload(
@@ -414,20 +398,28 @@ internal class GooglePlayStoreAdapter(
             )
             return null
         }
-        val resolvedOffer = offers.single()
+        return subscriptionProduct(payload, offers.single())
+    }
+
+    /** Builds the resolved subscription product; the price fields snapshot the recurring (final) phase. */
+    private fun subscriptionProduct(
+        payload: AppActorBillingProductDetailsPayload,
+        resolvedOffer: AppActorBillingSubscriptionOfferPayload,
+    ): ResolvedProduct {
+        val recurringPhase = resolvedOffer.pricingPhases.lastOrNull()
         return ResolvedProduct(
             product = AppActorStoreProduct(
                 productId = payload.productId,
                 productType = AppActorProductType.Subscription,
                 basePlanId = resolvedOffer.basePlanId,
                 offerId = resolvedOffer.offerId,
-                localizedPrice = resolvedOffer.pricing?.formattedPrice,
-                priceAmountMicros = resolvedOffer.pricing?.priceAmountMicros,
-                currencyCode = resolvedOffer.pricing?.currencyCode,
+                localizedPrice = recurringPhase?.formattedPrice,
+                priceAmountMicros = recurringPhase?.priceAmountMicros,
+                currencyCode = recurringPhase?.currencyCode,
                 title = payload.title,
                 displayName = payload.displayName,
                 description = payload.description,
-                pricingPhases = resolvedOffer.pricingPhases.map { it.toAppActorPricingPhase() },
+                pricingPhases = resolvedOffer.pricingPhases,
             ),
             nativeProductDetails = payload.nativeProductDetails,
             offerToken = resolvedOffer.offerToken,

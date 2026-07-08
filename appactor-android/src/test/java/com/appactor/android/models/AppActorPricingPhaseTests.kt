@@ -13,7 +13,7 @@ class AppActorPricingPhaseTests {
         priceAmountMicros: Long? = null,
         formattedPrice: String? = null,
         billingCycleCount: Int? = null,
-        recurrenceMode: Int? = null,
+        recurrenceMode: AppActorRecurrenceMode? = null,
     ): AppActorPricingPhase =
         AppActorPricingPhase(
             billingPeriod = billingPeriod,
@@ -64,6 +64,22 @@ class AppActorPricingPhaseTests {
         assertNull(AppActorSubscriptionPeriod.fromIso8601(null))
     }
 
+    @Test
+    fun `period parser rejects multi-component periods play never emits`() {
+        assertNull(AppActorSubscriptionPeriod.fromIso8601("P1M2W"))
+        assertNull(AppActorSubscriptionPeriod.iso8601ToDays("P1M2W"))
+    }
+
+    @Test
+    fun `iso periods convert to comparable approximate days`() {
+        assertEquals(3, AppActorSubscriptionPeriod.iso8601ToDays("P3D"))
+        assertEquals(7, AppActorSubscriptionPeriod.iso8601ToDays("P1W"))
+        assertEquals(30, AppActorSubscriptionPeriod.iso8601ToDays("P1M"))
+        assertEquals(365, AppActorSubscriptionPeriod.iso8601ToDays("P1Y"))
+        assertNull(AppActorSubscriptionPeriod.iso8601ToDays("P0D"))
+        assertNull(AppActorSubscriptionPeriod.iso8601ToDays("not-a-period"))
+    }
+
     // --- AppActorPricingPhase computed fields --------------------------------------------------
 
     @Test
@@ -82,18 +98,27 @@ class AppActorPricingPhaseTests {
     fun `payment mode mirrors RevenueCat finite-recurring semantics`() {
         assertEquals(
             AppActorOfferPaymentMode.FreeTrial,
-            phase(priceAmountMicros = 0L, billingCycleCount = 1, recurrenceMode = 2).paymentMode,
+            phase(priceAmountMicros = 0L, billingCycleCount = 1, recurrenceMode = AppActorRecurrenceMode.FiniteRecurring).paymentMode,
         )
         assertEquals(
             AppActorOfferPaymentMode.SinglePayment,
-            phase(priceAmountMicros = 4_990_000L, billingCycleCount = 1, recurrenceMode = 2).paymentMode,
+            phase(priceAmountMicros = 4_990_000L, billingCycleCount = 1, recurrenceMode = AppActorRecurrenceMode.FiniteRecurring).paymentMode,
         )
         assertEquals(
             AppActorOfferPaymentMode.DiscountedRecurring,
-            phase(priceAmountMicros = 4_990_000L, billingCycleCount = 3, recurrenceMode = 2).paymentMode,
+            phase(priceAmountMicros = 4_990_000L, billingCycleCount = 3, recurrenceMode = AppActorRecurrenceMode.FiniteRecurring).paymentMode,
         )
-        // recurrenceMode 1 == INFINITE_RECURRING (the full recurring price) -> no offer payment mode.
-        assertNull(phase(priceAmountMicros = 39_990_000L, recurrenceMode = 1).paymentMode)
+        // An infinite-recurring phase (the full recurring price) has no offer payment mode.
+        assertNull(phase(priceAmountMicros = 39_990_000L, recurrenceMode = AppActorRecurrenceMode.InfiniteRecurring).paymentMode)
+    }
+
+    @Test
+    fun `recurrence mode maps from play raw values`() {
+        assertEquals(AppActorRecurrenceMode.InfiniteRecurring, AppActorRecurrenceMode.fromPlayValue(1))
+        assertEquals(AppActorRecurrenceMode.FiniteRecurring, AppActorRecurrenceMode.fromPlayValue(2))
+        assertEquals(AppActorRecurrenceMode.NonRecurring, AppActorRecurrenceMode.fromPlayValue(3))
+        assertNull(AppActorRecurrenceMode.fromPlayValue(0))
+        assertNull(AppActorRecurrenceMode.fromPlayValue(null))
     }
 
     // --- AppActorPackage phase helpers ---------------------------------------------------------
@@ -102,8 +127,8 @@ class AppActorPricingPhaseTests {
     fun `free-trial offer exposes freePhase with the trial period`() {
         val pkg = subscriptionPackage(
             listOf(
-                phase(billingPeriod = "P3D", priceAmountMicros = 0L, recurrenceMode = 2, billingCycleCount = 1),
-                phase(billingPeriod = "P1W", priceAmountMicros = 39_990_000L, formattedPrice = "₺39.99", recurrenceMode = 1),
+                phase(billingPeriod = "P3D", priceAmountMicros = 0L, recurrenceMode = AppActorRecurrenceMode.FiniteRecurring, billingCycleCount = 1),
+                phase(billingPeriod = "P1W", priceAmountMicros = 39_990_000L, formattedPrice = "₺39.99", recurrenceMode = AppActorRecurrenceMode.InfiniteRecurring),
             ),
         )
 
@@ -121,8 +146,8 @@ class AppActorPricingPhaseTests {
     fun `intro-price offer exposes introPhase and no free trial`() {
         val pkg = subscriptionPackage(
             listOf(
-                phase(billingPeriod = "P1M", priceAmountMicros = 4_990_000L, formattedPrice = "₺4.99", recurrenceMode = 2, billingCycleCount = 3),
-                phase(billingPeriod = "P1M", priceAmountMicros = 9_990_000L, formattedPrice = "₺9.99", recurrenceMode = 1),
+                phase(billingPeriod = "P1M", priceAmountMicros = 4_990_000L, formattedPrice = "₺4.99", recurrenceMode = AppActorRecurrenceMode.FiniteRecurring, billingCycleCount = 3),
+                phase(billingPeriod = "P1M", priceAmountMicros = 9_990_000L, formattedPrice = "₺9.99", recurrenceMode = AppActorRecurrenceMode.InfiniteRecurring),
             ),
         )
 
@@ -136,7 +161,7 @@ class AppActorPricingPhaseTests {
     fun `plain base plan exposes only a full price phase`() {
         val pkg = subscriptionPackage(
             listOf(
-                phase(billingPeriod = "P1M", priceAmountMicros = 9_990_000L, formattedPrice = "₺9.99", recurrenceMode = 1),
+                phase(billingPeriod = "P1M", priceAmountMicros = 9_990_000L, formattedPrice = "₺9.99", recurrenceMode = AppActorRecurrenceMode.InfiniteRecurring),
             ),
         )
 

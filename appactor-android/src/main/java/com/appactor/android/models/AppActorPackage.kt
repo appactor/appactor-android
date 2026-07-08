@@ -58,16 +58,25 @@ public data class AppActorPackage(
      * has no free trial. Mirrors RevenueCat's `SubscriptionOption.freePhase`.
      */
     public val freePhase: AppActorPricingPhase?
-        get() = pricingPhases.dropLast(1).firstOrNull { it.priceAmountMicros == 0L }
+        get() = firstOfferPhaseOrNull { it.isFreeTrial }
 
     /**
      * The introductory-price phase — the first non-recurring phase priced above zero. `null` when
      * the offer has no intro price. Mirrors RevenueCat's `SubscriptionOption.introPhase`.
      */
     public val introPhase: AppActorPricingPhase?
-        get() = pricingPhases.dropLast(1).firstOrNull { (it.priceAmountMicros ?: 0L) > 0L }
+        get() = firstOfferPhaseOrNull { (it.priceAmountMicros ?: 0L) > 0L }
 
     /** `true` when the resolved offer includes a free-trial phase. */
     public val hasFreeTrial: Boolean
         get() = freePhase != null
+
+    /** First offer (non-recurring) phase matching [predicate]; scans in place without copying [pricingPhases]. */
+    private inline fun firstOfferPhaseOrNull(predicate: (AppActorPricingPhase) -> Boolean): AppActorPricingPhase? {
+        for (index in 0 until pricingPhases.lastIndex) {
+            val phase = pricingPhases[index]
+            if (predicate(phase)) return phase
+        }
+        return null
+    }
 }

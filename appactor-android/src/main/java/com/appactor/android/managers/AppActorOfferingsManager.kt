@@ -619,7 +619,7 @@ internal class AppActorOfferingsManager(
             .distinctBy { it.cacheKey() }
 
         val resolvedProductList = storeAdapter.queryProductDetails(productRequests)
-        val resolvedProducts = resolvedProductList.associateBy { it.cacheKey() }.toMutableMap()
+        val resolvedProducts = resolvedProductList.associateByTo(mutableMapOf()) { it.cacheKey() }
         // The store adapter can resolve a request to a different offer than the backend named:
         // offer auto-selection when no offerId is pinned, and the base-plan fallback when a
         // pinned offer is unavailable to this user. Index those products under the

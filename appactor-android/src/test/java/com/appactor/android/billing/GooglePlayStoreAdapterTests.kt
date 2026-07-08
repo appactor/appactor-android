@@ -4,7 +4,9 @@ import android.app.Activity
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.appactor.android.internal.logging.AppActorLogger
+import com.appactor.android.models.AppActorPricingPhase
 import com.appactor.android.models.AppActorProductType
+import com.appactor.android.models.AppActorRecurrenceMode
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
@@ -120,20 +122,24 @@ class GooglePlayStoreAdapterTests {
                             basePlanId = "monthly001",
                             offerId = null,
                             offerToken = "base-plan-token",
-                            pricing = AppActorStorePricing(
-                                formattedPrice = "$9.99",
-                                priceAmountMicros = 9_990_000,
-                                currencyCode = "USD",
+                            pricingPhases = listOf(
+                                AppActorPricingPhase(
+                                    formattedPrice = "$9.99",
+                                    priceAmountMicros = 9_990_000,
+                                    currencyCode = "USD",
+                                ),
                             ),
                         ),
                         AppActorBillingSubscriptionOfferPayload(
                             basePlanId = "monthly001",
                             offerId = "intro7d",
                             offerToken = "intro-token",
-                            pricing = AppActorStorePricing(
-                                formattedPrice = "$4.99",
-                                priceAmountMicros = 4_990_000,
-                                currencyCode = "USD",
+                            pricingPhases = listOf(
+                                AppActorPricingPhase(
+                                    formattedPrice = "$4.99",
+                                    priceAmountMicros = 4_990_000,
+                                    currencyCode = "USD",
+                                ),
                             ),
                         ),
                     ),
@@ -173,18 +179,13 @@ class GooglePlayStoreAdapterTests {
                             basePlanId = "weekly001",
                             offerId = null,
                             offerToken = "base-plan-token",
-                            pricing = AppActorStorePricing(
-                                formattedPrice = "₺39.99",
-                                priceAmountMicros = 39_990_000,
-                                currencyCode = "TRY",
-                            ),
                             pricingPhases = listOf(
-                                AppActorBillingPricingPhasePayload(
+                                AppActorPricingPhase(
                                     billingPeriod = "P1W",
                                     priceAmountMicros = 39_990_000,
                                     formattedPrice = "₺39.99",
                                     currencyCode = "TRY",
-                                    recurrenceMode = 1,
+                                    recurrenceMode = AppActorRecurrenceMode.InfiniteRecurring,
                                 ),
                             ),
                         ),
@@ -192,26 +193,21 @@ class GooglePlayStoreAdapterTests {
                             basePlanId = "weekly001",
                             offerId = "trial3d",
                             offerToken = "trial-token",
-                            pricing = AppActorStorePricing(
-                                formattedPrice = "₺39.99",
-                                priceAmountMicros = 39_990_000,
-                                currencyCode = "TRY",
-                            ),
                             pricingPhases = listOf(
-                                AppActorBillingPricingPhasePayload(
+                                AppActorPricingPhase(
                                     billingPeriod = "P3D",
                                     priceAmountMicros = 0,
                                     formattedPrice = "Free",
                                     currencyCode = "TRY",
                                     billingCycleCount = 1,
-                                    recurrenceMode = 2,
+                                    recurrenceMode = AppActorRecurrenceMode.FiniteRecurring,
                                 ),
-                                AppActorBillingPricingPhasePayload(
+                                AppActorPricingPhase(
                                     billingPeriod = "P1W",
                                     priceAmountMicros = 39_990_000,
                                     formattedPrice = "₺39.99",
                                     currencyCode = "TRY",
-                                    recurrenceMode = 1,
+                                    recurrenceMode = AppActorRecurrenceMode.InfiniteRecurring,
                                 ),
                             ),
                         ),
@@ -256,7 +252,7 @@ class GooglePlayStoreAdapterTests {
                             basePlanId = "monthly001",
                             offerId = "intro7d",
                             offerToken = "intro-token",
-                            pricing = AppActorStorePricing(formattedPrice = "$4.99"),
+                            pricingPhases = listOf(AppActorPricingPhase(formattedPrice = "$4.99")),
                         )
                     ),
                 )
@@ -292,7 +288,7 @@ class GooglePlayStoreAdapterTests {
                             basePlanId = "monthly001",
                             offerId = "intro7d",
                             offerToken = "intro-token",
-                            pricing = AppActorStorePricing(formattedPrice = "$4.99"),
+                            pricingPhases = listOf(AppActorPricingPhase(formattedPrice = "$4.99")),
                         )
                     ),
                 )
@@ -514,10 +510,12 @@ class GooglePlayStoreAdapterTests {
                             basePlanId = "monthly001",
                             offerId = "intro7d",
                             offerToken = "intro-token",
-                            pricing = AppActorStorePricing(
-                                formattedPrice = "$4.99",
-                                priceAmountMicros = 4_990_000,
-                                currencyCode = "USD",
+                            pricingPhases = listOf(
+                                AppActorPricingPhase(
+                                    formattedPrice = "$4.99",
+                                    priceAmountMicros = 4_990_000,
+                                    currencyCode = "USD",
+                                ),
                             ),
                         )
                     ),
@@ -1100,19 +1098,17 @@ class GooglePlayStoreAdapterTests {
                             basePlanId = "monthly001",
                             offerId = null,
                             offerToken = "base-token",
-                            pricing = AppActorStorePricing(formattedPrice = "$9.99", priceAmountMicros = 9_990_000, currencyCode = "USD"),
                             pricingPhases = listOf(
-                                AppActorBillingPricingPhasePayload(billingPeriod = "P1M", priceAmountMicros = 9_990_000),
+                                AppActorPricingPhase(billingPeriod = "P1M", priceAmountMicros = 9_990_000),
                             ),
                         ),
                         AppActorBillingSubscriptionOfferPayload(
                             basePlanId = "monthly001",
                             offerId = "trial7d",
                             offerToken = "trial-token",
-                            pricing = AppActorStorePricing(formattedPrice = "$9.99", priceAmountMicros = 9_990_000, currencyCode = "USD"),
                             pricingPhases = listOf(
-                                AppActorBillingPricingPhasePayload(billingPeriod = "P1W", priceAmountMicros = 0),
-                                AppActorBillingPricingPhasePayload(billingPeriod = "P1M", priceAmountMicros = 9_990_000),
+                                AppActorPricingPhase(billingPeriod = "P1W", priceAmountMicros = 0),
+                                AppActorPricingPhase(billingPeriod = "P1M", priceAmountMicros = 9_990_000),
                             ),
                         ),
                     ),
@@ -1152,7 +1148,7 @@ class GooglePlayStoreAdapterTests {
                             offerId = null,
                             offerToken = "base-token",
                             pricingPhases = listOf(
-                                AppActorBillingPricingPhasePayload(billingPeriod = "P1M", priceAmountMicros = 9_990_000),
+                                AppActorPricingPhase(billingPeriod = "P1M", priceAmountMicros = 9_990_000),
                             ),
                         ),
                         AppActorBillingSubscriptionOfferPayload(
@@ -1160,8 +1156,8 @@ class GooglePlayStoreAdapterTests {
                             offerId = "trial30d",
                             offerToken = "trial-token",
                             pricingPhases = listOf(
-                                AppActorBillingPricingPhasePayload(billingPeriod = "P1M", priceAmountMicros = 0),
-                                AppActorBillingPricingPhasePayload(billingPeriod = "P1M", priceAmountMicros = 9_990_000),
+                                AppActorPricingPhase(billingPeriod = "P1M", priceAmountMicros = 0),
+                                AppActorPricingPhase(billingPeriod = "P1M", priceAmountMicros = 9_990_000),
                             ),
                         ),
                         AppActorBillingSubscriptionOfferPayload(
@@ -1169,8 +1165,8 @@ class GooglePlayStoreAdapterTests {
                             offerId = "intro499",
                             offerToken = "intro-token",
                             pricingPhases = listOf(
-                                AppActorBillingPricingPhasePayload(billingPeriod = "P1M", priceAmountMicros = 4_990_000),
-                                AppActorBillingPricingPhasePayload(billingPeriod = "P1M", priceAmountMicros = 9_990_000),
+                                AppActorPricingPhase(billingPeriod = "P1M", priceAmountMicros = 4_990_000),
+                                AppActorPricingPhase(billingPeriod = "P1M", priceAmountMicros = 9_990_000),
                             ),
                         ),
                     ),
@@ -1208,7 +1204,7 @@ class GooglePlayStoreAdapterTests {
                             offerId = null,
                             offerToken = "base-token",
                             pricingPhases = listOf(
-                                AppActorBillingPricingPhasePayload(billingPeriod = "P1M", priceAmountMicros = 9_990_000),
+                                AppActorPricingPhase(billingPeriod = "P1M", priceAmountMicros = 9_990_000),
                             ),
                         ),
                         AppActorBillingSubscriptionOfferPayload(
@@ -1217,8 +1213,8 @@ class GooglePlayStoreAdapterTests {
                             offerToken = "trial-token",
                             offerTags = listOf("aa-ignore-offer"),
                             pricingPhases = listOf(
-                                AppActorBillingPricingPhasePayload(billingPeriod = "P1W", priceAmountMicros = 0),
-                                AppActorBillingPricingPhasePayload(billingPeriod = "P1M", priceAmountMicros = 9_990_000),
+                                AppActorPricingPhase(billingPeriod = "P1W", priceAmountMicros = 0),
+                                AppActorPricingPhase(billingPeriod = "P1M", priceAmountMicros = 9_990_000),
                             ),
                         ),
                     ),

@@ -60,14 +60,14 @@ internal object SubscriptionOfferSelector {
     /** The longest free (zero-priced) phase of the offer, in days; `null` when there is none. */
     private fun AppActorBillingSubscriptionOfferPayload.freeTrialDays(): Int? {
         return pricingPhases
-            .filter { phase -> phase.priceAmountMicros == 0L }
-            .mapNotNull { phase -> phase.billingPeriod?.let(::iso8601PeriodToDays) }
+            .filter { phase -> phase.isFreeTrial }
+            .mapNotNull { phase -> AppActorSubscriptionPeriod.iso8601ToDays(phase.billingPeriod) }
             .maxOrNull()
     }
 
-    /** The offer's recurring price: the final pricing phase (falling back to the snapshot). */
+    /** The offer's recurring price: the final pricing phase. */
     private fun AppActorBillingSubscriptionOfferPayload.recurringPriceMicros(): Long? {
-        return pricingPhases.lastOrNull()?.priceAmountMicros ?: pricing?.priceAmountMicros
+        return pricingPhases.lastOrNull()?.priceAmountMicros
     }
 
     /** The first paid phase's price, only when it undercuts the base plan's recurring price. */
@@ -80,14 +80,4 @@ internal object SubscriptionOfferSelector {
         } ?: return null
         return firstPaidPriceMicros.takeIf { micros -> micros < basePriceMicros }
     }
-
-    /**
-     * Parses an ISO-8601 period (`P1W`, `P3D`, `P1M`, `P1Y`, combinations) into approximate days
-     * for comparison (1M = 30d, 1Y = 365d). Returns `null` for unparseable or zero periods.
-     *
-     * Delegates to [AppActorSubscriptionPeriod.iso8601ToDays] so the ISO-8601 regex lives in
-     * exactly one place (shared with the public period model).
-     */
-    internal fun iso8601PeriodToDays(period: String): Int? =
-        AppActorSubscriptionPeriod.iso8601ToDays(period)
 }

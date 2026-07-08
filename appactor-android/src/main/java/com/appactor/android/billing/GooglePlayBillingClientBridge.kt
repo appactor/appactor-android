@@ -17,7 +17,9 @@ import com.android.billingclient.api.QueryProductDetailsParams
 import com.android.billingclient.api.QueryPurchasesParams
 import com.appactor.android.internal.logging.AppActorLogger
 import com.appactor.android.models.AppActorError
+import com.appactor.android.models.AppActorPricingPhase
 import com.appactor.android.models.AppActorProductType
+import com.appactor.android.models.AppActorRecurrenceMode
 import com.appactor.android.models.AppActorStore
 import com.appactor.android.models.AppActorStoreCapability
 import com.appactor.android.models.AppActorStorefront
@@ -678,27 +680,19 @@ private fun ProductDetails.toPayload(
         )
     }
     val subscriptionOffers = subscriptionOfferDetails.orEmpty().map { offer ->
-        val pricingPhaseList = offer.pricingPhases.pricingPhaseList
         AppActorBillingSubscriptionOfferPayload(
             basePlanId = offer.basePlanId,
             offerId = offer.offerId,
             offerToken = offer.offerToken,
-            pricing = pricingPhaseList.lastOrNull()?.let { phase ->
-                AppActorStorePricing(
-                    formattedPrice = phase.formattedPrice,
-                    priceAmountMicros = phase.priceAmountMicros,
-                    currencyCode = phase.priceCurrencyCode,
-                )
-            },
             offerTags = offer.offerTags,
-            pricingPhases = pricingPhaseList.map { phase ->
-                AppActorBillingPricingPhasePayload(
+            pricingPhases = offer.pricingPhases.pricingPhaseList.map { phase ->
+                AppActorPricingPhase(
                     billingPeriod = phase.billingPeriod,
-                    priceAmountMicros = phase.priceAmountMicros,
                     formattedPrice = phase.formattedPrice,
+                    priceAmountMicros = phase.priceAmountMicros,
                     currencyCode = phase.priceCurrencyCode,
-                    billingCycleCount = phase.billingCycleCount,
-                    recurrenceMode = phase.recurrenceMode,
+                    billingCycleCount = phase.billingCycleCount.takeIf { it > 0 },
+                    recurrenceMode = AppActorRecurrenceMode.fromPlayValue(phase.recurrenceMode),
                 )
             },
         )

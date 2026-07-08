@@ -1,5 +1,6 @@
 package com.appactor.android.billing
 
+import com.appactor.android.models.AppActorPricingPhase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -11,8 +12,8 @@ class SubscriptionOfferSelectorTests {
     private fun phase(
         billingPeriod: String?,
         priceAmountMicros: Long?,
-    ): AppActorBillingPricingPhasePayload {
-        return AppActorBillingPricingPhasePayload(
+    ): AppActorPricingPhase {
+        return AppActorPricingPhase(
             billingPeriod = billingPeriod,
             priceAmountMicros = priceAmountMicros,
         )
@@ -26,7 +27,6 @@ class SubscriptionOfferSelectorTests {
             basePlanId = "monthly001",
             offerId = null,
             offerToken = offerToken,
-            pricing = AppActorStorePricing(priceAmountMicros = recurringMicros),
             pricingPhases = listOf(phase("P1M", recurringMicros)),
         )
     }
@@ -40,7 +40,6 @@ class SubscriptionOfferSelectorTests {
             basePlanId = "monthly001",
             offerId = offerId,
             offerToken = "$offerId-token",
-            pricing = AppActorStorePricing(priceAmountMicros = basePriceMicros),
             offerTags = offerTags,
             pricingPhases = listOf(
                 phase(trialPeriod, 0L),
@@ -58,7 +57,6 @@ class SubscriptionOfferSelectorTests {
             basePlanId = "monthly001",
             offerId = offerId,
             offerToken = "$offerId-token",
-            pricing = AppActorStorePricing(priceAmountMicros = basePriceMicros),
             offerTags = offerTags,
             pricingPhases = listOf(
                 phase("P1M", introMicros),
@@ -183,16 +181,5 @@ class SubscriptionOfferSelectorTests {
     @Test
     fun `empty offer list returns null`() {
         assertNull(SubscriptionOfferSelector.selectBestOffer(emptyList()))
-    }
-
-    @Test
-    fun `iso periods parse into comparable days`() {
-        assertEquals(3, SubscriptionOfferSelector.iso8601PeriodToDays("P3D"))
-        assertEquals(7, SubscriptionOfferSelector.iso8601PeriodToDays("P1W"))
-        assertEquals(30, SubscriptionOfferSelector.iso8601PeriodToDays("P1M"))
-        assertEquals(365, SubscriptionOfferSelector.iso8601PeriodToDays("P1Y"))
-        assertEquals(44, SubscriptionOfferSelector.iso8601PeriodToDays("P1M2W"))
-        assertNull(SubscriptionOfferSelector.iso8601PeriodToDays("P0D"))
-        assertNull(SubscriptionOfferSelector.iso8601PeriodToDays("not-a-period"))
     }
 }

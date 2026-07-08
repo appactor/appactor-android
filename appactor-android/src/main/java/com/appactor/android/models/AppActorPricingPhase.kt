@@ -9,6 +9,17 @@ public enum class AppActorSubscriptionPeriodUnit {
     Month,
     Year,
     Unknown,
+    ;
+
+    /** Approximate days per unit (1M = 30d, 1Y = 365d), used to compare period lengths. */
+    internal val approxDays: Int?
+        get() = when (this) {
+            Day -> 1
+            Week -> 7
+            Month -> 30
+            Year -> 365
+            Unknown -> null
+        }
 }
 
 /**
@@ -24,45 +35,36 @@ public data class AppActorSubscriptionPeriod(
     val numberOfUnits: Int,
 ) {
     internal companion object {
-        private val ISO_8601_PERIOD =
-            Regex("^P(?:(\\d+)Y)?(?:(\\d+)M)?(?:(\\d+)W)?(?:(\\d+)D)?$", RegexOption.IGNORE_CASE)
+        // Google Play billing periods are always single-unit (P3D, P1W, P1M, P1Y).
+        private val ISO_8601_SINGLE_UNIT_PERIOD = Regex("^P(\\d+)([DWMY])$", RegexOption.IGNORE_CASE)
 
         /**
-         * Parses an ISO-8601 subscription period (`P3D`, `P1W`, `P1M`, `P1Y`, or combinations)
-         * into a [unit] + [numberOfUnits]. When more than one component is present the smallest
-         * non-zero unit wins (matching Google Play's single-unit billing periods). Returns `null`
-         * for unparseable or zero-length periods.
+         * Parses a single-unit ISO-8601 subscription period (`P3D`, `P1W`, `P1M`, `P1Y`) into a
+         * [unit] + [numberOfUnits]. Returns `null` for zero-length, multi-component (`P1M2W`),
+         * or otherwise unparseable periods — Google Play never emits multi-component billing
+         * periods, and rejecting them keeps every consumer on one interpretation of the string.
          */
         internal fun fromIso8601(period: String?): AppActorSubscriptionPeriod? {
-            val match = ISO_8601_PERIOD.matchEntire(period?.trim().orEmpty()) ?: return null
-            val (years, months, weeks, days) = match.destructured
-            val yearCount = years.toIntOrNull() ?: 0
-            val monthCount = months.toIntOrNull() ?: 0
-            val weekCount = weeks.toIntOrNull() ?: 0
-            val dayCount = days.toIntOrNull() ?: 0
-            return when {
-                dayCount > 0 -> AppActorSubscriptionPeriod(AppActorSubscriptionPeriodUnit.Day, dayCount)
-                weekCount > 0 -> AppActorSubscriptionPeriod(AppActorSubscriptionPeriodUnit.Week, weekCount)
-                monthCount > 0 -> AppActorSubscriptionPeriod(AppActorSubscriptionPeriodUnit.Month, monthCount)
-                yearCount > 0 -> AppActorSubscriptionPeriod(AppActorSubscriptionPeriodUnit.Year, yearCount)
-                else -> null
+            val match = ISO_8601_SINGLE_UNIT_PERIOD.matchEntire(period?.trim().orEmpty()) ?: return null
+            val (count, unitLetter) = match.destructured
+            val numberOfUnits = count.toIntOrNull()?.takeIf { it > 0 } ?: return null
+            val unit = when (unitLetter.uppercase()) {
+                "D" -> AppActorSubscriptionPeriodUnit.Day
+                "W" -> AppActorSubscriptionPeriodUnit.Week
+                "M" -> AppActorSubscriptionPeriodUnit.Month
+                "Y" -> AppActorSubscriptionPeriodUnit.Year
+                else -> return null
             }
+            return AppActorSubscriptionPeriod(unit, numberOfUnits)
         }
 
         /**
-         * Approximate total days for an ISO-8601 period (1M = 30d, 1Y = 365d), used to compare
-         * durations. Returns `null` for unparseable or zero periods. Shared with
-         * `SubscriptionOfferSelector` so the ISO-8601 regex lives in exactly one place.
+         * Approximate total days of a single-unit ISO-8601 period (1M = 30d, 1Y = 365d), used to
+         * compare trial durations. Derived from [fromIso8601] so both functions share one parse
+         * and one semantics; `null` whenever [fromIso8601] rejects the input.
          */
-        internal fun iso8601ToDays(period: String?): Int? {
-            val match = ISO_8601_PERIOD.matchEntire(period?.trim().orEmpty()) ?: return null
-            val (years, months, weeks, days) = match.destructured
-            val totalDays = (years.toIntOrNull() ?: 0) * 365 +
-                (months.toIntOrNull() ?: 0) * 30 +
-                (weeks.toIntOrNull() ?: 0) * 7 +
-                (days.toIntOrNull() ?: 0)
-            return totalDays.takeIf { it > 0 }
-        }
+        internal fun iso8601ToDays(period: String?): Int? =
+            fromIso8601(period)?.let { parsed -> parsed.unit.approxDays?.let { it * parsed.numberOfUnits } }
     }
 }
 
@@ -79,6 +81,32 @@ public enum class AppActorOfferPaymentMode {
 
     /** Subscribers pay a discounted amount for a fixed number of billing cycles. */
     DiscountedRecurring,
+}
+
+/**
+ * How a pricing phase repeats. Mirrors Google Play's `ProductDetails.RecurrenceMode` (and
+ * RevenueCat's `RecurrenceMode`) as a typed value instead of a raw integer.
+ */
+public enum class AppActorRecurrenceMode {
+    /** The phase repeats at its billing period until the subscriber cancels. */
+    InfiniteRecurring,
+
+    /** The phase repeats for exactly [AppActorPricingPhase.billingCycleCount] billing cycles. */
+    FiniteRecurring,
+
+    /** The phase is charged once and does not repeat. */
+    NonRecurring,
+    ;
+
+    internal companion object {
+        /** Maps Google Play's raw `RecurrenceMode` int (1/2/3); `null` for unknown values. */
+        internal fun fromPlayValue(value: Int?): AppActorRecurrenceMode? = when (value) {
+            1 -> InfiniteRecurring
+            2 -> FiniteRecurring
+            3 -> NonRecurring
+            else -> null
+        }
+    }
 }
 
 /**
@@ -100,12 +128,11 @@ public data class AppActorPricingPhase(
     val currencyCode: String? = null,
     /** Number of billing cycles this phase repeats for. `null` for infinite / non-recurring phases. */
     val billingCycleCount: Int? = null,
-    /** Raw Google Play recurrence mode (1 = infinite recurring, 2 = finite recurring, 3 = non-recurring). */
-    val recurrenceMode: Int? = null,
+    /** How this phase repeats, or `null` when Google Play reports an unknown mode. */
+    val recurrenceMode: AppActorRecurrenceMode? = null,
 ) {
-    /** The [billingPeriod] parsed into a unit + count, or `null` when it cannot be parsed. */
-    public val period: AppActorSubscriptionPeriod?
-        get() = AppActorSubscriptionPeriod.fromIso8601(billingPeriod)
+    /** The [billingPeriod] parsed into a unit + count (parsed once at construction), or `null` when unparseable. */
+    public val period: AppActorSubscriptionPeriod? = AppActorSubscriptionPeriod.fromIso8601(billingPeriod)
 
     /** `true` when this phase is a free trial (its price is zero). */
     public val isFreeTrial: Boolean
@@ -117,7 +144,7 @@ public data class AppActorPricingPhase(
      */
     public val paymentMode: AppActorOfferPaymentMode?
         get() {
-            if (recurrenceMode != RECURRENCE_MODE_FINITE_RECURRING) return null
+            if (recurrenceMode != AppActorRecurrenceMode.FiniteRecurring) return null
             return when {
                 priceAmountMicros == 0L -> AppActorOfferPaymentMode.FreeTrial
                 billingCycleCount == 1 -> AppActorOfferPaymentMode.SinglePayment
@@ -126,6 +153,3 @@ public data class AppActorPricingPhase(
             }
         }
 }
-
-/** Google Play `ProductDetails.RecurrenceMode.FINITE_RECURRING`. */
-private const val RECURRENCE_MODE_FINITE_RECURRING = 2
