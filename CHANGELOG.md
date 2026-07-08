@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Changed: Google Play subscription purchases that do not name an explicit offer (`offerId == null`) now auto-apply the best eligible offer Play returns for the base plan — the longest free trial, else the cheapest introductory price, else the base plan itself (RevenueCat parity). Previously such purchases always resolved to the base-plan token at full price, even when the user was eligible for a free trial. Ties resolve deterministically to the first offer in Play's order. Opt an offer out of auto-selection by adding the `aa-ignore-offer` tag to it in Play Console; explicitly pinned offer ids keep today's exact-match behavior (including the base-plan fallback and ambiguity fail-fast).
+- Added: subscription offer payloads now capture Google Play offer tags and the full pricing-phase list internally (previously only the final recurring phase was kept), enabling trial/intro-aware ranking and future trial-period exposure.
+- Fixed: offerings enrichment no longer drops a package when the store adapter resolves it to a different offer than the backend named (offer auto-selection, or the 2.3.13 base-plan fallback for a pinned-but-unavailable offer) — the resolved product is now also indexed under the request's key.
+
 ## 2.3.13
 
 - Fixed: a Google Play subscription purchase that names a specific offer (e.g. a free trial) now falls back to the base plan when Play does not return that offer for the user — most commonly a returning / trial-ineligible user for whom Play omits the offer. Previously the product was dropped or an `InvalidConfiguration` was thrown, so a returning user could not subscribe at all; now they are charged the standard base-plan price (matching RevenueCat and Adapty). The fallback only ever resolves to the base plan (never a different offer), and logs a warning so a misconfigured/typo'd offer id stays observable.

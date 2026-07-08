@@ -126,11 +126,24 @@ internal data class AppActorBillingQueryProduct(
     val productType: AppActorProductType,
 )
 
+internal data class AppActorBillingPricingPhasePayload(
+    val billingPeriod: String? = null,
+    val priceAmountMicros: Long? = null,
+    val formattedPrice: String? = null,
+    val currencyCode: String? = null,
+    val billingCycleCount: Int = 0,
+    val recurrenceMode: Int? = null,
+)
+
 internal data class AppActorBillingSubscriptionOfferPayload(
     val basePlanId: String? = null,
     val offerId: String? = null,
     val offerToken: String? = null,
+    /** Recurring price snapshot (the offer's final pricing phase). */
     val pricing: AppActorStorePricing? = null,
+    val offerTags: List<String> = emptyList(),
+    /** All pricing phases in Play's order (trial/intro phases first, recurring phase last). */
+    val pricingPhases: List<AppActorBillingPricingPhasePayload> = emptyList(),
 )
 
 internal data class AppActorBillingProductDetailsPayload(

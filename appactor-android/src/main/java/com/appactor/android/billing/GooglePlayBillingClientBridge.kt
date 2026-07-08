@@ -678,16 +678,27 @@ private fun ProductDetails.toPayload(
         )
     }
     val subscriptionOffers = subscriptionOfferDetails.orEmpty().map { offer ->
-        val lastPricingPhase = offer.pricingPhases.pricingPhaseList.lastOrNull()
+        val pricingPhaseList = offer.pricingPhases.pricingPhaseList
         AppActorBillingSubscriptionOfferPayload(
             basePlanId = offer.basePlanId,
             offerId = offer.offerId,
             offerToken = offer.offerToken,
-            pricing = lastPricingPhase?.let { phase ->
+            pricing = pricingPhaseList.lastOrNull()?.let { phase ->
                 AppActorStorePricing(
                     formattedPrice = phase.formattedPrice,
                     priceAmountMicros = phase.priceAmountMicros,
                     currencyCode = phase.priceCurrencyCode,
+                )
+            },
+            offerTags = offer.offerTags,
+            pricingPhases = pricingPhaseList.map { phase ->
+                AppActorBillingPricingPhasePayload(
+                    billingPeriod = phase.billingPeriod,
+                    priceAmountMicros = phase.priceAmountMicros,
+                    formattedPrice = phase.formattedPrice,
+                    currencyCode = phase.priceCurrencyCode,
+                    billingCycleCount = phase.billingCycleCount,
+                    recurrenceMode = phase.recurrenceMode,
                 )
             },
         )

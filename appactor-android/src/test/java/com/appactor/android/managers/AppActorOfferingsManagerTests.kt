@@ -73,6 +73,108 @@ class AppActorOfferingsManagerTests {
     }
 
     @Test
+    fun `get offerings keeps packages whose request has no offer id when the adapter auto-selects an offer`() = runBlocking {
+        // Backend names only the base plan (offerId == null); the store adapter auto-selects an
+        // eligible offer, so the resolved product's offerId differs from the request's.
+        val fixture = fixtureOfferings()
+
+        fun rewriteOffering(offeringDTO: AppActorOfferingDTO): AppActorOfferingDTO {
+            return offeringDTO.copy(
+                packages = offeringDTO.packages.map { packageDTO ->
+                    packageDTO.copy(
+                        products = packageDTO.products.map { productRef ->
+                            if (productRef.productId == "com.appactor.pro.monthly") productRef.copy(offerId = null) else productRef
+                        }
+                    )
+                }
+            )
+        }
+
+        val dto = fixture.copy(
+            data = fixture.data.copy(
+                currentOffering = fixture.data.currentOffering?.let(::rewriteOffering),
+                offerings = fixture.data.offerings.map(::rewriteOffering),
+            )
+        )
+        val mockClient = mockk<AppActorBackendClient>(relaxed = true)
+        coEvery { mockClient.getOfferings(any()) } returns freshOfferingsResponse(dto)
+        val mockStoreAdapter = mockk<AppActorStoreAdapter>(relaxed = true)
+        coEvery { mockStoreAdapter.queryProductDetails(any()) } answers {
+            val requests = firstArg<List<AppActorStoreProductRequest>>()
+            requests.mapNotNull { request ->
+                if (request.productId == "com.appactor.pro.monthly") {
+                    AppActorStoreProduct(
+                        productId = "com.appactor.pro.monthly",
+                        productType = AppActorProductType.Subscription,
+                        basePlanId = "monthly001",
+                        offerId = "trial7d",
+                        localizedPrice = "$9.99",
+                        priceAmountMicros = 9_990_000,
+                        currencyCode = "USD",
+                    )
+                } else {
+                    pricedProducts()[requestKey(request)]
+                }
+            }
+        }
+        val manager = AppActorOfferingsManager(
+            backendClient = mockClient,
+            cacheStore = offeringsCacheStore("offerings-auto-offer"),
+            offlineProductCatalogStore = offlineProductCatalogStore("offerings-auto-offer"),
+            storeAdapter = mockStoreAdapter,
+        )
+
+        val offerings = manager.getOfferings()
+
+        val monthly = offerings.current?.packages?.firstOrNull { it.productId == "com.appactor.pro.monthly" }
+        assertNotNull(monthly)
+        assertEquals("monthly001", monthly?.basePlanId)
+        assertEquals("trial7d", monthly?.offerId)
+    }
+
+    @Test
+    fun `get offerings keeps packages whose pinned offer was degraded to the base plan`() = runBlocking {
+        // Backend pins offerId=intro7d but Play omits it for this user; the adapter falls back
+        // to the base plan, so the resolved product's offerId (null) differs from the request's.
+        val dto = fixtureOfferings()
+        val mockClient = mockk<AppActorBackendClient>(relaxed = true)
+        coEvery { mockClient.getOfferings(any()) } returns freshOfferingsResponse(dto)
+        val mockStoreAdapter = mockk<AppActorStoreAdapter>(relaxed = true)
+        coEvery { mockStoreAdapter.queryProductDetails(any()) } answers {
+            val requests = firstArg<List<AppActorStoreProductRequest>>()
+            requests.mapNotNull { request ->
+                if (request.productId == "com.appactor.pro.monthly") {
+                    AppActorStoreProduct(
+                        productId = "com.appactor.pro.monthly",
+                        productType = AppActorProductType.Subscription,
+                        basePlanId = "monthly001",
+                        offerId = null,
+                        localizedPrice = "$9.99",
+                        priceAmountMicros = 9_990_000,
+                        currencyCode = "USD",
+                    )
+                } else {
+                    pricedProducts()[requestKey(request)]
+                }
+            }
+        }
+        val manager = AppActorOfferingsManager(
+            backendClient = mockClient,
+            cacheStore = offeringsCacheStore("offerings-degraded-offer"),
+            offlineProductCatalogStore = offlineProductCatalogStore("offerings-degraded-offer"),
+            storeAdapter = mockStoreAdapter,
+        )
+
+        val offerings = manager.getOfferings()
+
+        val monthly = offerings.current?.packages?.firstOrNull { it.productId == "com.appactor.pro.monthly" }
+        assertNotNull(monthly)
+        assertEquals("monthly001", monthly?.basePlanId)
+        assertNull(monthly?.offerId)
+        assertEquals("$9.99", monthly?.localizedPriceString)
+    }
+
+    @Test
     fun `get offerings surfaces store products missing when all play packages fail to resolve`() = runBlocking {
         val dto = fixtureOfferings()
         val mockClient = mockk<AppActorBackendClient>(relaxed = true)

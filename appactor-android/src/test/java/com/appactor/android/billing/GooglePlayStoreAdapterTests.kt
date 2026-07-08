@@ -1004,6 +1004,160 @@ class GooglePlayStoreAdapterTests {
         assertEquals(AppActorProductType.Unknown, purchases.single().productType)
         assertEquals("token_unknown_inapp", purchases.single().purchaseToken)
     }
+
+    @Test
+    fun `query product details auto-selects the free trial offer when no offer id is requested`() = kotlinx.coroutines.runBlocking {
+        val (billingClient, captures) = createMockBillingClient(
+            productDetails = listOf(
+                AppActorBillingProductDetailsPayload(
+                    productId = "com.appactor.pro.monthly",
+                    productType = AppActorProductType.Subscription,
+                    subscriptionOffers = listOf(
+                        AppActorBillingSubscriptionOfferPayload(
+                            basePlanId = "monthly001",
+                            offerId = null,
+                            offerToken = "base-token",
+                            pricing = AppActorStorePricing(formattedPrice = "$9.99", priceAmountMicros = 9_990_000, currencyCode = "USD"),
+                            pricingPhases = listOf(
+                                AppActorBillingPricingPhasePayload(billingPeriod = "P1M", priceAmountMicros = 9_990_000),
+                            ),
+                        ),
+                        AppActorBillingSubscriptionOfferPayload(
+                            basePlanId = "monthly001",
+                            offerId = "trial7d",
+                            offerToken = "trial-token",
+                            pricing = AppActorStorePricing(formattedPrice = "$9.99", priceAmountMicros = 9_990_000, currencyCode = "USD"),
+                            pricingPhases = listOf(
+                                AppActorBillingPricingPhasePayload(billingPeriod = "P1W", priceAmountMicros = 0),
+                                AppActorBillingPricingPhasePayload(billingPeriod = "P1M", priceAmountMicros = 9_990_000),
+                            ),
+                        ),
+                    ),
+                )
+            )
+        )
+        val adapter = GooglePlayStoreAdapter(context, billingClient)
+        val request = AppActorStoreProductRequest(
+            productId = "com.appactor.pro.monthly",
+            productType = AppActorProductType.Subscription,
+            basePlanId = "monthly001",
+        )
+
+        val products = adapter.queryProductDetails(listOf(request))
+
+        // No explicit offerId -> the eligible free trial is auto-applied (RevenueCat parity),
+        // instead of deterministically charging the base-plan full price.
+        assertEquals(1, products.size)
+        assertEquals("monthly001", products.single().basePlanId)
+        assertEquals("trial7d", products.single().offerId)
+
+        adapter.launchPurchase(activity = Activity(), request = request)
+
+        assertEquals("trial-token", captures.lastLaunchOfferToken)
+    }
+
+    @Test
+    fun `explicit offer id bypasses auto-selection entirely`() = kotlinx.coroutines.runBlocking {
+        val (billingClient, _) = createMockBillingClient(
+            productDetails = listOf(
+                AppActorBillingProductDetailsPayload(
+                    productId = "com.appactor.pro.monthly",
+                    productType = AppActorProductType.Subscription,
+                    subscriptionOffers = listOf(
+                        AppActorBillingSubscriptionOfferPayload(
+                            basePlanId = "monthly001",
+                            offerId = null,
+                            offerToken = "base-token",
+                            pricingPhases = listOf(
+                                AppActorBillingPricingPhasePayload(billingPeriod = "P1M", priceAmountMicros = 9_990_000),
+                            ),
+                        ),
+                        AppActorBillingSubscriptionOfferPayload(
+                            basePlanId = "monthly001",
+                            offerId = "trial30d",
+                            offerToken = "trial-token",
+                            pricingPhases = listOf(
+                                AppActorBillingPricingPhasePayload(billingPeriod = "P1M", priceAmountMicros = 0),
+                                AppActorBillingPricingPhasePayload(billingPeriod = "P1M", priceAmountMicros = 9_990_000),
+                            ),
+                        ),
+                        AppActorBillingSubscriptionOfferPayload(
+                            basePlanId = "monthly001",
+                            offerId = "intro499",
+                            offerToken = "intro-token",
+                            pricingPhases = listOf(
+                                AppActorBillingPricingPhasePayload(billingPeriod = "P1M", priceAmountMicros = 4_990_000),
+                                AppActorBillingPricingPhasePayload(billingPeriod = "P1M", priceAmountMicros = 9_990_000),
+                            ),
+                        ),
+                    ),
+                )
+            )
+        )
+        val adapter = GooglePlayStoreAdapter(context, billingClient)
+
+        val products = adapter.queryProductDetails(
+            listOf(
+                AppActorStoreProductRequest(
+                    productId = "com.appactor.pro.monthly",
+                    productType = AppActorProductType.Subscription,
+                    basePlanId = "monthly001",
+                    offerId = "intro499",
+                )
+            )
+        )
+
+        // The pinned offer wins even though another offer (trial30d) would rank higher.
+        assertEquals(1, products.size)
+        assertEquals("intro499", products.single().offerId)
+    }
+
+    @Test
+    fun `auto-selection skips offers tagged aa-ignore-offer and falls back to the base plan`() = kotlinx.coroutines.runBlocking {
+        val (billingClient, captures) = createMockBillingClient(
+            productDetails = listOf(
+                AppActorBillingProductDetailsPayload(
+                    productId = "com.appactor.pro.monthly",
+                    productType = AppActorProductType.Subscription,
+                    subscriptionOffers = listOf(
+                        AppActorBillingSubscriptionOfferPayload(
+                            basePlanId = "monthly001",
+                            offerId = null,
+                            offerToken = "base-token",
+                            pricingPhases = listOf(
+                                AppActorBillingPricingPhasePayload(billingPeriod = "P1M", priceAmountMicros = 9_990_000),
+                            ),
+                        ),
+                        AppActorBillingSubscriptionOfferPayload(
+                            basePlanId = "monthly001",
+                            offerId = "trial7d",
+                            offerToken = "trial-token",
+                            offerTags = listOf("aa-ignore-offer"),
+                            pricingPhases = listOf(
+                                AppActorBillingPricingPhasePayload(billingPeriod = "P1W", priceAmountMicros = 0),
+                                AppActorBillingPricingPhasePayload(billingPeriod = "P1M", priceAmountMicros = 9_990_000),
+                            ),
+                        ),
+                    ),
+                )
+            )
+        )
+        val adapter = GooglePlayStoreAdapter(context, billingClient)
+        val request = AppActorStoreProductRequest(
+            productId = "com.appactor.pro.monthly",
+            productType = AppActorProductType.Subscription,
+            basePlanId = "monthly001",
+        )
+
+        val products = adapter.queryProductDetails(listOf(request))
+
+        assertEquals(1, products.size)
+        assertNull(products.single().offerId)
+
+        adapter.launchPurchase(activity = Activity(), request = request)
+
+        assertEquals("base-token", captures.lastLaunchOfferToken)
+    }
 }
 
 private fun AppActorBillingQueryProduct.matches(

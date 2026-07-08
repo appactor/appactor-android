@@ -459,6 +459,29 @@ internal class GooglePlayStoreAdapter(
         val offers = payload.subscriptionOffers
         if (offers.isEmpty()) return null
 
+        // Auto-selection (RevenueCat parity): when the request does not pin an explicit offer,
+        // pick the best eligible offer Play returned for the requested base plan — longest free
+        // trial, else cheapest intro price, else the base plan itself. Offers tagged
+        // "aa-ignore-offer" in Play Console are skipped. The explicit-offer path below is
+        // unchanged (it serves pinned-offer configs), including its base-plan fallback and
+        // ambiguity fail-fast semantics.
+        if (!request.basePlanId.isNullOrBlank() && request.offerId.isNullOrBlank()) {
+            val autoSelected = SubscriptionOfferSelector.selectBestOffer(
+                offers.filter { offer -> offer.basePlanId == request.basePlanId }
+            )
+            if (autoSelected != null) {
+                if (!autoSelected.offerId.isNullOrBlank()) {
+                    AppActorLogger.info(
+                        "[Billing] Auto-selected Play subscription offer for productId=${request.productId} " +
+                            "basePlanId=${request.basePlanId} offerId=${autoSelected.offerId}"
+                    )
+                }
+                return autoSelected
+            }
+            // No trial, no intro price, and no base-plan pseudo-offer under this base plan —
+            // fall through to the legacy tiers (single-match select, ambiguity fail-fast).
+        }
+
         val resolved = selectUniqueOffer(
             payload = payload,
             request = request,

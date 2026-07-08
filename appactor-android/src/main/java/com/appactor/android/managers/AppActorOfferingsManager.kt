@@ -618,8 +618,34 @@ internal class AppActorOfferingsManager(
             }
             .distinctBy { it.cacheKey() }
 
-        val resolvedProducts = storeAdapter.queryProductDetails(productRequests)
-            .associateBy { it.cacheKey() }
+        val resolvedProductList = storeAdapter.queryProductDetails(productRequests)
+        val resolvedProducts = linkedMapOf<String, AppActorStoreProduct>()
+        resolvedProductList.forEach { product ->
+            resolvedProducts.putIfAbsent(product.cacheKey(), product)
+        }
+        // The store adapter can resolve a request to a different offer than the backend named:
+        // offer auto-selection when no offerId is pinned, and the base-plan fallback when a
+        // pinned offer is unavailable to this user. Index those products under the
+        // request-derived key too so the package lookup below still matches instead of
+        // dropping the package.
+        productRequests.forEach { request ->
+            if (request.basePlanId.isNullOrBlank() || resolvedProducts.containsKey(request.cacheKey())) {
+                return@forEach
+            }
+            val samePlanProducts = resolvedProductList.filter { product ->
+                product.productId == request.productId && product.basePlanId == request.basePlanId
+            }
+            val fallbackMatch = if (request.offerId.isNullOrBlank()) {
+                samePlanProducts.firstOrNull()
+            } else {
+                // A pinned offer that is missing from the map means the adapter degraded the
+                // request to the base plan (never a different offer).
+                samePlanProducts.firstOrNull { product -> product.offerId.isNullOrBlank() }
+            }
+            if (fallbackMatch != null) {
+                resolvedProducts[request.cacheKey()] = fallbackMatch
+            }
+        }
         val droppedPackageRefs = linkedSetOf<String>()
 
         val offeringPairs = sourceOfferings.mapNotNull { offeringDTO ->
