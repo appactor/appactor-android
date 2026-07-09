@@ -146,7 +146,7 @@ public data class AppActorPricingPhase(
         get() {
             if (recurrenceMode != AppActorRecurrenceMode.FiniteRecurring) return null
             return when {
-                priceAmountMicros == 0L -> AppActorOfferPaymentMode.FreeTrial
+                isFreeTrial -> AppActorOfferPaymentMode.FreeTrial
                 billingCycleCount == 1 -> AppActorOfferPaymentMode.SinglePayment
                 billingCycleCount != null && billingCycleCount > 1 -> AppActorOfferPaymentMode.DiscountedRecurring
                 else -> null

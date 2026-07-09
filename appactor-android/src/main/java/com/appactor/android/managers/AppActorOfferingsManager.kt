@@ -626,7 +626,8 @@ internal class AppActorOfferingsManager(
         // request-derived key too so the package lookup below still matches instead of
         // dropping the package.
         productRequests.forEach { request ->
-            if (request.basePlanId.isNullOrBlank() || resolvedProducts.containsKey(request.cacheKey())) {
+            val requestKey = request.cacheKey()
+            if (request.basePlanId.isNullOrBlank() || resolvedProducts.containsKey(requestKey)) {
                 return@forEach
             }
             val samePlanProducts = resolvedProductList.filter { product ->
@@ -640,7 +641,7 @@ internal class AppActorOfferingsManager(
                 samePlanProducts.firstOrNull { product -> product.offerId.isNullOrBlank() }
             }
             if (fallbackMatch != null) {
-                resolvedProducts[request.cacheKey()] = fallbackMatch
+                resolvedProducts[requestKey] = fallbackMatch
             }
         }
         val droppedPackageRefs = linkedSetOf<String>()
