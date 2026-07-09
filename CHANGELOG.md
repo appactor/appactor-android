@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.3.14
 
 - Added: `AppActorPackage` now exposes the resolved subscription offer's pricing phases publicly via `pricingPhases: List<AppActorPricingPhase>` plus `freePhase` / `introPhase` / `fullPricePhase` / `hasFreeTrial` helpers, so a paywall can render "3 days free, then ₺39.99/week" dynamically from the offer the SDK auto-selected (RevenueCat / Adapty parity). Each `AppActorPricingPhase` carries the ISO-8601 `billingPeriod` (with a parsed `period` of `AppActorSubscriptionPeriod`), `formattedPrice`, `priceAmountMicros`, `currencyCode`, `billingCycleCount`, `recurrenceMode` (`AppActorRecurrenceMode`), plus computed `isFreeTrial` and `paymentMode` (`AppActorOfferPaymentMode`). Existing `price` / `localizedPriceString` fields are unchanged (still the full recurring price); Apple and one-time products expose an empty list.
 - Changed: Google Play subscription purchases that do not name an explicit offer (`offerId == null`) now auto-apply the best eligible offer Play returns for the base plan — the longest free trial, else the cheapest introductory price, else the base plan itself (RevenueCat parity). Previously such purchases always resolved to the base-plan token at full price, even when the user was eligible for a free trial. Ties resolve deterministically to the first offer in Play's order. Opt an offer out of auto-selection by adding the `aa-ignore-offer` tag to it in Play Console; explicitly pinned offer ids keep today's exact-match behavior (including the base-plan fallback and ambiguity fail-fast).
