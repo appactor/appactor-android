@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.3.15
+
+- Added: `AppActorOffering.offeringKey` (the dashboard lookup key, falling back to `id`), `AppActorOfferings.getOffering(offeringKey)` / `offerings["key"]` / `allOfferings` (current first), and `AppActor.getOffering(offeringKey, fetchPolicy)` to fetch and look up in one call. Also on `AppActorBridge` and `AppActorJava.getOfferingAsync`.
+- Removed: `AppActorOfferings.offeringByLookupKey(lookupKey)` — call `getOffering(offeringKey)` instead (a one-line rename; the compiler points at every call site).
+- Added: `AppActor.getExperiment(experimentKey)` returns an `AppActorExperiment` that is never null — `isEnrolled`, `variantKey`, `isVariant(key)`, `boolValue / stringValue / intValue / doubleValue(defaultValue)` and `experiment["key"]` for JSON payloads — so a feature check no longer needs a null-check plus a typed accessor plus a default. `getExperimentAssignment` is unchanged. Also on `AppActorBridge` and `AppActorJava.getExperimentAsync`.
+
 ## 2.3.14
 
 - Added: `AppActorPackage` now exposes the resolved subscription offer's pricing phases publicly via `pricingPhases: List<AppActorPricingPhase>` plus `freePhase` / `introPhase` / `fullPricePhase` / `hasFreeTrial` helpers, so a paywall can render "3 days free, then ₺39.99/week" dynamically from the offer the SDK auto-selected (RevenueCat / Adapty parity). Each `AppActorPricingPhase` carries the ISO-8601 `billingPeriod` (with a parsed `period` of `AppActorSubscriptionPeriod`), `formattedPrice`, `priceAmountMicros`, `currencyCode`, `billingCycleCount`, `recurrenceMode` (`AppActorRecurrenceMode`), plus computed `isFreeTrial` and `paymentMode` (`AppActorOfferPaymentMode`). Existing `price` / `localizedPriceString` fields are unchanged (still the full recurring price); Apple and one-time products expose an empty list.

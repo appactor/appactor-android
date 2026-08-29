@@ -7,8 +7,10 @@ import com.appactor.android.models.AppActorAttribution
 import com.appactor.android.models.AppActorCompletionCallback
 import com.appactor.android.models.AppActorCustomerInfo
 import com.appactor.android.models.AppActorErrorCallback
+import com.appactor.android.models.AppActorExperiment
 import com.appactor.android.models.AppActorExperimentAssignment
 import com.appactor.android.models.AppActorIntegrationIdentifier
+import com.appactor.android.models.AppActorOffering
 import com.appactor.android.models.AppActorOfferings
 import com.appactor.android.models.AppActorOptions
 import com.appactor.android.models.AppActorPackage
@@ -73,6 +75,17 @@ public object AppActorJava {
     )
 
     @JvmStatic
+    public fun getOfferingAsync(
+        offeringKey: String,
+        onSuccess: AppActorSuccessCallback<AppActorOffering?>? = null,
+        onError: AppActorErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.getOffering(offeringKey) },
+        onSuccess = onSuccess,
+        onError = onError,
+    )
+
+    @JvmStatic
     public fun getCustomerInfoAsync(
         onSuccess: AppActorSuccessCallback<AppActorCustomerInfo>? = null,
         onError: AppActorErrorCallback? = null,
@@ -99,6 +112,17 @@ public object AppActorJava {
         onError: AppActorErrorCallback? = null,
     ): Unit = AppActor.launchAsync(
         operation = { AppActor.getExperimentAssignment(experimentKey) },
+        onSuccess = onSuccess,
+        onError = onError,
+    )
+
+    @JvmStatic
+    public fun getExperimentAsync(
+        experimentKey: String,
+        onSuccess: AppActorSuccessCallback<AppActorExperiment>? = null,
+        onError: AppActorErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.getExperiment(experimentKey) },
         onSuccess = onSuccess,
         onError = onError,
     )

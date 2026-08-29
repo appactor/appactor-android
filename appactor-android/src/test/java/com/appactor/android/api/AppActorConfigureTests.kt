@@ -91,7 +91,7 @@ class AppActorConfigureTests {
         )
 
         assertEquals(mainOffering, offerings.offering("off_main_android"))
-        assertEquals(mainOffering, offerings.offeringByLookupKey("main"))
+        assertEquals(mainOffering, offerings.getOffering("main"))
     }
 
     @Test

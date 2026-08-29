@@ -8,6 +8,13 @@ public data class AppActorOffering(
     val metadata: AppActorMetadata = emptyMap(),
     val packages: List<AppActorPackage> = emptyList(),
 ) {
+    /**
+     * The developer-defined key of this offering — the "lookup key" in the dashboard,
+     * e.g. `"onboarding"`. Falls back to [id] when the offering has no key.
+     */
+    public val offeringKey: String
+        get() = lookupKey ?: id
+
     public val monthly: AppActorPackage?
         get() = packages.firstOrNull { it.packageType == AppActorPackageType.Monthly }
 

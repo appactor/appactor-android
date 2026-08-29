@@ -37,9 +37,11 @@ import com.appactor.android.models.AppActorDebugCategory
 import com.appactor.android.models.AppActorDiagnosticsDataSource
 import com.appactor.android.models.AppActorEntitlementInfo
 import com.appactor.android.models.AppActorError
+import com.appactor.android.models.AppActorExperiment
 import com.appactor.android.models.AppActorExperimentAssignment
 import com.appactor.android.models.AppActorErrorCallback
 import com.appactor.android.models.AppActorIntegrationIdentifier
+import com.appactor.android.models.AppActorOffering
 import com.appactor.android.models.AppActorOfferings
 import com.appactor.android.models.AppActorOfferingsFetchPolicy
 import com.appactor.android.models.AppActorOptions
@@ -627,6 +629,19 @@ public object AppActor {
         }
     }
 
+    /**
+     * Fetches offerings (see [offerings]) and returns the one with the given
+     * [AppActorOffering.offeringKey], or `null` if the app has no such offering.
+     *
+     * ```kotlin
+     * AppActor.shared.getOffering("onboarding")?.annual?.let { AppActor.shared.purchase(activity, it) }
+     * ```
+     */
+    public suspend fun getOffering(
+        offeringKey: String,
+        fetchPolicy: AppActorOfferingsFetchPolicy = AppActorOfferingsFetchPolicy.FreshIfStale,
+    ): AppActorOffering? = offerings(fetchPolicy).getOffering(offeringKey)
+
     internal suspend fun offerings(forceRefresh: Boolean = false): AppActorOfferings {
         return if (forceRefresh) {
             requireConfiguredRuntime().let { currentRuntime ->
@@ -986,6 +1001,24 @@ public object AppActor {
             assignment
         }
     }
+
+    /**
+     * Resolves the user's standing in an experiment.
+     *
+     * Never `null`: when the user is not in the experiment the result reports
+     * `isEnrolled == false`, `variantKey == null`, and every typed getter returns its default.
+     * Same caching and errors as [getExperimentAssignment].
+     *
+     * ```kotlin
+     * val paywall = AppActor.shared.getExperiment("paywall_test")
+     * if (paywall.isVariant("annual_first")) showAnnualFirst()
+     *
+     * val showOnboarding = AppActor.shared.getExperiment("has_onboard").boolValue(defaultValue = true)
+     * val title = AppActor.shared.getExperiment("onboarding_flow")["title"]?.stringValue ?: "Welcome"
+     * ```
+     */
+    public suspend fun getExperiment(experimentKey: String): AppActorExperiment =
+        AppActorExperiment(experimentKey, getExperimentAssignment(experimentKey))
 
     public suspend fun getStorefront(): AppActorStorefront? {
         val currentRuntime = currentRuntimeSnapshot() ?: return null
