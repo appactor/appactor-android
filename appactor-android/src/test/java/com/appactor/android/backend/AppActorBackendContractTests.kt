@@ -72,7 +72,7 @@ class AppActorBackendContractTests {
 
         assertEquals("off_current_only", offerings.current?.id)
         assertEquals("off_current_only", offerings.offering("off_current_only")?.id)
-        assertEquals("off_current_only", offerings.offeringByLookupKey("main")?.id)
+        assertEquals("off_current_only", offerings.getOffering("main")?.id)
     }
 
     @Test

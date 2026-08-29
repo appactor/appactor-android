@@ -10,8 +10,10 @@ import com.appactor.android.models.AppActorBridgeReceiptEvent
 import com.appactor.android.models.AppActorConfigValue
 import com.appactor.android.models.AppActorCompletionCallback
 import com.appactor.android.models.AppActorCustomerInfo
+import com.appactor.android.models.AppActorExperiment
 import com.appactor.android.models.AppActorExperimentAssignment
 import com.appactor.android.models.AppActorIntegrationIdentifier
+import com.appactor.android.models.AppActorOffering
 import com.appactor.android.models.AppActorOfferings
 import com.appactor.android.models.AppActorOfferingsFetchPolicy
 import com.appactor.android.models.AppActorOptions
@@ -105,6 +107,31 @@ public object AppActorBridge {
 
     @JvmStatic
     @JvmOverloads
+    public fun getOffering(
+        offeringKey: String,
+        fetchPolicy: AppActorOfferingsFetchPolicy = AppActorOfferingsFetchPolicy.FreshIfStale,
+        onSuccess: AppActorSuccessCallback<AppActorOffering?>? = null,
+        onError: AppActorBridgeErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.getOffering(offeringKey, fetchPolicy) },
+        onSuccess = onSuccess,
+        onError = onError.asSdkErrorCallback(),
+    )
+
+    @JvmStatic
+    public fun getOffering(
+        offeringKey: String,
+        onSuccess: AppActorSuccessCallback<AppActorOffering?>?,
+        onError: AppActorBridgeErrorCallback?,
+    ): Unit = getOffering(
+        offeringKey = offeringKey,
+        fetchPolicy = AppActorOfferingsFetchPolicy.FreshIfStale,
+        onSuccess = onSuccess,
+        onError = onError,
+    )
+
+    @JvmStatic
+    @JvmOverloads
     public fun setFallbackOfferings(
         jsonData: ByteArray,
         onSuccess: (() -> Unit)? = null,
@@ -162,6 +189,18 @@ public object AppActorBridge {
         onError: AppActorBridgeErrorCallback? = null,
     ): Unit = AppActor.launchAsync(
         operation = { AppActor.getExperimentAssignment(experimentKey) },
+        onSuccess = onSuccess,
+        onError = onError.asSdkErrorCallback(),
+    )
+
+    @JvmStatic
+    @JvmOverloads
+    public fun getExperiment(
+        experimentKey: String,
+        onSuccess: AppActorSuccessCallback<AppActorExperiment>? = null,
+        onError: AppActorBridgeErrorCallback? = null,
+    ): Unit = AppActor.launchAsync(
+        operation = { AppActor.getExperiment(experimentKey) },
         onSuccess = onSuccess,
         onError = onError.asSdkErrorCallback(),
     )

@@ -50,6 +50,25 @@ val info = AppActor.shared.getCustomerInfo()
 val isPremium = info.hasActiveEntitlement("premium")
 ```
 
+## Offerings & Experiments
+
+```kotlin
+// All offerings, or one by its offering key (the dashboard "lookup key")
+val offerings = AppActor.shared.offerings()
+offerings.current                          // the current offering
+offerings.allOfferings                     // List<AppActorOffering>, current first
+offerings["onboarding"]                    // by offeringKey
+val onboarding = AppActor.shared.getOffering("onboarding")   // fetch + lookup in one call
+
+// Experiments — never null, so no null-checks
+val paywall = AppActor.shared.getExperiment("paywall_test")
+if (paywall.isVariant("annual_first")) showAnnualFirst()
+paywall.variantKey                         // "control", "annual_first", … or null when not enrolled
+
+val showOnboarding = AppActor.shared.getExperiment("has_onboard").boolValue(defaultValue = true)
+val title = AppActor.shared.getExperiment("onboarding_flow")["title"]?.stringValue ?: "Welcome"
+```
+
 ## Payment Restore & Retry Policy
 
 `configure()` starts the SDK, establishes the local AppActor user, warms billing
