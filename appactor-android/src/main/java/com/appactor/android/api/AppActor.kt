@@ -63,6 +63,7 @@ import com.appactor.android.pipeline.AppActorPurchaseUpdateProcessingResult
 import com.appactor.android.storage.isAnonymousAppUserId
 import com.appactor.android.storage.AppActorAtomicJsonPostedLedgerStore
 import com.appactor.android.storage.AppActorAtomicJsonReceiptQueueStore
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -102,8 +103,8 @@ public object AppActor {
     @Volatile
     private var nextRuntimeSessionId: Long = 1L
 
-    @Volatile
-    private var isResetting: Boolean = false
+    // The wipe of a reset() in progress; configure() is a no-op while it runs.
+    private var resetWipe: CompletableDeferred<Unit>? = null
     private val installReferrerEnabled = java.util.concurrent.atomic.AtomicBoolean(false)
 
     internal var storeAdapterFactory: (Context) -> AppActorStoreAdapter = { context ->
@@ -398,7 +399,7 @@ public object AppActor {
 
     internal suspend fun configure(configuration: AppActorConfiguration): Unit {
         val startupRuntime = transitionMutex.withLock {
-            if (isResetting || runtime != null) {
+            if (resetWipe != null || runtime != null) {
                 return@withLock null
             }
             bumpIdentityEpochLocked()
@@ -417,7 +418,7 @@ public object AppActor {
         options: AppActorOptions = AppActorOptions(),
     ) {
         val startupRuntime = transitionMutex.withLock {
-            if (isResetting || runtime != null) {
+            if (resetWipe != null || runtime != null) {
                 return@withLock null
             }
             bumpIdentityEpochLocked()
@@ -436,15 +437,19 @@ public object AppActor {
         }
     }
 
-    public suspend fun reset(): Unit {
+    // Runs non-cancellably: the wipe must finish even when the caller is cancelled, which
+    // includes an AppActorBridge.reset() running in the callbackScope cancelled below.
+    public suspend fun reset(): Unit = withContext(NonCancellable) {
+        val wipe = CompletableDeferred<Unit>()
+        var earlierWipe: CompletableDeferred<Unit>? = null
         val currentRuntime = transitionMutex.withLock {
             bumpIdentityEpochLocked()
             val currentRuntime = runtime ?: run {
-                // An earlier reset may still be wiping; it clears isResetting itself.
                 preconfiguredFallbackOfferingsDTO = null
+                earlierWipe = resetWipe
                 return@withLock null
             }
-            isResetting = true
+            resetWipe = wipe
             currentRuntime.lifecycleCallbacks?.let { callbacks ->
                 (currentRuntime.configuration.applicationContext as? Application)
                     ?.unregisterActivityLifecycleCallbacks(callbacks)
@@ -452,43 +457,41 @@ public object AppActor {
             runtime = null
             customerInfoStateFlow.value = AppActorCustomerInfo.empty
             currentRuntime
-        } ?: return
+        }
+        if (currentRuntime == null) {
+            // A reset that finds nothing configured still returns only once an earlier one has
+            // finished wiping, so a configure() after it is not skipped or wiped.
+            earlierWipe?.await()
+            return@withContext
+        }
 
-        // The wipe must finish even when the caller is cancelled, which includes an
-        // AppActorBridge.reset() running in the callbackScope cancelled below.
-        withContext(NonCancellable) {
-            try {
-                val currentAppUserId = currentRuntime.identityStore.currentAppUserId
-                currentRuntime.paymentProcessor.onDeferredPurchaseResolved = null
-                currentRuntime.scope.cancel()
-                callbackScope.cancel()
-                callbackScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-                currentRuntime.storeAdapter.shutdown()
-                currentRuntime.scope.coroutineContext[Job]?.join()
-                currentRuntime.remoteConfigManager.clearCache(currentAppUserId)
-                currentRuntime.experimentManager.clearCache(currentAppUserId)
-                currentRuntime.attributesManager.clearQueue()
-                // Serialized with canonical-id adoption, which checks then writes the identity.
-                synchronized(currentRuntime.identityStore) {
-                    currentRuntime.identityStore.clearIdentity()
-                }
-                currentRuntime.eTagManager.clearAll()
-                installReferrerEnabled.set(false)
-                synchronized(this@AppActor) {
-                    preconfiguredFallbackOfferingsDTO = null
-                }
-                AppActorAtomicJsonReceiptQueueStore.deletePersistedFile(currentRuntime.configuration.applicationContext)
-                AppActorAtomicJsonPostedLedgerStore.deletePersistedFile(currentRuntime.configuration.applicationContext)
-                currentRuntime.configuration.applicationContext
-                    .getSharedPreferences("com.appactor.android.pending_purchases", android.content.Context.MODE_PRIVATE)
-                    .edit().clear().apply()
-            } finally {
-                transitionMutex.withLock {
-                    if (runtime == null) {
-                        isResetting = false
-                    }
-                }
+        try {
+            val currentAppUserId = currentRuntime.identityStore.currentAppUserId
+            currentRuntime.paymentProcessor.onDeferredPurchaseResolved = null
+            currentRuntime.scope.cancel()
+            callbackScope.cancel()
+            callbackScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+            currentRuntime.storeAdapter.shutdown()
+            currentRuntime.scope.coroutineContext[Job]?.join()
+            currentRuntime.remoteConfigManager.clearCache(currentAppUserId)
+            currentRuntime.experimentManager.clearCache(currentAppUserId)
+            currentRuntime.attributesManager.clearQueue()
+            currentRuntime.identityStore.clearIdentity()
+            currentRuntime.eTagManager.clearAll()
+            installReferrerEnabled.set(false)
+            synchronized(this@AppActor) {
+                preconfiguredFallbackOfferingsDTO = null
             }
+            AppActorAtomicJsonReceiptQueueStore.deletePersistedFile(currentRuntime.configuration.applicationContext)
+            AppActorAtomicJsonPostedLedgerStore.deletePersistedFile(currentRuntime.configuration.applicationContext)
+            currentRuntime.configuration.applicationContext
+                .getSharedPreferences("com.appactor.android.pending_purchases", android.content.Context.MODE_PRIVATE)
+                .edit().clear().apply()
+        } finally {
+            transitionMutex.withLock {
+                resetWipe = null
+            }
+            wipe.complete(Unit)
         }
     }
 

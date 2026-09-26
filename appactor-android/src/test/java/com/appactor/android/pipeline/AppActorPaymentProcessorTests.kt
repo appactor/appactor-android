@@ -1149,6 +1149,37 @@ class AppActorPaymentProcessorTests {
     }
 
     @Test
+    fun `unfinished only sync still syncs the current user's queued purchase waiting out a backoff`() = runBlocking {
+        val restoreResponse = fixtureRestoreResponse("fixtures/backend/google_restore_sample.json")
+        val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
+        val queued = purchaseFlowReceipt(token = "token_backoff", appUserId = "user_android_123")
+        val dependencies = createDependencies(
+            receiptResponse = AppActorBackendHttpResponse(
+                body = receiptResponse,
+                statusCode = 200,
+                requestId = receiptResponse.requestId,
+                signatureVerified = true,
+            ),
+            activePurchases = listOf(queued.toStorePurchase()),
+            syncResponse = AppActorBackendHttpResponse(
+                body = AppActorGoogleSyncResponseDTO(
+                    customer = restoreResponse.customer,
+                    syncedCount = 1,
+                    requestId = "req_sync_backoff",
+                ),
+                statusCode = 200,
+                requestId = "req_sync_backoff",
+                signatureVerified = true,
+            ),
+        )
+        dependencies.queueStore.upsert(queued.copy(retryCount = 3, nextRetryAtMillis = System.currentTimeMillis() + 60_000L))
+
+        dependencies.processor.syncCurrentPurchases(unfinishedOnly = true)
+
+        assertEquals(listOf("token_backoff"), dependencies.syncRequests.single().purchases.map { it.purchaseToken })
+    }
+
+    @Test
     fun `purchase update after cancelled foreground purchase remains purchase intent`() = runBlocking {
         val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
         val dependencies = createDependencies(
@@ -3261,6 +3292,9 @@ class AppActorPaymentProcessorTests {
             storedAppUserId ?: "user_android_123".also { storedAppUserId = it }
         }
         every { mock.setAppUserId(any()) } answers { storedAppUserId = firstArg() }
+        every { mock.replaceAppUserId(any(), any()) } answers {
+            (storedAppUserId == firstArg<String>()).also { current -> if (current) storedAppUserId = secondArg() }
+        }
         every { mock.setLastRequestId(any()) } answers { storedLastRequestId = firstArg() }
         every { mock.setInstallReferrer(any()) } answers { }
         every { mock.clearIdentity() } answers {

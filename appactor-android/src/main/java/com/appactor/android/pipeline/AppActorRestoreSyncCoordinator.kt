@@ -142,9 +142,10 @@ internal class AppActorRestoreSyncCoordinator(
         // The launch sweep takes only purchases nothing has handled yet, as iOS sweeps only
         // unfinished transactions. Posting a finished purchase for a fresh anonymous user (after
         // a logout, a reset or a reinstall) has the backend merge that user into the buyer and
-        // undo the logout. Queued purchases are posted by the drain below (and dead letters by
-        // the launch retry) for their buyer. An unknown-type dead letter revives only when its
-        // purchase is seen again, so it goes back through the queue, which keeps its buyer.
+        // undo the logout. Another user's queued purchases are posted by the drain below (and
+        // dead letters by the launch retry) for that user. An unknown-type dead letter revives
+        // only when its purchase is seen again, so it goes back through the queue, which keeps
+        // a purchase-flow receipt with its buyer.
         val (revivableItems, queuedItems) = if (unfinishedOnly) {
             queueStore.snapshot().partition { item ->
                 item.phase == AppActorReceiptQueuePhase.DeadLettered &&
@@ -153,7 +154,8 @@ internal class AppActorRestoreSyncCoordinator(
         } else {
             emptyList<AppActorReceiptQueueItem>() to emptyList()
         }
-        val skippedPurchaseTokens = excludedPurchaseTokens + queuedItems.map { it.purchaseToken }
+        val skippedPurchaseTokens = excludedPurchaseTokens +
+            queuedItems.filter { it.appUserId != appUserId }.map { it.purchaseToken }
         val revivablePurchaseTokens = revivableItems.mapTo(HashSet()) { it.purchaseToken }
 
         storeAdapter.queryActivePurchases().forEach { purchase ->
@@ -616,12 +618,7 @@ internal class AppActorRestoreSyncCoordinator(
         if (finalAppUserId != requestedAppUserId) {
             customerManager.clearCache(requestedAppUserId)
             // A reset or logout while the request was in flight must not be undone by its answer.
-            // reset() clears the identity under the same lock.
-            synchronized(identityStore) {
-                if (identityStore.currentAppUserId == requestedAppUserId) {
-                    identityStore.setAppUserId(finalAppUserId)
-                }
-            }
+            identityStore.replaceAppUserId(expected = requestedAppUserId, appUserId = finalAppUserId)
         }
         return finalAppUserId
     }

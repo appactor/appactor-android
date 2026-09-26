@@ -352,7 +352,7 @@ internal class AppActorPaymentProcessor(
                 }
                 val shouldEmitDeferredCallback =
                     emitDeferredPurchaseCallback && identityStore.currentAppUserId == receiptAppUserId
-                when (
+                val customerInfo = when (
                     val outcome = enqueueAndProcess(
                         purchase = purchase,
                         productEntitlements = productEntitlements,
@@ -361,25 +361,21 @@ internal class AppActorPaymentProcessor(
                         clientPurchaseContext = updateContext.clientPurchaseContext,
                     )
                 ) {
-                    is ProcessingOutcome.Success -> {
-                        latestCustomer = outcome.customerInfo
-                        fireDeferredPurchaseCallbackIfNeeded(
-                            purchase = purchase,
-                            customerInfo = outcome.customerInfo,
-                            emitCallback = shouldEmitDeferredCallback,
-                        )
-                    }
-                    is ProcessingOutcome.AlreadyPosted -> {
-                        latestCustomer = outcome.customerInfo
-                        fireDeferredPurchaseCallbackIfNeeded(
-                            purchase = purchase,
-                            customerInfo = outcome.customerInfo,
-                            emitCallback = shouldEmitDeferredCallback,
-                        )
-                    }
+                    is ProcessingOutcome.Success -> outcome.customerInfo
+                    is ProcessingOutcome.AlreadyPosted -> outcome.customerInfo
                     is ProcessingOutcome.Queued,
-                    is ProcessingOutcome.PermanentFailure -> Unit
+                    is ProcessingOutcome.PermanentFailure -> return@forEach
                 }
+                // A purchase already queued by the purchase flow is posted for its buyer, who may
+                // not be this receipt's user.
+                if (customerInfo.appUserId == receiptAppUserId) {
+                    latestCustomer = customerInfo
+                }
+                fireDeferredPurchaseCallbackIfNeeded(
+                    purchase = purchase,
+                    customerInfo = customerInfo,
+                    emitCallback = shouldEmitDeferredCallback,
+                )
             }
             latestCustomer
         }
