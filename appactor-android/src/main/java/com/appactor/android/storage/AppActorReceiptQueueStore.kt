@@ -49,6 +49,8 @@ internal data class AppActorReceiptQueueItem(
     val isAcknowledged: Boolean = false,
     val shouldAcknowledge: Boolean = false,
     val shouldConsume: Boolean = false,
+    /** A dead letter consumed or acknowledged on Play; a later post must not finish it again. */
+    val finishedOnDevice: Boolean = false,
     val retryCount: Int = 0,
     val nextRetryAtMillis: Long = 0L,
     val createdAtMillis: Long,
@@ -221,6 +223,7 @@ internal class AppActorAtomicJsonReceiptQueueStore(
                     isAcknowledged = existing.isAcknowledged || item.isAcknowledged,
                     shouldAcknowledge = existing.shouldAcknowledge || item.shouldAcknowledge,
                     shouldConsume = existing.shouldConsume || item.shouldConsume,
+                    finishedOnDevice = existing.finishedOnDevice || item.finishedOnDevice,
                     retryCount = existing.retryCount,
                     nextRetryAtMillis = existing.nextRetryAtMillis,
                     createdAtMillis = existing.createdAtMillis,
@@ -441,12 +444,14 @@ internal class AppActorAtomicJsonReceiptQueueStore(
         }
     }
 
+    // Keyed on createdAtMillis: every launch revives and re-posts dead letters, which refreshes
+    // lastUpdatedAtMillis, so that field would keep a permanently rejected item forever.
     private fun purgeExpiredDeadLetteredItems(
         source: LinkedHashMap<String, AppActorReceiptQueueItem>
     ): LinkedHashMap<String, AppActorReceiptQueueItem> {
         val cutoff = System.currentTimeMillis() - DEAD_LETTER_RETENTION_MILLIS
         val filtered = source.filterValues { item ->
-            item.phase != AppActorReceiptQueuePhase.DeadLettered || item.lastUpdatedAtMillis >= cutoff
+            item.phase != AppActorReceiptQueuePhase.DeadLettered || item.createdAtMillis >= cutoff
         }
         return if (filtered.size == source.size) {
             source

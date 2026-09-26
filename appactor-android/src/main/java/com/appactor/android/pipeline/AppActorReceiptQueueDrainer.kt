@@ -258,8 +258,8 @@ internal class AppActorReceiptQueueDrainer(
                     val customerInfo = customerManager.cachedInfo(normalizedItem.appUserId)
                         ?: throw IllegalStateException("Receipt response success was missing customer info.")
                     val finishItem = normalizedItem.copy(
-                        shouldAcknowledge = result.acknowledgePurchase,
-                        shouldConsume = result.consumePurchase,
+                        shouldAcknowledge = result.acknowledgePurchase && !normalizedItem.finishedOnDevice,
+                        shouldConsume = result.consumePurchase && !normalizedItem.finishedOnDevice,
                         phase = AppActorReceiptQueuePhase.NeedsFinish,
                         claimedAtMillis = null,
                         lastUpdatedAtMillis = dateProviderMillis(),
@@ -422,11 +422,11 @@ internal class AppActorReceiptQueueDrainer(
         code: String?,
         message: String?,
     ) {
-        val finalized = finalizeDeadLetteredPurchase(item)
-        if (finalized) {
-            markPurchasePosted(item)
-        }
+        // The posted ledger stays untouched: the backend never recorded this purchase, and the
+        // startup revival must post it again once the backend accepts it.
+        val finalized = item.finishedOnDevice || finalizeDeadLetteredPurchase(item)
         val updated = item.copy(
+            finishedOnDevice = finalized,
             phase = AppActorReceiptQueuePhase.DeadLettered,
             claimedAtMillis = null,
             nextRetryAtMillis = 0L,

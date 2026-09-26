@@ -371,6 +371,38 @@ class AppActorPaymentProcessorTests {
         assertEquals(com.appactor.android.storage.AppActorReceiptQueuePhase.DeadLettered, snapshot.single().phase)
         assertTrue(snapshot.single().lastError?.isNotBlank() == true)
         assertEquals(listOf("token_123"), dependencies.acknowledgedTokens)
+        assertTrue(snapshot.single().finishedOnDevice)
+        assertFalse(dependencies.ledgerStore.isPosted("google:com.appactor.pro.monthly:monthly001:token_123"))
+    }
+
+    @Test
+    fun `retry dead lettered items reposts a dead letter finished on device without finishing it again`() = runBlocking {
+        val permanent = fixtureReceiptResponse("fixtures/backend/google_receipt_permanent.json")
+        val ok = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
+        val dependencies = createDependencies(
+            receiptResponse = AppActorBackendHttpResponse(
+                body = ok,
+                statusCode = 200,
+                requestId = ok.requestId,
+                signatureVerified = true,
+            ),
+            receiptResponses = listOf(
+                AppActorBackendHttpResponse(
+                    body = permanent,
+                    statusCode = 200,
+                    requestId = permanent.requestId,
+                    signatureVerified = true,
+                ),
+            ),
+        )
+        runCatching { dependencies.processor.purchase(Activity(), monthlyPackage()) }
+
+        val retried = dependencies.processor.retryDeadLetteredItems()
+
+        assertTrue(retried?.hasActiveEntitlement("premium") == true)
+        assertEquals(2, dependencies.postedReceipts.size)
+        assertEquals(listOf("token_123"), dependencies.acknowledgedTokens)
+        assertTrue(dependencies.queueStore.snapshot().isEmpty())
         assertTrue(dependencies.ledgerStore.isPosted("google:com.appactor.pro.monthly:monthly001:token_123"))
     }
 
