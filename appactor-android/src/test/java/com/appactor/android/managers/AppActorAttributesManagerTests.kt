@@ -472,6 +472,82 @@ class AppActorAttributesManagerTests {
         assertNull(store.load("user_new"))
     }
 
+    @Test
+    fun `a rejected attribute is dropped and the keys sent with it are delivered`() = runBlocking {
+        val backend = FakeAttributesBackendClient(rejectedAttributeKeys = setOf("bad"))
+        val store = InMemoryAttributeQueueStore()
+        val manager = manager(backend, store)
+
+        manager.setAttributes(
+            "user_a",
+            mapOf(
+                "a" to AppActorAttributeValue.string("1"),
+                "bad" to AppActorAttributeValue.string("2"),
+                "c" to AppActorAttributeValue.string("3"),
+            ),
+        )
+
+        // [a, bad, c] -> [a, bad] + [c] -> [a] + [bad]: only the bad key is lost.
+        assertEquals(setOf("a", "c"), backend.patchRequests.flatMap { it.second.attributes.keys }.toSet())
+        assertEquals(5, backend.patchAttempts)
+        assertNull(store.load("user_a"))
+
+        manager.setAttribute("user_a", "tier", AppActorAttributeValue.string("gold"))
+
+        assertEquals(setOf("tier"), backend.patchRequests.last().second.attributes.keys)
+    }
+
+    @Test
+    fun `an attribute flush failure that is not the payload keeps the queue and throws`() = runBlocking {
+        val backend = FakeAttributesBackendClient(permanentMutationStatus = 401)
+        val store = InMemoryAttributeQueueStore()
+        val manager = manager(backend, store)
+
+        val failure = runCatching {
+            manager.setAttribute("user_a", "tier", AppActorAttributeValue.string("gold"))
+        }.exceptionOrNull()
+
+        assertNotNull(failure)
+        assertEquals(JsonPrimitive("gold"), store.load("user_a")?.attributes?.get("tier"))
+    }
+
+    @Test
+    fun `a rejected attribution is dropped and helpers merge over the last delivered one`() = runBlocking {
+        val backend = FakeAttributesBackendClient()
+        val store = InMemoryAttributeQueueStore()
+        val manager = manager(backend, store)
+
+        manager.updateCustomAttribution(
+            "user_a",
+            AppActorAttribution(provider = "custom", providerName = "facebook", network = "facebook", source = "facebook"),
+        )
+        backend.attributionStatus = 400
+        manager.updateCustomAttribution("user_a", AppActorAttribution(provider = "custom", adName = "rejected_ad"))
+        assertNull(store.load("user_a"))
+
+        backend.attributionStatus = null
+        manager.updateCustomAttribution(
+            "user_a",
+            AppActorAttribution(provider = "custom", campaignName = "spring_sale", campaign = "spring_sale"),
+        )
+
+        val request = backend.attributionRequests.last().second
+        assertEquals("facebook", request.source)
+        assertEquals("spring_sale", request.campaign)
+        assertNull(request.adName)
+    }
+
+    @Test
+    fun `unsetting an attribute of a user the server does not know yet is done`() = runBlocking {
+        val backend = FakeAttributesBackendClient(deleteAttributeStatus = 404)
+        val store = InMemoryAttributeQueueStore()
+        val manager = manager(backend, store)
+
+        manager.unsetAttribute("user_a", "tier")
+
+        assertNull(store.load("user_a"))
+    }
+
     private fun manager(
         backend: FakeAttributesBackendClient,
         store: InMemoryAttributeQueueStore,
@@ -541,7 +617,12 @@ class AppActorAttributesManagerTests {
     private class FakeAttributesBackendClient(
         var failMutations: Boolean = false,
         var permanentMutationStatus: Int? = null,
+        /** PATCHes carrying any of these keys fail with a 409, as a type conflict does. */
+        var rejectedAttributeKeys: Set<String> = emptySet(),
+        var attributionStatus: Int? = null,
+        var deleteAttributeStatus: Int? = null,
     ) : AppActorBackendClient {
+        var patchAttempts = 0
         val patchRequests = mutableListOf<Pair<String, AppActorAttributesPatchRequestDTO>>()
         val deleteRequests = mutableListOf<Pair<String, String>>()
         val integrationRequests = mutableListOf<Pair<String, AppActorIntegrationIdentifierRequestDTO>>()
@@ -558,14 +639,19 @@ class AppActorAttributesManagerTests {
         override suspend fun patchUserAttributes(
             appUserId: String,
             request: AppActorAttributesPatchRequestDTO,
-        ): AppActorBackendHttpResponse<Unit> = mutation {
-            patchRequests += appUserId to request
+        ): AppActorBackendHttpResponse<Unit> {
+            patchAttempts += 1
+            if (request.attributes.keys.any { it in rejectedAttributeKeys }) {
+                throw AppActorBackendException.Http(statusCode = 409)
+            }
+            return mutation { patchRequests += appUserId to request }
         }
 
         override suspend fun deleteUserAttribute(
             appUserId: String,
             key: String,
         ): AppActorBackendHttpResponse<Unit> = mutation {
+            deleteAttributeStatus?.let { throw AppActorBackendException.Http(statusCode = it) }
             deleteRequests += appUserId to key
         }
 
@@ -587,6 +673,7 @@ class AppActorAttributesManagerTests {
             appUserId: String,
             request: AppActorAttributionRequestDTO,
         ): AppActorBackendHttpResponse<Unit> = mutation {
+            attributionStatus?.let { throw AppActorBackendException.Http(statusCode = it) }
             attributionRequests += appUserId to request
         }
 

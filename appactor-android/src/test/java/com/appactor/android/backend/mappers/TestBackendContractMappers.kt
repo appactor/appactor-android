@@ -171,7 +171,7 @@ internal fun AppActorEntitlementDTO.toModel(identifier: String): AppActorEntitle
 internal fun AppActorSubscriptionDTO.toModel(subscriptionKey: String): AppActorSubscriptionInfo {
     return AppActorSubscriptionInfo(
         subscriptionKey = subscriptionKey,
-        productIdentifier = productId,
+        productIdentifier = productId.orEmpty(),
         store = AppActorStore.fromWireValue(store),
         basePlanId = basePlanId,
         offerId = offerId,
@@ -196,7 +196,7 @@ internal fun AppActorSubscriptionDTO.toModel(subscriptionKey: String): AppActorS
 
 internal fun AppActorNonSubscriptionDTO.toModel(): AppActorNonSubscription {
     return AppActorNonSubscription(
-        productIdentifier = productId,
+        productIdentifier = productId.orEmpty(),
         store = AppActorStore.fromWireValue(store),
         basePlanId = basePlanId,
         offerId = offerId,

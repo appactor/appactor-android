@@ -28,6 +28,28 @@ class AppActorAttributesTests {
             JsonArray(listOf(JsonPrimitive("a"), JsonPrimitive("b"))),
             AppActorAttributeValue.stringArray(listOf("a", "b")).toJsonElement(),
         )
+        assertEquals(
+            JsonObject(
+                mapOf(
+                    "value" to JsonArray(listOf(JsonPrimitive(1.5))),
+                    "valueType" to JsonPrimitive("number_array"),
+                ),
+            ),
+            AppActorAttributeValue.numberArray(listOf(1.5)).toJsonElement(),
+        )
+    }
+
+    @Test
+    fun `empty number and boolean arrays state their type`() {
+        // The backend would infer string_array for a bare [] and fix the key's definition to it.
+        assertEquals(
+            JsonObject(mapOf("value" to JsonArray(emptyList()), "valueType" to JsonPrimitive("number_array"))),
+            AppActorAttributeValue.numberArray(emptyList()).toJsonElement(),
+        )
+        assertEquals(
+            JsonObject(mapOf("value" to JsonArray(emptyList()), "valueType" to JsonPrimitive("boolean_array"))),
+            AppActorAttributeValue.boolArray(emptyList()).toJsonElement(),
+        )
     }
 
     @Test

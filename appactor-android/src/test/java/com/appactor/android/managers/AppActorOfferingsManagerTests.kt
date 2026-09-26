@@ -28,6 +28,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -39,6 +40,7 @@ import org.robolectric.RobolectricTestRunner
 import java.io.File
 import java.util.Locale
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicInteger
 
 @RunWith(RobolectricTestRunner::class)
 class AppActorOfferingsManagerTests {
@@ -947,6 +949,42 @@ class AppActorOfferingsManagerTests {
 
         assertNull(offlineCatalogStore.load())
         assertTrue(manager.currentProductEntitlements().isEmpty())
+    }
+
+    @Test
+    fun `a failed enrichment of the cached payload does not leave later offerings calls waiting`() = runBlocking {
+        val dto = fixtureOfferings()
+        val cacheStore = offeringsCacheStore("offerings-cached-enrich-failure")
+        cacheStore.save(
+            payload = AppActorBackendJson.instance.encodeToString(dto),
+            eTag = "\"etag_123\"",
+            verified = true,
+        )
+        val mockClient = mockk<AppActorBackendClient>(relaxed = true)
+        coEvery { mockClient.getOfferings(any()) } returns freshOfferingsResponse(dto)
+        val productQueries = AtomicInteger(0)
+        val mockStoreAdapter = mockk<AppActorStoreAdapter>(relaxed = true)
+        coEvery { mockStoreAdapter.queryProductDetails(any()) } answers {
+            // Play is unavailable for the first query only, e.g. BILLING_UNAVAILABLE.
+            if (productQueries.getAndIncrement() == 0) throw IllegalStateException("Billing unavailable")
+            val requests = firstArg<List<AppActorStoreProductRequest>>()
+            requests.mapNotNull { request -> pricedProducts()[requestKey(request)] }
+        }
+        val manager = AppActorOfferingsManager(
+            backendClient = mockClient,
+            cacheStore = cacheStore,
+            offlineProductCatalogStore = offlineProductCatalogStore("offerings-cached-enrich-failure"),
+            storeAdapter = mockStoreAdapter,
+        )
+
+        val cachedFailure = runCatching {
+            manager.getOfferings(fetchPolicy = AppActorOfferingsFetchPolicy.ReturnCachedThenRefresh)
+        }.exceptionOrNull()
+        assertNotNull(cachedFailure)
+
+        val offerings = withTimeout(5_000L) { manager.getOfferings() }
+
+        assertEquals("off_main_android", offerings.current?.id)
     }
 
     private fun freshOfferingsResponse(dto: AppActorOfferingsEnvelopeDTO): AppActorBackendHttpResponse<AppActorOfferingsEnvelopeDTO> {

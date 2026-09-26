@@ -1,6 +1,6 @@
 package com.appactor.android.models
 
-import java.time.Instant
+import java.util.Date
 
 public data class AppActorBridgeReceiptEvent(
     public val type: String,
@@ -20,7 +20,7 @@ public data class AppActorBridgeReceiptEvent(
         public const val TYPE_DUPLICATE_SKIPPED: String = "DUPLICATE_SKIPPED"
 
         public fun millisToIso8601(millis: Long): String =
-            Instant.ofEpochMilli(millis).toString()
+            AppActorIso8601.format(Date(millis))
     }
 }
 

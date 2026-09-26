@@ -46,11 +46,11 @@ public sealed class AppActorAttributeValue {
             require(value.all(Double::isFinite)) { "Attribute number array values must be finite." }
         }
 
-        override fun toJsonElement(): JsonElement = JsonArray(value.map(::JsonPrimitive))
+        override fun toJsonElement(): JsonElement = typedArray(JsonArray(value.map(::JsonPrimitive)), "number_array")
     }
 
     public data class BooleanArrayValue(public val value: List<Boolean>) : AppActorAttributeValue() {
-        override fun toJsonElement(): JsonElement = JsonArray(value.map(::JsonPrimitive))
+        override fun toJsonElement(): JsonElement = typedArray(JsonArray(value.map(::JsonPrimitive)), "boolean_array")
     }
 
     @Deprecated("Date arrays are not supported by the AppActor backend. Send individual date attributes instead.")
@@ -60,6 +60,16 @@ public sealed class AppActorAttributeValue {
     }
 
     public companion object {
+        // The backend infers an array's type from its items, so an empty array would be taken
+        // as string_array and fix the key's app-wide definition to that. Number and boolean
+        // arrays therefore always state their type.
+        private fun typedArray(items: JsonArray, valueType: String): JsonElement = JsonObject(
+            mapOf(
+                "value" to items,
+                "valueType" to JsonPrimitive(valueType),
+            ),
+        )
+
         @JvmStatic
         public fun string(value: String): AppActorAttributeValue = StringValue(value)
 

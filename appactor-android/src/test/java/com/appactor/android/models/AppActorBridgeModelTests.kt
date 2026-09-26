@@ -14,6 +14,13 @@ import org.junit.Test
 class AppActorBridgeModelTests {
 
     @Test
+    fun `receipt event timestamps are UTC ISO 8601 with milliseconds without java time`() {
+        // java.time exists on Android only from API 26 and minSdk is 24.
+        assertEquals("1970-01-01T00:00:00.000Z", AppActorBridgeReceiptEvent.millisToIso8601(0L))
+        assertEquals("2024-03-09T16:00:00.123Z", AppActorBridgeReceiptEvent.millisToIso8601(1_710_000_000_123L))
+    }
+
+    @Test
     fun `purchase params infer subscription type from subscription fields`() {
         val params = AppActorPurchaseParams(
             productId = "com.appactor.pro.monthly",

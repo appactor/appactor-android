@@ -111,7 +111,7 @@ internal data class AppActorSubscriptionDTO(
     val startsAt: String? = null,
     val expiresAt: String? = null,
     val store: String? = null,
-    val productId: String = "",
+    val productId: String? = null,
     val basePlanId: String? = null,
     val offerId: String? = null,
     val isSandbox: Boolean? = null,
@@ -131,7 +131,7 @@ internal data class AppActorSubscriptionDTO(
 internal data class AppActorNonSubscriptionDTO(
     val purchaseDate: String? = null,
     val store: String? = null,
-    val productId: String = "",
+    val productId: String? = null,
     val basePlanId: String? = null,
     val offerId: String? = null,
     val isSandbox: Boolean? = null,

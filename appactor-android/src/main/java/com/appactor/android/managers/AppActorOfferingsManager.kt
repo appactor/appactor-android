@@ -152,18 +152,21 @@ internal class AppActorOfferingsManager(
         return when (action) {
             is OfferingsAction.Await -> action.deferred.await()
             is OfferingsAction.Execute -> executeFetch(action.request, action.generation, forceRefresh = false)
-            is OfferingsAction.ReturnCachedPayload -> {
-                val offerings = decodeAndEnrich(
+            is OfferingsAction.ReturnCachedPayload -> try {
+                decodeAndEnrich(
                     payload = action.payload,
                     cachedAtMillis = action.cachedAtMillis,
                     generation = action.generation,
                     source = AppActorDiagnosticsDataSource.Cache,
                     verification = action.verification,
                 )
+            } finally {
+                // The refresh is the only code that completes and clears the inFlight request
+                // planted in phase 1, so it must start even when enrichment throws or the caller
+                // is cancelled; otherwise every later offerings call awaits that request forever.
                 if (action.triggerBackgroundRefresh && action.refreshRequest != null) {
                     launchBackgroundRefresh(action.refreshRequest, action.generation)
                 }
-                offerings
             }
         }
     }

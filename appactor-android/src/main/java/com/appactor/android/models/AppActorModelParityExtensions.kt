@@ -2,6 +2,9 @@ package com.appactor.android.models
 
 import java.time.Instant
 
+// The *Instant helpers return java.time.Instant, which Android has only from API 26. An app with
+// minSdk 24 or 25 that calls them needs core library desugaring. Nothing else in the SDK uses
+// java.time, so an app that doesn't call them runs on API 24 without it.
 private fun String?.toInstantOrNull(): Instant? {
     val value = this?.takeIf { it.isNotBlank() } ?: return null
     return runCatching { Instant.parse(value) }.getOrNull()

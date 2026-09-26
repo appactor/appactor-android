@@ -19,6 +19,7 @@ import com.appactor.android.models.AppActorStore
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -162,6 +163,33 @@ class AppActorBackendContractTests {
 
         assertEquals("req_customer_data_shape", dto.requestId)
         assertTrue(dto.customer.entitlements["premium"]?.isActive == true)
+    }
+
+    @Test
+    fun `customer with a null product id still decodes`() {
+        // The backend sends null once a product row is gone, e.g. after its app was deleted.
+        val customer = """
+            {
+              "entitlements": {},
+              "subscriptions": { "premium": { "isActive": false, "store": "app_store", "productId": null } },
+              "nonSubscriptions": { "coins": [ { "store": "play_store", "productId": null } ] }
+            }
+        """.trimIndent()
+
+        // The customer envelope goes through its own serializer (a tree decoder)...
+        val envelope = AppActorBackendJson.instance.decodeFromString<AppActorCustomerEnvelopeDTO>(
+            """{ "requestId": "req_null_product", "appUserId": "user_a", "customer": $customer }"""
+        )
+        val info = envelope.toModel()
+        assertEquals("", info.subscriptions["premium"]?.productIdentifier)
+        assertEquals("", info.nonSubscriptions["coins"]?.single()?.productIdentifier)
+
+        // ...while a receipt response embeds the customer through the generated (streaming) one.
+        val receipt = AppActorBackendJson.instance.decodeFromString<AppActorGoogleReceiptResponseDTO>(
+            """{ "status": "ok", "requestId": "req_null_product", "customer": $customer }"""
+        )
+        assertNull(receipt.customer?.subscriptions?.get("premium")?.productId)
+        assertNull(receipt.customer?.nonSubscriptions?.get("coins")?.single()?.productId)
     }
 
     @Test

@@ -12,6 +12,7 @@ import com.appactor.android.billing.AppActorStorePurchase
 import com.appactor.android.managers.AppActorCustomerManager
 import com.appactor.android.models.AppActorCustomerInfo
 import com.appactor.android.models.AppActorError
+import com.appactor.android.models.AppActorIso8601
 import com.appactor.android.models.AppActorProductType
 import com.appactor.android.models.appActorGoogleObfuscatedAccountId
 import com.appactor.android.storage.AppActorIdentityStore
@@ -19,6 +20,7 @@ import com.appactor.android.storage.AppActorReceiptQueueItem
 import com.appactor.android.storage.AppActorReceiptQueuePhase
 import com.appactor.android.storage.AppActorReceiptQueueStore
 import kotlinx.coroutines.CancellationException
+import java.util.Date
 
 /**
  * Owns restore + startup/foreground-sync PLANNING for the payment pipeline: the
@@ -715,7 +717,7 @@ private fun AppActorStorePurchase.toRestorePurchaseDTO(): AppActorGoogleRestoreP
     )
 }
 
-private fun isoNow(): String = java.time.Instant.now().toString()
+private fun isoNow(): String = AppActorIso8601.format(Date())
 
 private fun com.appactor.android.billing.AppActorStorePurchaseHistoryRecord.toStorePurchase(): AppActorStorePurchase {
     return AppActorStorePurchase(
