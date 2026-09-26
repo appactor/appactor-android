@@ -301,6 +301,8 @@ internal class GooglePlayBillingClientBridge(
                     // for the next launch, and report a device without Play billing as such, not
                     // as a network error.
                     isSetUp = false
+                    capabilities = emptySet()
+                    storefront = null
                     scheduleReconnect()
                     lastSetupResult
                         ?.takeIf { it.responseCode == BillingResponseCode.BILLING_UNAVAILABLE }
@@ -463,6 +465,7 @@ internal class GooglePlayBillingClientBridge(
         }
 
         val connectionAttempt = connectionMutex.withLock {
+            if (isShutDown) throw AppActorError.Unknown("Billing bridge was shut down.")
             if (isSetUp) {
                 null
             } else {
@@ -475,7 +478,7 @@ internal class GooglePlayBillingClientBridge(
                             }
                             .onFailure { throwable ->
                                 deferred.completeExceptionally(throwable)
-                                if (scheduleReconnectOnFailure) {
+                                if (scheduleReconnectOnFailure && !isBillingUnavailable()) {
                                     scheduleReconnect()
                                 }
                             }
@@ -484,6 +487,9 @@ internal class GooglePlayBillingClientBridge(
                                 activeConnectionAttempt = null
                             }
                         }
+                    }.invokeOnCompletion { cause ->
+                        // A shutdown can cancel the scope before this launch even starts.
+                        if (cause != null) deferred.completeExceptionally(AppActorError.Unknown("Billing bridge was shut down."))
                     }
                 }
             }
@@ -501,7 +507,12 @@ internal class GooglePlayBillingClientBridge(
                         override fun onBillingSetupFinished(billingResult: BillingResult) {
                             lastSetupResult = billingResult
                             isSetUp = billingResult.responseCode == BillingResponseCode.OK
-                            if (!continuation.isActive) return
+                            if (!continuation.isActive) {
+                                // Late (after the timeout), or forwarded from the library's own
+                                // reconnect: nobody else refreshes the capabilities for it.
+                                if (isSetUp) bridgeScope.launch { runCatching { refreshConnectedState() } }
+                                return
+                            }
                             if (isSetUp) {
                                 continuation.resume(Unit)
                             } else {
@@ -557,7 +568,9 @@ internal class GooglePlayBillingClientBridge(
                         val connected = runCatching {
                             awaitConnected(scheduleReconnectOnFailure = false)
                         }.isSuccess
-                        if (connected) {
+                        // Where Play billing is unavailable, retrying won't change that; the next
+                        // connect() tries again.
+                        if (connected || isBillingUnavailable()) {
                             reconnectDelayMs = RECONNECT_DELAY_START_MS
                             return@launch
                         }
@@ -572,6 +585,9 @@ internal class GooglePlayBillingClientBridge(
             }
         }
     }
+
+    private fun isBillingUnavailable(): Boolean =
+        lastSetupResult?.responseCode == BillingResponseCode.BILLING_UNAVAILABLE
 
     private suspend fun refreshConnectedState() {
         capabilities = resolveCapabilities()

@@ -26,6 +26,7 @@ import com.appactor.android.storage.AppActorReceiptQueueStore
 import com.appactor.android.models.AppActorError
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.completeWith
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -59,8 +60,8 @@ internal data class AppActorRuntimeState(
     val onReceiptPipelineEvent: ((AppActorReceiptPipelineEvent) -> Unit)? = null,
     val onDeferredPurchaseResolved: ((productId: String, customerInfo: AppActorCustomerInfo) -> Unit)? = null,
     val lastCustomerInfo: AppActorCustomerInfo = AppActorCustomerInfo.empty,
-    // The last info onCustomerInfoChanged was called with in this session; null until then.
-    val deliveredCustomerInfo: AppActorCustomerInfo? = null,
+    // The last info handed to onCustomerInfoChanged since the identity last changed.
+    val notifiedCustomerInfo: AppActorCustomerInfo? = null,
     val lastCustomerInfoSource: AppActorDiagnosticsDataSource? = null,
     val lastOfferingsSource: AppActorDiagnosticsDataSource? = null,
     val lastRemoteConfigSource: AppActorDiagnosticsDataSource? = null,
@@ -105,14 +106,16 @@ internal fun <T> CoroutineScope.launchSharedRequest(
     block: suspend () -> T,
 ) {
     launch(start = CoroutineStart.ATOMIC) {
-        try {
-            request.complete(block())
+        val result = try {
+            Result.success(block())
         } catch (throwable: Throwable) {
-            request.completeExceptionally(
-                if (throwable is CancellationException) AppActorError.NotConfigured else throwable
-            )
-        } finally {
+            Result.failure(if (throwable is CancellationException) AppActorError.NotConfigured else throwable)
+        }
+        // Cleaned up first, so a caller that calls again once this returns starts a new request.
+        try {
             withContext(NonCancellable) { cleanup() }
+        } finally {
+            request.completeWith(result)
         }
     }
 }

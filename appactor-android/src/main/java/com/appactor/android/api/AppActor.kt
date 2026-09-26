@@ -71,6 +71,8 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -1375,23 +1377,13 @@ public object AppActor {
             if (!unchanged) {
                 customerInfoStateFlow.value = info
             }
+            // Recorded only for a listener that is there to be called.
             val listener = updatedRuntime.onCustomerInfoChanged ?: return@synchronized null
-            if (updatedRuntime.deliveredCustomerInfo?.isSameInfoAs(info) == true) {
+            if (updatedRuntime.notifiedCustomerInfo?.isSameInfoAs(info) == true) {
                 return@synchronized null
             }
-            val sessionId = updatedRuntime.sessionId
-            // Recorded when the call really happens: a delivery dropped for an identity change
-            // leaves the listener still owed this info.
-            { delivered ->
-                recordDeliveredCustomerInfo(sessionId, delivered)
-                listener(delivered)
-            }
-        }
-    }
-
-    private fun recordDeliveredCustomerInfo(sessionId: Long, info: AppActorCustomerInfo) {
-        synchronized(this) {
-            runtime?.takeIf { it.sessionId == sessionId }?.let { runtime = it.copy(deliveredCustomerInfo = info) }
+            runtime = updatedRuntime.copy(notifiedCustomerInfo = info)
+            listener
         }
     }
 
@@ -1466,6 +1458,9 @@ public object AppActor {
             val result = try {
                 operation(snapshot)
             } catch (throwable: Throwable) {
+                // A caller cancelled itself is not re-run; a stale snapshot is retried only for
+                // callers still active.
+                currentCoroutineContext().ensureActive()
                 val snapshotStillCurrent = isSnapshotCurrent(snapshot)
                 if (attempts == 0 && !snapshotStillCurrent) {
                     attempts += 1
@@ -1628,6 +1623,10 @@ public object AppActor {
 
     private fun bumpIdentityEpochLocked(): Long {
         identityEpoch += 1
+        // A delivery queued before the change is dropped, so the listener is owed the next info.
+        synchronized(this) {
+            runtime = runtime?.copy(notifiedCustomerInfo = null)
+        }
         return identityEpoch
     }
 

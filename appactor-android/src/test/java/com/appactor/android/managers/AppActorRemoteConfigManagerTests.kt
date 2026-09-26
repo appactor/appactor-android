@@ -401,7 +401,7 @@ class AppActorRemoteConfigManagerTests {
             verified = true,
         )
         val mockClient = mockk<AppActorBackendClient>(relaxed = true)
-        coEvery { mockClient.getRemoteConfigs(any(), any(), any(), any()) } throws IOException("offline")
+        coEvery { mockClient.getRemoteConfigs(any(), any(), any(), any()) } throws com.appactor.android.backend.client.AppActorBackendException.Network("offline")
         val manager = createManager(
             backendClient = mockClient,
             cacheStore = cacheStore,

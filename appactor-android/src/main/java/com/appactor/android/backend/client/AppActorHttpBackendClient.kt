@@ -18,6 +18,7 @@ import com.appactor.android.backend.dto.AppActorLoginRequestDTO
 import com.appactor.android.backend.dto.AppActorLoginResponseDTO
 import com.appactor.android.backend.dto.AppActorOfferingsEnvelopeDTO
 import com.appactor.android.backend.dto.AppActorRemoteConfigsEnvelopeDTO
+import com.appactor.android.internal.runtime.throwIfCancellation
 import com.appactor.android.models.AppActorConfiguration
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.awaitCancellation
@@ -456,6 +457,7 @@ internal class AppActorHttpBackendClient(
                 }
                 throw lastError
             } catch (throwable: Throwable) {
+                throwIfCancellation(throwable)
                 lastError = AppActorBackendException.Network(
                     description = "Backend request failed.",
                     throwable = throwable,
