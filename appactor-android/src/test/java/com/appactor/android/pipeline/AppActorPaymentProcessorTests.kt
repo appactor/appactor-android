@@ -1064,6 +1064,89 @@ class AppActorPaymentProcessorTests {
     }
 
     @Test
+    fun `drain posts another user's queued receipt without reporting their customer info`() = runBlocking {
+        val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
+        val dependencies = createDependencies(
+            receiptResponse = AppActorBackendHttpResponse(
+                body = receiptResponse,
+                statusCode = 200,
+                requestId = receiptResponse.requestId,
+                signatureVerified = true,
+            ),
+            identityStore = createMockIdentityStore(initialAppUserId = "appactor-anon-next"),
+        )
+        dependencies.queueStore.upsert(purchaseFlowReceipt(token = "token_signed_out", appUserId = "user_signed_out"))
+
+        val drained = dependencies.processor.drainAll()
+
+        assertEquals("user_signed_out", dependencies.postedReceipts.single().appUserId)
+        assertNull(drained)
+        assertEquals("appactor-anon-next", dependencies.identityStore.currentAppUserId)
+    }
+
+    @Test
+    fun `a purchase queued by the purchase flow stays with its buyer when seen for another user`() = runBlocking {
+        val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
+        val dependencies = createDependencies(
+            receiptResponse = AppActorBackendHttpResponse(
+                body = receiptResponse,
+                statusCode = 200,
+                requestId = receiptResponse.requestId,
+                signatureVerified = true,
+            ),
+            identityStore = createMockIdentityStore(initialAppUserId = "user_b"),
+        )
+        val queued = purchaseFlowReceipt(token = "token_bought_by_a", appUserId = "user_a")
+        dependencies.queueStore.upsert(queued.copy(nextRetryAtMillis = System.currentTimeMillis() + 60_000L))
+
+        dependencies.processor.processPurchaseUpdates(
+            purchases = listOf(queued.toStorePurchase()),
+            appUserIdOverride = "user_b",
+        )
+
+        assertEquals("user_a", dependencies.postedReceipts.single().appUserId)
+    }
+
+    @Test
+    fun `unfinished only sync leaves finished and queued purchases out of the bulk sync`() = runBlocking {
+        val restoreResponse = fixtureRestoreResponse("fixtures/backend/google_restore_sample.json")
+        val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
+        val queued = purchaseFlowReceipt(token = "token_queued", appUserId = "user_signed_out")
+        val newPurchase = queued.toStorePurchase().copy(purchaseToken = "token_new", orderId = "GPA.new")
+        val dependencies = createDependencies(
+            receiptResponse = AppActorBackendHttpResponse(
+                body = receiptResponse,
+                statusCode = 200,
+                requestId = receiptResponse.requestId,
+                signatureVerified = true,
+            ),
+            activePurchases = listOf(
+                newPurchase.copy(purchaseToken = "token_finished", orderId = "GPA.finished", isAcknowledged = true),
+                queued.toStorePurchase(),
+                newPurchase,
+            ),
+            syncResponse = AppActorBackendHttpResponse(
+                body = AppActorGoogleSyncResponseDTO(
+                    customer = restoreResponse.customer,
+                    syncedCount = 1,
+                    requestId = "req_sync_unfinished",
+                ),
+                statusCode = 200,
+                requestId = "req_sync_unfinished",
+                signatureVerified = true,
+            ),
+            identityStore = createMockIdentityStore(initialAppUserId = "appactor-anon-next"),
+        )
+        dependencies.queueStore.upsert(queued)
+
+        dependencies.processor.syncCurrentPurchases(unfinishedOnly = true)
+
+        assertEquals(listOf("token_new"), dependencies.syncRequests.single().purchases.map { it.purchaseToken })
+        assertEquals("user_signed_out", dependencies.postedReceipts.single { it.purchaseToken == "token_queued" }.appUserId)
+        assertEquals("appactor-anon-next", dependencies.identityStore.currentAppUserId)
+    }
+
+    @Test
     fun `purchase update after cancelled foreground purchase remains purchase intent`() = runBlocking {
         val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
         val dependencies = createDependencies(
@@ -3602,6 +3685,32 @@ class AppActorPaymentProcessorTests {
     // endregion
 
     // region — Helpers
+
+    private fun purchaseFlowReceipt(token: String, appUserId: String): AppActorReceiptQueueItem {
+        val now = System.currentTimeMillis()
+        return AppActorReceiptQueueItem(
+            key = AppActorReceiptQueueItem.makeKey(
+                purchaseToken = token,
+                productId = "com.appactor.pro.monthly",
+                basePlanId = "monthly001",
+                orderId = "GPA.$token",
+            ),
+            appUserId = appUserId,
+            packageName = context.packageName,
+            environment = "production",
+            productId = "com.appactor.pro.monthly",
+            productType = AppActorProductType.Subscription.wireValue,
+            purchaseToken = token,
+            purchaseTime = "1710000000000",
+            purchaseState = "PURCHASED",
+            orderId = "GPA.$token",
+            basePlanId = "monthly001",
+            idempotencyKey = "google:com.appactor.pro.monthly:monthly001:$token",
+            clientDeliverySource = "purchase_flow",
+            createdAtMillis = now,
+            lastUpdatedAtMillis = now,
+        )
+    }
 
     private fun legacyDeadLetterUnderPlaceholderId(): AppActorReceiptQueueItem {
         val now = System.currentTimeMillis()

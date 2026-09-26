@@ -30,6 +30,7 @@ import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.slot
+import io.mockk.verify
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -301,6 +302,25 @@ class AppActorCustomerManagerTests {
         assertFalse(manager.isCustomerCacheFresh("missing_user"))
     }
 
+    @Test
+    fun `get customer info never writes the identity`() = runBlocking {
+        val mockClient = mockk<AppActorBackendClient>(relaxed = true)
+        coEvery { mockClient.getOfferings(any()) } returns freshOfferingsResponse(fixtureOfferings())
+        coEvery { mockClient.getCustomer(any(), any()) } returns freshCustomerResponse(
+            fixtureCustomer("fixtures/backend/customer_android_active.json")
+        )
+        val identityStore = mockIdentityStore()
+        val manager = createCustomerManager(mockClient, identityStore = identityStore)
+
+        // A fetch that outlives its session (a reset or logout while in flight) must not
+        // restore that session's user.
+        manager.getCustomerInfo("user_signed_out", forceRefresh = true)
+        manager.getCustomerInfo("user_signed_out")
+
+        verify(exactly = 0) { identityStore.setAppUserId(any()) }
+        verify(exactly = 0) { identityStore.setLastRequestId(any()) }
+    }
+
     private fun createCustomerManager(
         backendClient: AppActorBackendClient,
         storeAdapter: AppActorStoreAdapter = mockk<AppActorStoreAdapter>(relaxed = true).also { mock ->
@@ -320,27 +340,8 @@ class AppActorCustomerManagerTests {
         },
         options: AppActorConfiguration.Options = AppActorConfiguration.Options(),
         dateProviderMillis: () -> Long = { System.currentTimeMillis() },
+        identityStore: AppActorIdentityStore = mockIdentityStore(),
     ): AppActorCustomerManager {
-        val identityStore = mockk<AppActorIdentityStore>().also { store ->
-            var storedAppUserId: String? = "user_android_123"
-            var storedLastRequestId: String? = null
-
-            every { store.currentAppUserId } answers { storedAppUserId }
-            every { store.installId } returns "install_123"
-            every { store.lastRequestId } answers { storedLastRequestId }
-            every { store.installReferrer } returns null
-            every { store.ensureAppUserId() } answers {
-                storedAppUserId ?: "user_android_123".also { storedAppUserId = it }
-            }
-            every { store.setAppUserId(any()) } answers { storedAppUserId = firstArg() }
-            every { store.setLastRequestId(any()) } answers { storedLastRequestId = firstArg() }
-            every { store.setInstallReferrer(any()) } answers { }
-            every { store.clearIdentity() } answers {
-                storedAppUserId = null
-                storedLastRequestId = null
-            }
-        }
-
         val offlineProductCatalogStore = AppActorOfflineProductCatalogStore(
             AppActorETagManager(
                 diskStore = AppActorCacheDiskStore(
@@ -389,6 +390,26 @@ class AppActorCustomerManagerTests {
             storeAdapter = storeAdapter,
             dateProviderMillis = dateProviderMillis,
         )
+    }
+
+    private fun mockIdentityStore(): AppActorIdentityStore = mockk<AppActorIdentityStore>().also { store ->
+        var storedAppUserId: String? = "user_android_123"
+        var storedLastRequestId: String? = null
+
+        every { store.currentAppUserId } answers { storedAppUserId }
+        every { store.installId } returns "install_123"
+        every { store.lastRequestId } answers { storedLastRequestId }
+        every { store.installReferrer } returns null
+        every { store.ensureAppUserId() } answers {
+            storedAppUserId ?: "user_android_123".also { storedAppUserId = it }
+        }
+        every { store.setAppUserId(any()) } answers { storedAppUserId = firstArg() }
+        every { store.setLastRequestId(any()) } answers { storedLastRequestId = firstArg() }
+        every { store.setInstallReferrer(any()) } answers { }
+        every { store.clearIdentity() } answers {
+            storedAppUserId = null
+            storedLastRequestId = null
+        }
     }
 
     private fun fixtureOfferings(): AppActorOfferingsEnvelopeDTO {

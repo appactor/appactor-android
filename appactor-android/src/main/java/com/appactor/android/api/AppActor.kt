@@ -69,9 +69,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -89,8 +91,9 @@ public object AppActor {
     @Volatile
     private var preconfiguredFallbackOfferingsDTO: AppActorOfferingsEnvelopeDTO? = null
     private var callbackScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    private val emptyCustomerInfoFlow: StateFlow<AppActorCustomerInfo> =
-        MutableStateFlow(AppActorCustomerInfo.empty)
+    // One flow for the whole process, as iOS publishes customerInfo, so a collector taken before
+    // configure() or held across a reset() keeps receiving.
+    private val customerInfoStateFlow = MutableStateFlow(AppActorCustomerInfo.empty)
 
     @Volatile
     private var identityEpoch: Long = 0L
@@ -132,6 +135,7 @@ public object AppActor {
                     return snapshot.runtime.paymentProcessor.syncCurrentPurchases(
                         appUserIdOverride = snapshot.appUserId,
                         refreshEntitlementsIfMissing = false,
+                        unfinishedOnly = true,
                     )
                 }
 
@@ -152,7 +156,6 @@ public object AppActor {
                 ): Pair<AppActorCustomerInfo, AppActorDiagnosticsDataSource?> {
                     val info = snapshot.runtime.customerManager.getCustomerInfo(
                         appUserId = snapshot.appUserId,
-                        persistIdentityState = false,
                     )
                     return info to snapshot.runtime.customerManager.lastLoadSource()
                 }
@@ -283,9 +286,7 @@ public object AppActor {
     public val customerInfo: AppActorCustomerInfo
         get() = currentRuntimeSnapshot()?.lastCustomerInfo ?: AppActorCustomerInfo.empty
 
-    public val customerInfoFlow: StateFlow<AppActorCustomerInfo>
-        get() = currentRuntimeSnapshot()?.customerInfoStateFlow
-            ?: emptyCustomerInfoFlow
+    public val customerInfoFlow: StateFlow<AppActorCustomerInfo> = customerInfoStateFlow.asStateFlow()
 
     public val cachedOfferings: AppActorOfferings?
         get() = currentRuntimeSnapshot()?.offeringsManager?.cached()
@@ -448,6 +449,7 @@ public object AppActor {
                     ?.unregisterActivityLifecycleCallbacks(callbacks)
             }
             runtime = null
+            customerInfoStateFlow.value = AppActorCustomerInfo.empty
             currentRuntime
         } ?: return
 
@@ -455,8 +457,7 @@ public object AppActor {
             val currentAppUserId = currentRuntime.identityStore.currentAppUserId
             currentRuntime.paymentProcessor.onDeferredPurchaseResolved = null
             currentRuntime.scope.cancel()
-            callbackScope.cancel()
-            callbackScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+            replaceCallbackScope()
             currentRuntime.storeAdapter.shutdown()
             currentRuntime.scope.coroutineContext[Job]?.join()
             currentRuntime.remoteConfigManager.clearCache(currentAppUserId)
@@ -479,6 +480,18 @@ public object AppActor {
                     isResetting = false
                 }
             }
+        }
+    }
+
+    // Drops the old session's in-flight callback-API operations, except the caller:
+    // AppActorBridge.reset() runs in this scope, and cancelling it would abandon the wipe that
+    // follows and its completion callback.
+    private suspend fun replaceCallbackScope() {
+        val caller = currentCoroutineContext()[Job]
+        val oldScopeJob = callbackScope.coroutineContext[Job]
+        callbackScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        oldScopeJob?.children?.forEach { operation ->
+            if (operation !== caller) operation.cancel()
         }
     }
 
@@ -685,7 +698,6 @@ public object AppActor {
                 snapshot.runtime.customerManager.getCustomerInfo(
                     appUserId = snapshot.appUserId,
                     forceRefresh = forceRefresh,
-                    persistIdentityState = false,
                 ) to snapshot.runtime.customerManager.lastLoadSource()
             } catch (throwable: Throwable) {
                 throwIfCancellation(throwable)
@@ -778,7 +790,7 @@ public object AppActor {
      * A `null` value unsets that custom attribute.
      */
     public suspend fun setAttributes(attributes: Map<String, AppActorAttributeValue?>) {
-        executeGuardedRead(resolveAppUserId = true) { snapshot ->
+        executeWrite { snapshot ->
             snapshot.runtime.attributesManager.setAttributes(
                 appUserId = snapshot.appUserId,
                 attributes = attributes,
@@ -790,7 +802,7 @@ public object AppActor {
         key: String,
         value: AppActorAttributeValue,
     ) {
-        executeGuardedRead(resolveAppUserId = true) { snapshot ->
+        executeWrite { snapshot ->
             snapshot.runtime.attributesManager.setAttribute(
                 appUserId = snapshot.appUserId,
                 key = key,
@@ -800,7 +812,7 @@ public object AppActor {
     }
 
     public suspend fun unsetAttribute(key: String) {
-        executeGuardedRead(resolveAppUserId = true) { snapshot ->
+        executeWrite { snapshot ->
             snapshot.runtime.attributesManager.unsetAttribute(
                 appUserId = snapshot.appUserId,
                 key = key,
@@ -831,7 +843,7 @@ public object AppActor {
      * automatically during configure.
      */
     public suspend fun collectDeviceIdentifiers() {
-        executeGuardedRead(resolveAppUserId = true) { snapshot ->
+        executeWrite { snapshot ->
             snapshot.runtime.attributesManager.collectDeviceIdentifiers(snapshot.appUserId)
         }
     }
@@ -843,7 +855,7 @@ public object AppActor {
         type: String,
         value: String?,
     ) {
-        executeGuardedRead(resolveAppUserId = true) { snapshot ->
+        executeWrite { snapshot ->
             snapshot.runtime.attributesManager.setIntegrationIdentifier(
                 appUserId = snapshot.appUserId,
                 type = type,
@@ -853,7 +865,7 @@ public object AppActor {
     }
 
     public suspend fun unsetIntegrationIdentifier(type: String) {
-        executeGuardedRead(resolveAppUserId = true) { snapshot ->
+        executeWrite { snapshot ->
             snapshot.runtime.attributesManager.unsetIntegrationIdentifier(
                 appUserId = snapshot.appUserId,
                 type = type,
@@ -900,7 +912,7 @@ public object AppActor {
      * Sends acquisition attribution on the attribution endpoint.
      */
     public suspend fun updateAttribution(attribution: AppActorAttribution) {
-        executeGuardedRead(resolveAppUserId = true) { snapshot ->
+        executeWrite { snapshot ->
             snapshot.runtime.attributesManager.updateAttribution(
                 appUserId = snapshot.appUserId,
                 attribution = attribution,
@@ -956,7 +968,7 @@ public object AppActor {
         attribution: AppActorAttribution,
         clearFields: Set<AppActorCustomAttributionField> = emptySet(),
     ) {
-        executeGuardedRead(resolveAppUserId = true) { snapshot ->
+        executeWrite { snapshot ->
             snapshot.runtime.attributesManager.updateCustomAttribution(
                 appUserId = snapshot.appUserId,
                 patch = attribution,
@@ -1121,10 +1133,9 @@ public object AppActor {
 
     public suspend fun drainReceiptQueueAndRefreshCustomer(): AppActorCustomerInfo {
         return executeGuardedRead(resolveAppUserId = true) { snapshot ->
-            val drained = snapshot.runtime.paymentProcessor.drainAll()
+            snapshot.runtime.paymentProcessor.drainAll()
             val info = snapshot.runtime.customerManager.getCustomerInfo(
-                appUserId = resolveFollowUpAppUserId(snapshot, drained),
-                persistIdentityState = false,
+                appUserId = resolveFollowUpAppUserId(snapshot),
             )
             if (persistCustomerInfoIfCurrent(snapshot, info)) {
                 publishCustomerInfoIfCurrent(
@@ -1139,12 +1150,11 @@ public object AppActor {
 
     public suspend fun syncPurchases(): AppActorCustomerInfo {
         return executeGuardedRead(resolveAppUserId = true) { snapshot ->
-            val synced = snapshot.runtime.paymentProcessor.syncCurrentPurchases(
+            snapshot.runtime.paymentProcessor.syncCurrentPurchases(
                 appUserIdOverride = snapshot.appUserId,
             )
             val info = snapshot.runtime.customerManager.getCustomerInfo(
-                appUserId = resolveFollowUpAppUserId(snapshot, synced),
-                persistIdentityState = false,
+                appUserId = resolveFollowUpAppUserId(snapshot),
             )
             if (persistCustomerInfoIfCurrent(snapshot, info)) {
                 publishCustomerInfoIfCurrent(
@@ -1178,6 +1188,7 @@ public object AppActor {
             onPipelineEvent = { event -> publishReceiptPipelineEvent(runtimeSessionId, event) },
         )
         runtime = newRuntime
+        customerInfoStateFlow.value = newRuntime.lastCustomerInfo
         preconfiguredFallbackOfferingsDTO?.let { dto ->
             newRuntime.offeringsManager.setFallbackOfferings(dto)
             preconfiguredFallbackOfferingsDTO = null
@@ -1224,7 +1235,7 @@ public object AppActor {
         key: String,
         value: String?,
     ) {
-        executeGuardedRead(resolveAppUserId = true) { snapshot ->
+        executeWrite { snapshot ->
             snapshot.runtime.attributesManager.setReservedString(
                 appUserId = snapshot.appUserId,
                 key = key,
@@ -1243,7 +1254,6 @@ public object AppActor {
             }
             val info = snapshot.runtime.customerManager.getCustomerInfo(
                 appUserId = snapshot.appUserId,
-                persistIdentityState = false,
             )
             if (persistCustomerInfoIfCurrent(snapshot, info)) {
                 publishCustomerInfoIfCurrent(
@@ -1300,15 +1310,10 @@ public object AppActor {
         }
     }
 
-    private fun resolveFollowUpAppUserId(
-        snapshot: AppActorOperationSnapshot,
-        latestCustomerInfo: AppActorCustomerInfo? = null,
-    ): String {
-        return latestCustomerInfo?.appUserId
-            ?.takeIf { it.isNotBlank() }
-            ?: snapshot.runtime.identityStore.currentAppUserId
-            ?: snapshot.appUserId
-    }
+    // The sync may have adopted a canonical id. A drain's customer info is no guide: it can
+    // belong to another user whose queued purchase the drain finished.
+    private fun resolveFollowUpAppUserId(snapshot: AppActorOperationSnapshot): String =
+        snapshot.runtime.identityStore.currentAppUserId ?: snapshot.appUserId
 
     private fun publishCustomerInfoLocked(
         currentRuntime: AppActorRuntimeState,
@@ -1325,7 +1330,7 @@ public object AppActor {
                 lastCustomerInfoSource = source ?: latestRuntime.lastCustomerInfoSource,
             )
             runtime = updatedRuntime
-            (latestRuntime.customerInfoStateFlow as? MutableStateFlow)?.value = info
+            customerInfoStateFlow.value = info
             updatedRuntime.onCustomerInfoChanged
         }
     }
@@ -1422,6 +1427,11 @@ public object AppActor {
         }
     }
 
+    // A write goes to the user who was current when it was called. Unlike a read it is never
+    // re-run after an identity change, which would copy that user's data onto the next one.
+    private suspend fun <T> executeWrite(operation: suspend (AppActorOperationSnapshot) -> T): T =
+        operation(captureOperationSnapshot(resolveAppUserId = true))
+
     private suspend fun isSnapshotCurrent(snapshot: AppActorOperationSnapshot): Boolean {
         return transitionMutex.withLock {
             val currentRuntime = runtime ?: return@withLock false
@@ -1434,24 +1444,36 @@ public object AppActor {
         info: AppActorCustomerInfo,
     ): Boolean {
         return transitionMutex.withLock {
-            val currentRuntime = runtime ?: return@withLock false
-            if (currentRuntime.sessionId != snapshot.runtime.sessionId || identityEpoch != snapshot.epoch) {
-                return@withLock false
-            }
+            val currentRuntime = runtimeIfCurrentLocked(snapshot, info) ?: return@withLock false
             persistCustomerInfoLocked(currentRuntime, info)
             true
         }
     }
 
+    // Customer info never moves the identity: logIn, identify and canonical-id adoption set it
+    // before their info arrives here.
     private fun persistCustomerInfoLocked(
         currentRuntime: AppActorRuntimeState,
         info: AppActorCustomerInfo,
     ) {
-        val resolvedAppUserId = info.appUserId?.takeIf { it.isNotBlank() }
-        if (resolvedAppUserId != null) {
-            currentRuntime.identityStore.setAppUserId(resolvedAppUserId)
-        }
         currentRuntime.identityStore.setLastRequestId(info.requestId)
+    }
+
+    private fun runtimeIfCurrentLocked(
+        snapshot: AppActorOperationSnapshot,
+        info: AppActorCustomerInfo,
+    ): AppActorRuntimeState? {
+        val currentRuntime = runtime ?: return null
+        if (currentRuntime.sessionId != snapshot.runtime.sessionId || identityEpoch != snapshot.epoch) {
+            return null
+        }
+        // A drain or sync also finishes purchases other users left queued; their customer info
+        // must not reach this user's session.
+        val infoAppUserId = info.appUserId?.takeIf { it.isNotBlank() }
+        if (infoAppUserId != null && infoAppUserId != currentRuntime.identityStore.currentAppUserId) {
+            return null
+        }
+        return currentRuntime
     }
 
     private suspend fun publishCustomerInfoIfCurrent(
@@ -1461,10 +1483,7 @@ public object AppActor {
         guard: (AppActorRuntimeState) -> Boolean = { true },
     ): Boolean {
         val callback = transitionMutex.withLock {
-            val currentRuntime = runtime ?: return@withLock null
-            if (currentRuntime.sessionId != snapshot.runtime.sessionId || identityEpoch != snapshot.epoch) {
-                return@withLock null
-            }
+            val currentRuntime = runtimeIfCurrentLocked(snapshot, info) ?: return@withLock null
             if (!guard(currentRuntime)) {
                 return@withLock null
             }

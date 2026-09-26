@@ -71,26 +71,22 @@ internal class AppActorReceiptQueueDrainer(
         val productEntitlements = ensureProductEntitlements()
         var latestCustomer: AppActorCustomerInfo? = null
         claimed.forEach { item ->
-            when (val outcome = processClaimedItem(item, productEntitlements)) {
-                is ProcessingOutcome.Success -> {
-                    latestCustomer = outcome.customerInfo
-                    resolveDeferredPurchaseCallbackIfNeeded(
-                        item.purchaseToken,
-                        outcome.customerInfo,
-                        identityStore.currentAppUserId == item.appUserId,
-                    )
-                }
-                is ProcessingOutcome.AlreadyPosted -> {
-                    latestCustomer = outcome.customerInfo
-                    resolveDeferredPurchaseCallbackIfNeeded(
-                        item.purchaseToken,
-                        outcome.customerInfo,
-                        identityStore.currentAppUserId == item.appUserId,
-                    )
-                }
+            val customerInfo = when (val outcome = processClaimedItem(item, productEntitlements)) {
+                is ProcessingOutcome.Success -> outcome.customerInfo
+                is ProcessingOutcome.AlreadyPosted -> outcome.customerInfo
                 is ProcessingOutcome.Queued,
-                is ProcessingOutcome.PermanentFailure -> Unit
+                is ProcessingOutcome.PermanentFailure -> return@forEach
             }
+            // The queue also holds purchases other users left behind (a logout or an account
+            // switch); only the current user's customer info goes back to the caller.
+            if (customerInfo.appUserId == identityStore.currentAppUserId) {
+                latestCustomer = customerInfo
+            }
+            resolveDeferredPurchaseCallbackIfNeeded(
+                item.purchaseToken,
+                customerInfo,
+                identityStore.currentAppUserId == item.appUserId,
+            )
         }
         return latestCustomer
     }
@@ -123,7 +119,7 @@ internal class AppActorReceiptQueueDrainer(
         val now = dateProviderMillis()
         val adoptClientContext = shouldAdoptDeadLetterClientPurchaseContext(existing, incoming)
         val baseline = existing.copy(
-            appUserId = incoming.appUserId,
+            appUserId = if (existing.hasPurchaseBinding) existing.appUserId else incoming.appUserId,
             environment = incoming.environment,
             purchaseState = incoming.purchaseState,
             orderId = incoming.orderId ?: existing.orderId,
@@ -353,7 +349,6 @@ internal class AppActorReceiptQueueDrainer(
             customerManager.getCustomerInfo(
                 item.appUserId,
                 forceRefresh = true,
-                persistIdentityState = false,
             )
         }.getOrNull()
             ?: customerManager.cachedInfo(item.appUserId)

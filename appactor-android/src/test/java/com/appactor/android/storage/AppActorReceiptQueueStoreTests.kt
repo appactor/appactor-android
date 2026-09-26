@@ -369,6 +369,28 @@ class AppActorReceiptQueueStoreTests {
         assertNull(stored?.sdkVersion)
     }
 
+    @Test
+    fun `upsert keeps a purchase flow receipt with the user who bought it`() {
+        val store = AppActorAtomicJsonReceiptQueueStore(context, tempDirectory("queue-purchase-binding"))
+        val bought = queueItem().copy(appUserId = "user_a", clientDeliverySource = "purchase_flow")
+        store.upsert(bought)
+
+        store.upsert(queueItem().copy(appUserId = "user_b", clientDeliverySource = "foreground_sync"))
+
+        assertEquals("user_a", store.get(bought.key)?.appUserId)
+    }
+
+    @Test
+    fun `upsert moves a receipt no purchase flow captured to the newer user`() {
+        val store = AppActorAtomicJsonReceiptQueueStore(context, tempDirectory("queue-unbound-owner"))
+        val seen = queueItem().copy(appUserId = "appactor-anon-old", clientDeliverySource = "transaction_updates")
+        store.upsert(seen)
+
+        store.upsert(queueItem().copy(appUserId = "user_b", clientDeliverySource = "foreground_sync"))
+
+        assertEquals("user_b", store.get(seen.key)?.appUserId)
+    }
+
     private fun queueItem(
         createdAtMillis: Long = System.currentTimeMillis(),
         phase: AppActorReceiptQueuePhase = AppActorReceiptQueuePhase.NeedsPost,

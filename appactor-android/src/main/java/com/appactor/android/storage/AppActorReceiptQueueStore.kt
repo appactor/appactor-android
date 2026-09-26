@@ -67,6 +67,17 @@ internal data class AppActorReceiptQueueItem(
     val deadLetterRetentionStartMillis: Long
         get() = deadLetteredAtMillis ?: lastUpdatedAtMillis
 
+    /**
+     * Queued by a purchase flow, so it belongs to the user who bought it. A later sighting of the
+     * same purchase in another user's session (after a logout or an account switch) must not
+     * take it over, as on iOS.
+     */
+    val hasPurchaseBinding: Boolean
+        get() = (clientPurchaseAttemptStartedAt != null && !clientPurchaseAttemptId.isNullOrBlank()) ||
+            clientDeliverySource == "purchase_flow" ||
+            offeringId != null ||
+            packageId != null
+
     companion object {
         fun makeKey(
             purchaseToken: String,
@@ -191,16 +202,17 @@ internal class AppActorAtomicJsonReceiptQueueStore(
                 item
             } else {
                 val adoptClientContext = shouldAdoptClientPurchaseContext(existing, item)
+                val appUserId = if (
+                    existing.phase != AppActorReceiptQueuePhase.Posting &&
+                    existing.phase != AppActorReceiptQueuePhase.NeedsFinish &&
+                    !existing.hasPurchaseBinding
+                ) {
+                    item.appUserId
+                } else {
+                    existing.appUserId
+                }
                 item.copy(
-                    appUserId = if (
-                        existing.appUserId != item.appUserId &&
-                        existing.phase != AppActorReceiptQueuePhase.Posting &&
-                        existing.phase != AppActorReceiptQueuePhase.NeedsFinish
-                    ) {
-                        item.appUserId
-                    } else {
-                        existing.appUserId
-                    },
+                    appUserId = appUserId,
                     productType = if (item.productType != RECOVERABLE_PRODUCT_TYPE) item.productType else existing.productType,
                     orderId = item.orderId ?: existing.orderId,
                     basePlanId = item.basePlanId ?: existing.basePlanId,
@@ -234,7 +246,7 @@ internal class AppActorAtomicJsonReceiptQueueStore(
                     retryCount = existing.retryCount,
                     nextRetryAtMillis = existing.nextRetryAtMillis,
                     createdAtMillis = existing.createdAtMillis,
-                    claimedAtMillis = if (existing.appUserId != item.appUserId) null else existing.claimedAtMillis,
+                    claimedAtMillis = if (appUserId != existing.appUserId) null else existing.claimedAtMillis,
                     phase = existing.phase,
                     lastError = existing.lastError,
                 )

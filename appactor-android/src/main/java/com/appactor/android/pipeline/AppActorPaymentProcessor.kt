@@ -520,12 +520,14 @@ internal class AppActorPaymentProcessor(
         limit: Int = 20,
         appUserIdOverride: String? = null,
         refreshEntitlementsIfMissing: Boolean = true,
+        unfinishedOnly: Boolean = false,
     ): AppActorCustomerInfo? {
         val result = pipelineMutex.withLock {
             restoreSyncCoordinator.syncCurrentPurchasesAssumingLocked(
                 limit = limit,
                 appUserIdOverride = appUserIdOverride,
                 refreshEntitlementsIfMissing = refreshEntitlementsIfMissing,
+                unfinishedOnly = unfinishedOnly,
             )
         }
         retryWakeScheduler.scheduleNextRetryWake(limit)

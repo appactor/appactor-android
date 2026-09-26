@@ -120,6 +120,7 @@ internal class AppActorRestoreSyncCoordinator(
         excludedPurchaseTokens: Set<String> = emptySet(),
         refreshEntitlementsIfMissing: Boolean = true,
         metadata: CurrentPurchasesSyncMetadata = CurrentPurchasesSyncMetadata.foregroundSync(),
+        unfinishedOnly: Boolean = false,
     ): AppActorCustomerInfo? {
         val appUserId = appUserIdOverride
             ?.takeIf { it.isNotBlank() }
@@ -127,45 +128,56 @@ internal class AppActorRestoreSyncCoordinator(
             ?: identityStore.ensureAppUserId()
         val productEntitlements = ensureProductEntitlements(refreshEntitlementsIfMissing)
         var latestCustomer: AppActorCustomerInfo? = null
+        // A queued purchase keeps the user who bought it, so its outcome can carry another
+        // user's customer info; only the current user's goes back to the caller.
+        fun report(customerInfo: AppActorCustomerInfo?) {
+            if (customerInfo != null && customerInfo.appUserId == identityStore.currentAppUserId) {
+                latestCustomer = customerInfo
+            }
+        }
         val syncCandidates = mutableListOf<AppActorStorePurchase>()
 
         val allProcessedPurchases = mutableListOf<AppActorStorePurchase>()
 
+        // The launch sweep takes only purchases nothing has handled yet, as iOS sweeps only
+        // unfinished transactions. Posting a finished purchase for a fresh anonymous user (after
+        // a logout, a reset or a reinstall) has the backend merge that user into the buyer and
+        // undo the logout. A queued purchase is posted by the drain below, for its buyer.
+        val skippedPurchaseTokens = if (unfinishedOnly) {
+            excludedPurchaseTokens + queueStore.snapshot()
+                .filter { it.phase != AppActorReceiptQueuePhase.DeadLettered }
+                .map { it.purchaseToken }
+        } else {
+            excludedPurchaseTokens
+        }
+
         storeAdapter.queryActivePurchases().forEach { purchase ->
-            val normalized = normalizePurchaseForPosting(purchase)
-            if (excludedPurchaseTokens.contains(normalized.purchaseToken)) {
+            if (purchase.purchaseToken in skippedPurchaseTokens || (unfinishedOnly && purchase.isAcknowledged)) {
                 return@forEach
             }
+            val normalized = normalizePurchaseForPosting(purchase)
             allProcessedPurchases += normalized
             val pendingUpdateContext = consumePendingPurchaseUpdateContext(normalized)
             if (pendingUpdateContext != null) {
                 val pendingAppUserId = pendingUpdateContext.appUserId?.takeIf { it.isNotBlank() } ?: appUserId
-                when (val outcome = enqueueAndProcess(
+                val customerInfo = when (val outcome = enqueueAndProcess(
                     normalized,
                     productEntitlements,
                     pendingAppUserId,
                     pendingUpdateContext.sourceIntent,
                     pendingUpdateContext.clientPurchaseContext,
                 )) {
-                    is ProcessingOutcome.Success -> {
-                        latestCustomer = outcome.customerInfo
-                        fireDeferredPurchaseCallbackIfNeeded(
-                            normalized,
-                            outcome.customerInfo,
-                            identityStore.currentAppUserId == pendingAppUserId,
-                        )
-                    }
-                    is ProcessingOutcome.AlreadyPosted -> {
-                        latestCustomer = outcome.customerInfo
-                        fireDeferredPurchaseCallbackIfNeeded(
-                            normalized,
-                            outcome.customerInfo,
-                            identityStore.currentAppUserId == pendingAppUserId,
-                        )
-                    }
+                    is ProcessingOutcome.Success -> outcome.customerInfo
+                    is ProcessingOutcome.AlreadyPosted -> outcome.customerInfo
                     is ProcessingOutcome.Queued,
-                    is ProcessingOutcome.PermanentFailure -> Unit
+                    is ProcessingOutcome.PermanentFailure -> return@forEach
                 }
+                report(customerInfo)
+                fireDeferredPurchaseCallbackIfNeeded(
+                    normalized,
+                    customerInfo,
+                    identityStore.currentAppUserId == pendingAppUserId,
+                )
                 return@forEach
             }
             if (normalized.productType == AppActorProductType.Unknown) {
@@ -176,8 +188,8 @@ internal class AppActorRestoreSyncCoordinator(
                     metadata.sourceIntent,
                     metadata.clientPurchaseContext(dateProviderMillis()),
                 )) {
-                    is ProcessingOutcome.Success -> latestCustomer = outcome.customerInfo
-                    is ProcessingOutcome.AlreadyPosted -> latestCustomer = outcome.customerInfo
+                    is ProcessingOutcome.Success -> report(outcome.customerInfo)
+                    is ProcessingOutcome.AlreadyPosted -> report(outcome.customerInfo)
                     is ProcessingOutcome.Queued,
                     is ProcessingOutcome.PermanentFailure -> Unit
                 }
@@ -240,7 +252,7 @@ internal class AppActorRestoreSyncCoordinator(
                     metadata.sourceIntent,
                     syncContext,
                 )
-                latestCustomer = customerManager.cachedInfo(resolvedAppUserId)
+                report(customerManager.cachedInfo(resolvedAppUserId))
             } catch (throwable: Throwable) {
                 if (throwable is CancellationException) throw throwable
                 syncCandidates.forEach { purchase ->
@@ -253,8 +265,8 @@ internal class AppActorRestoreSyncCoordinator(
                             metadata.clientPurchaseContext(dateProviderMillis()),
                         )
                     ) {
-                        is ProcessingOutcome.Success -> latestCustomer = outcome.customerInfo
-                        is ProcessingOutcome.AlreadyPosted -> latestCustomer = outcome.customerInfo
+                        is ProcessingOutcome.Success -> report(outcome.customerInfo)
+                        is ProcessingOutcome.AlreadyPosted -> report(outcome.customerInfo)
                         is ProcessingOutcome.Queued,
                         is ProcessingOutcome.PermanentFailure -> Unit
                     }
@@ -262,10 +274,7 @@ internal class AppActorRestoreSyncCoordinator(
             }
         }
 
-        val drained = receiptQueueDrainer.drainAllAssumingLocked(limit)
-        if (drained != null) {
-            latestCustomer = drained
-        }
+        report(receiptQueueDrainer.drainAllAssumingLocked(limit))
 
         // Fire deferred purchase callbacks for any pending purchases that were resolved during sync
         if (latestCustomer != null && pendingPurchaseRegistry.hasPendingTokens()) {
@@ -315,7 +324,6 @@ internal class AppActorRestoreSyncCoordinator(
             return customerManager.getCustomerInfo(
                 currentAppUserId,
                 forceRefresh = true,
-                persistIdentityState = false,
             )
         }
 
@@ -406,7 +414,6 @@ internal class AppActorRestoreSyncCoordinator(
                     syncCustomer ?: customerManager.getCustomerInfo(
                         currentAppUserId,
                         forceRefresh = true,
-                        persistIdentityState = false,
                     )
                 }
                 val remainingHistoryRestore = restoreBatches
@@ -442,7 +449,6 @@ internal class AppActorRestoreSyncCoordinator(
             ?: customerManager.getCustomerInfo(
                 currentAppUserId,
                 forceRefresh = true,
-                persistIdentityState = false,
             )
     }
 
@@ -602,7 +608,10 @@ internal class AppActorRestoreSyncCoordinator(
         val finalAppUserId = resolvedAppUserId?.takeIf { it.isNotBlank() } ?: requestedAppUserId
         if (finalAppUserId != requestedAppUserId) {
             customerManager.clearCache(requestedAppUserId)
-            identityStore.setAppUserId(finalAppUserId)
+            // A reset or logout while the request was in flight must not be undone by its answer.
+            if (identityStore.currentAppUserId == requestedAppUserId) {
+                identityStore.setAppUserId(finalAppUserId)
+            }
         }
         return finalAppUserId
     }
