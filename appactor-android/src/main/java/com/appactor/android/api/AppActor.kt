@@ -444,8 +444,14 @@ public object AppActor {
         var earlierWipe: CompletableDeferred<Unit>? = null
         val currentRuntime = transitionMutex.withLock {
             bumpIdentityEpochLocked()
-            val currentRuntime = runtime ?: run {
+            // Under the lock the callback setters take too, so none can write the runtime back.
+            val currentRuntime = synchronized(this@AppActor) {
                 preconfiguredFallbackOfferingsDTO = null
+                runtime?.also {
+                    runtime = null
+                    customerInfoStateFlow.value = AppActorCustomerInfo.empty
+                }
+            } ?: run {
                 earlierWipe = resetWipe
                 return@withLock null
             }
@@ -454,8 +460,6 @@ public object AppActor {
                 (currentRuntime.configuration.applicationContext as? Application)
                     ?.unregisterActivityLifecycleCallbacks(callbacks)
             }
-            runtime = null
-            customerInfoStateFlow.value = AppActorCustomerInfo.empty
             currentRuntime
         }
         if (currentRuntime == null) {
@@ -479,14 +483,15 @@ public object AppActor {
             currentRuntime.identityStore.clearIdentity()
             currentRuntime.eTagManager.clearAll()
             installReferrerEnabled.set(false)
-            synchronized(this@AppActor) {
-                preconfiguredFallbackOfferingsDTO = null
-            }
             AppActorAtomicJsonReceiptQueueStore.deletePersistedFile(currentRuntime.configuration.applicationContext)
             AppActorAtomicJsonPostedLedgerStore.deletePersistedFile(currentRuntime.configuration.applicationContext)
             currentRuntime.configuration.applicationContext
                 .getSharedPreferences("com.appactor.android.pending_purchases", android.content.Context.MODE_PRIVATE)
                 .edit().clear().apply()
+        } catch (throwable: Throwable) {
+            // A reset waiting on this one must not report a wipe that did not happen.
+            wipe.completeExceptionally(throwable)
+            throw throwable
         } finally {
             transitionMutex.withLock {
                 resetWipe = null

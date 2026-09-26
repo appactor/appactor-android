@@ -366,9 +366,9 @@ internal class AppActorPaymentProcessor(
                     is ProcessingOutcome.Queued,
                     is ProcessingOutcome.PermanentFailure -> return@forEach
                 }
-                // A purchase already queued by the purchase flow is posted for its buyer, who may
-                // not be this receipt's user.
-                if (customerInfo.appUserId == receiptAppUserId) {
+                // A pending purchase is posted for the user who started it, and one already queued
+                // by the purchase flow for its buyer; only the current user's info is reported.
+                if (customerInfo.appUserId == identityStore.currentAppUserId) {
                     latestCustomer = customerInfo
                 }
                 fireDeferredPurchaseCallbackIfNeeded(
@@ -382,7 +382,7 @@ internal class AppActorPaymentProcessor(
         retryWakeScheduler.scheduleNextRetryWake()
         return AppActorPurchaseUpdateProcessingResult(
             customerInfo = result,
-            appUserId = processedAppUserId ?: return null,
+            appUserId = result?.appUserId ?: processedAppUserId ?: return null,
         )
     }
 

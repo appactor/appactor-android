@@ -352,12 +352,18 @@ internal class AppActorReceiptQueueDrainer(
             )
         }
 
-        val authoritative = runCatching {
-            customerManager.getCustomerInfo(
-                item.appUserId,
-                forceRefresh = true,
-            )
-        }.getOrNull()
+        // Another user's info is never reported, so it is not worth a fetch.
+        val fetched = if (item.appUserId == identityStore.currentAppUserId) {
+            runCatching {
+                customerManager.getCustomerInfo(
+                    item.appUserId,
+                    forceRefresh = true,
+                )
+            }.getOrNull()
+        } else {
+            null
+        }
+        val authoritative = fetched
             ?: customerManager.cachedInfo(item.appUserId)
             ?: offlineCustomerInfoBuilder.buildOfflineCustomerInfo(
                 purchase = item.toStorePurchase(),
