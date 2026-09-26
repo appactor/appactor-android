@@ -303,7 +303,8 @@ internal class AppActorCustomerManager(
     private fun shouldFallbackToCache(throwable: Throwable): Boolean {
         return when (throwable) {
             is AppActorBackendException.Network -> true
-            is AppActorBackendException.Http -> throwable.statusCode >= 500
+            // 429 too, as on iOS: a rate-limited user keeps the cached customer.
+            is AppActorBackendException.Http -> throwable.statusCode >= 500 || throwable.statusCode == 429
             is IOException -> true
             is IllegalStateException -> true
             else -> false

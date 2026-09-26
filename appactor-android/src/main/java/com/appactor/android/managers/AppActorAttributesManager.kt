@@ -233,11 +233,6 @@ internal class AppActorAttributesManager(
         put(key, AppActorAttributeValue.string(normalized))
     }
 
-    private fun normalizeAlpha2Country(raw: String?): String? {
-        val normalized = raw?.trim()?.uppercase(Locale.US).orEmpty()
-        return normalized.takeIf { ALPHA_2_COUNTRY.matches(it) }
-    }
-
     suspend fun updateAttribution(
         appUserId: String,
         attribution: AppActorAttribution,
@@ -669,8 +664,18 @@ internal class AppActorAttributesManager(
         private const val MAX_BUNDLE_ID_LENGTH = 255
         private const val MAX_LOCALE_LENGTH = 32
         private const val MAX_TIMEZONE_LENGTH = 80
-        private val ALPHA_2_COUNTRY = Regex("^[A-Z]{2}$")
     }
+}
+
+private val ALPHA_2_COUNTRY = Regex("^[A-Z]{2}$")
+
+/**
+ * The ISO 3166-1 alpha-2 code in [raw], or null. Locale can report a UN M.49 region such as
+ * "419", which the backend rejects.
+ */
+internal fun normalizeAlpha2Country(raw: String?): String? {
+    val normalized = raw?.trim()?.uppercase(Locale.US).orEmpty()
+    return normalized.takeIf { ALPHA_2_COUNTRY.matches(it) }
 }
 
 internal enum class AppActorCustomAttributionField {

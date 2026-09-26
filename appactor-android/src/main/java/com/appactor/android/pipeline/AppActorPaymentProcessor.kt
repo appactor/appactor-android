@@ -165,7 +165,6 @@ internal class AppActorPaymentProcessor(
         queueStore = queueStore,
         customerManager = customerManager,
         identityStore = identityStore,
-        pendingPurchaseRegistry = pendingPurchaseRegistry,
         receiptQueueDrainer = receiptQueueDrainer,
         dateProviderMillis = dateProviderMillis,
         ensureProductEntitlements = { refreshIfMissing ->

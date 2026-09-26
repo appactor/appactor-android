@@ -61,6 +61,30 @@ class AppActorOfflineEntitlementManagerTests {
     }
 
     @Test
+    fun `offline manager grants nothing for a pending play purchase`() = runBlocking {
+        val purchased = AppActorStorePurchase(
+            productId = "com.appactor.pro.monthly",
+            productType = AppActorProductType.Subscription,
+            purchaseToken = "token_123",
+            orderId = "GPA.1234",
+            purchaseTimeMillis = 1_710_000_000_000,
+            purchaseState = com.appactor.android.billing.AppActorStorePurchaseState.Purchased,
+            basePlanId = "monthly001",
+        )
+        val pending = purchased.copy(
+            purchaseState = com.appactor.android.billing.AppActorStorePurchaseState.Pending,
+        )
+        val manager = AppActorOfflineEntitlementManager(
+            customerCacheStore = createCustomerCacheStore(),
+            offlineProductCatalogStore = createOfflineProductCatalogStore(),
+            offeringsManager = createOfferingsManager(storeAdapter = createMockStoreAdapter(activePurchases = listOf(purchased))),
+            storeAdapter = createMockStoreAdapter(activePurchases = listOf(pending)),
+        )
+
+        assertTrue(manager.activeEntitlementKeysOffline("user_android_123").isEmpty())
+    }
+
+    @Test
     fun `offline manager falls back to fresh cached customer when no active purchases exist`() = runBlocking {
         val now = System.currentTimeMillis()
         val offeringsManager = createOfferingsManager()

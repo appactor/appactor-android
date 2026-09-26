@@ -25,6 +25,7 @@ import com.appactor.android.internal.runtime.AppActorStartupCoordinatorHost
 import com.appactor.android.internal.logging.AppActorLogger
 import com.appactor.android.managers.AppActorCustomerManager
 import com.appactor.android.managers.AppActorCustomAttributionField
+import com.appactor.android.managers.normalizeAlpha2Country
 import com.appactor.android.models.AppActorAttributeReservedKeys
 import com.appactor.android.models.AppActorAttributeValue
 import com.appactor.android.models.AppActorAttributesValidation
@@ -708,10 +709,10 @@ public object AppActor {
                 throwIfCancellation(throwable)
                 val error = throwable.toPublicAppActorError("Failed to fetch customer info.")
                 if (!error.isTransient) throw error
-                // Defensive: reset freshness so staleness timer retries immediately
-                // if a concurrent path populated the cache during this fetch.
-                snapshot.runtime.customerManager.resetFreshness(snapshot.appUserId)
                 val offlineKeys = snapshot.runtime.customerManager.activeEntitlementKeysOffline(snapshot.appUserId)
+                // Only now, since the offline keys read the cache while it is fresh: reset its
+                // freshness so the staleness timer retries at once.
+                snapshot.runtime.customerManager.resetFreshness(snapshot.appUserId)
                 if (offlineKeys.isEmpty()) throw error
                 val baseCustomer = snapshot.runtime.lastCustomerInfo
                 buildOfflineCustomerInfo(
@@ -1742,12 +1743,9 @@ private fun currentAppVersion(context: Context): String? {
     }.getOrNull()
 }
 
+// Experiments answer 400 to anything but an alpha-2 code, so a region like "419" is left out.
 private fun currentCountryCode(): String? {
-    return runCatching {
-        android.os.Build.VERSION.SDK_INT.let {
-            java.util.Locale.getDefault().country.takeIf(String::isNotBlank)
-        }
-    }.getOrNull()
+    return runCatching { normalizeAlpha2Country(java.util.Locale.getDefault().country) }.getOrNull()
 }
 
 private fun Throwable.toPublicAppActorError(

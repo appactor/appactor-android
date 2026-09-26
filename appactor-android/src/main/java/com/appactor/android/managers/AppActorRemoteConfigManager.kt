@@ -46,7 +46,7 @@ internal class AppActorRemoteConfigManager(
         val appVersion = normalizeOptional(appVersionProvider())
         val country = normalizeOptional(countryProvider())?.uppercase(Locale.US)
         val userContext = RemoteConfigContext(
-            appUserId = normalizeOptional(appUserId),
+            appUserId = contextAppUserId(appUserId),
             appVersion = appVersion,
             country = country,
         )
@@ -94,7 +94,7 @@ internal class AppActorRemoteConfigManager(
     fun lastLoadSource(): AppActorDiagnosticsDataSource? = lastLoadSource
 
     fun clearCache(appUserId: String? = null) {
-        val normalized = normalizeOptional(appUserId)
+        val normalized = contextAppUserId(appUserId)
         val appUserIdsToClear = appUserIdsToClear(normalized)
         val shouldClearAllRemoteConfigs = normalized == null
         val cancelled = stateLock.withLock {
@@ -427,6 +427,9 @@ internal class AppActorRemoteConfigManager(
     private fun normalizeOptional(value: String?): String? {
         return value?.trim()?.takeIf { it.isNotEmpty() }
     }
+
+    // Not trimmed: the backend looks the id up verbatim, as the identity store keeps it.
+    private fun contextAppUserId(value: String?): String? = value?.takeIf { it.isNotBlank() }
 
     private fun appUserIdsToClear(appUserId: String?): Set<String?> {
         return if (appUserId == null) {

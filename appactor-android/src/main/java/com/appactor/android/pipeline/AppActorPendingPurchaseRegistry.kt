@@ -45,8 +45,6 @@ internal class AppActorPendingPurchaseRegistry(
         }
     }
 
-    fun hasPendingTokens(): Boolean = pendingPurchaseTokens.isNotEmpty()
-
     fun putPendingEntry(purchaseToken: String, entry: String) {
         pendingPurchaseTokens[purchaseToken] = entry
     }
