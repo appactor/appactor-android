@@ -116,10 +116,11 @@ internal class AppActorCustomerManager(
     suspend fun getCustomerInfo(
         appUserId: String,
         forceRefresh: Boolean = false,
-        persistIdentityState: Boolean = true,
     ): AppActorCustomerInfo {
         // No cache guard — always goes to network (ETag/304 handles bandwidth).
         // forceRefresh only controls: skip ETag (guarantee fresh 200) + skip in-flight dedup.
+        // Never writes the identity: a fetch can outlive the session it was made for (a reset or
+        // logout while it is in flight), and would then restore the previous user.
 
         if (!forceRefresh) {
             inflightMutex.withLock {
@@ -168,10 +169,6 @@ internal class AppActorCustomerManager(
                 else -> processFreshResponse(appUserId, response)
             }
 
-            if (persistIdentityState) {
-                identityStore.setAppUserId(result.appUserId ?: appUserId)
-                identityStore.setLastRequestId(response.requestId ?: result.requestId)
-            }
             if (!forceRefresh) {
                 task.complete(result)
             }

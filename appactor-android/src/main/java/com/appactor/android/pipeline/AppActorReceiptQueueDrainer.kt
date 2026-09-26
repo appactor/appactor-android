@@ -62,53 +62,51 @@ internal class AppActorReceiptQueueDrainer(
     private val scheduleNextRetryWake: () -> Unit,
 ) {
 
-    suspend fun drainReadyQueueAssumingLocked(limit: Int = 20): AppActorCustomerInfo? {
-        val now = dateProviderMillis()
-        if (activeRateLimitCooldown(now) != null) return null
-        val claimed = queueStore.claimReady(limit = limit, nowMillis = now)
-        if (claimed.isEmpty()) return null
-
-        val productEntitlements = ensureProductEntitlements()
-        var latestCustomer: AppActorCustomerInfo? = null
-        claimed.forEach { item ->
-            when (val outcome = processClaimedItem(item, productEntitlements)) {
-                is ProcessingOutcome.Success -> {
-                    latestCustomer = outcome.customerInfo
-                    resolveDeferredPurchaseCallbackIfNeeded(
-                        item.purchaseToken,
-                        outcome.customerInfo,
-                        identityStore.currentAppUserId == item.appUserId,
-                    )
-                }
-                is ProcessingOutcome.AlreadyPosted -> {
-                    latestCustomer = outcome.customerInfo
-                    resolveDeferredPurchaseCallbackIfNeeded(
-                        item.purchaseToken,
-                        outcome.customerInfo,
-                        identityStore.currentAppUserId == item.appUserId,
-                    )
-                }
-                is ProcessingOutcome.Queued,
-                is ProcessingOutcome.PermanentFailure -> Unit
-            }
-        }
-        return latestCustomer
-    }
+    suspend fun drainReadyQueueAssumingLocked(limit: Int = 20): AppActorCustomerInfo? =
+        drainReadyBatchAssumingLocked(limit).customerInfo
 
     suspend fun drainAllAssumingLocked(
         limit: Int = 20,
     ): AppActorCustomerInfo? {
         var latestCustomer: AppActorCustomerInfo? = null
         while (true) {
-            val drained = drainReadyQueueAssumingLocked(limit)
-            if (drained != null) {
-                latestCustomer = drained
-            }
-            if (drained == null || !hasReadyWork()) {
+            val batch = drainReadyBatchAssumingLocked(limit)
+            batch.customerInfo?.let { latestCustomer = it }
+            if (!batch.finishedAny || !hasReadyWork()) {
                 break
             }
         }
         return latestCustomer
+    }
+
+    // A batch that finished only other users' purchases reports no customer info, yet more of
+    // theirs may still be ready.
+    private class DrainedBatch(val finishedAny: Boolean = false, val customerInfo: AppActorCustomerInfo? = null)
+
+    private suspend fun drainReadyBatchAssumingLocked(limit: Int): DrainedBatch {
+        val now = dateProviderMillis()
+        if (activeRateLimitCooldown(now) != null) return DrainedBatch()
+        val claimed = queueStore.claimReady(limit = limit, nowMillis = now)
+        if (claimed.isEmpty()) return DrainedBatch()
+
+        val productEntitlements = ensureProductEntitlements()
+        var finishedAny = false
+        var latestCustomer: AppActorCustomerInfo? = null
+        claimed.forEach { item ->
+            val customerInfo = processClaimedItem(item, productEntitlements).finishedCustomerInfo ?: return@forEach
+            finishedAny = true
+            // The queue also holds purchases other users left behind (a logout or an account
+            // switch); only the current user's customer info goes back to the caller.
+            if (customerInfo.appUserId == identityStore.currentAppUserId) {
+                latestCustomer = customerInfo
+            }
+            resolveDeferredPurchaseCallbackIfNeeded(
+                item.purchaseToken,
+                customerInfo,
+                identityStore.currentAppUserId == item.appUserId,
+            )
+        }
+        return DrainedBatch(finishedAny, latestCustomer)
     }
 
     suspend fun reviveRecoverableDeadLetter(
@@ -116,14 +114,14 @@ internal class AppActorReceiptQueueDrainer(
         incoming: AppActorReceiptQueueItem,
         productEntitlements: Map<String, List<String>>,
     ): AppActorReceiptQueueItem? {
-        if (existing.productType != AppActorProductType.Unknown.wireValue) {
+        if (!existing.isRecoverableDeadLetter) {
             return null
         }
 
         val now = dateProviderMillis()
         val adoptClientContext = shouldAdoptDeadLetterClientPurchaseContext(existing, incoming)
         val baseline = existing.copy(
-            appUserId = incoming.appUserId,
+            appUserId = existing.ownerAfterSighting(incoming.appUserId),
             environment = incoming.environment,
             purchaseState = incoming.purchaseState,
             orderId = incoming.orderId ?: existing.orderId,
@@ -188,8 +186,7 @@ internal class AppActorReceiptQueueDrainer(
         existing: AppActorReceiptQueueItem,
         incoming: AppActorReceiptQueueItem,
     ): Boolean {
-        val incomingHasAttempt = incoming.clientPurchaseAttemptStartedAt != null &&
-            !incoming.clientPurchaseAttemptId.isNullOrBlank()
+        val incomingHasAttempt = incoming.hasPurchaseAttempt
         val incomingHasAnyContext = incoming.clientDeliverySource != null ||
             incoming.clientPurchaseAttemptStartedAt != null ||
             incoming.clientPurchaseAttemptId != null ||
@@ -204,9 +201,7 @@ internal class AppActorReceiptQueueDrainer(
             return incomingHasAttempt || incoming.clientDeliverySource != AppActorClientDeliverySource.TransactionUpdates.wireValue
         }
 
-        val existingHasAttempt = existing.clientPurchaseAttemptStartedAt != null &&
-            !existing.clientPurchaseAttemptId.isNullOrBlank()
-        if (incomingHasAttempt && !existingHasAttempt) return true
+        if (incomingHasAttempt && !existing.hasPurchaseAttempt) return true
         return incomingHasAttempt &&
             incoming.clientDeliverySource == AppActorClientDeliverySource.PurchaseFlow.wireValue &&
             existing.clientDeliverySource != AppActorClientDeliverySource.PurchaseFlow.wireValue
@@ -349,13 +344,18 @@ internal class AppActorReceiptQueueDrainer(
             )
         }
 
-        val authoritative = runCatching {
-            customerManager.getCustomerInfo(
-                item.appUserId,
-                forceRefresh = true,
-                persistIdentityState = false,
-            )
-        }.getOrNull()
+        // Another user's info is never reported, so it is not worth a fetch.
+        val fetched = if (item.appUserId == identityStore.currentAppUserId) {
+            runCatching {
+                customerManager.getCustomerInfo(
+                    item.appUserId,
+                    forceRefresh = true,
+                )
+            }.getOrNull()
+        } else {
+            null
+        }
+        val authoritative = fetched
             ?: customerManager.cachedInfo(item.appUserId)
             ?: offlineCustomerInfoBuilder.buildOfflineCustomerInfo(
                 purchase = item.toStorePurchase(),

@@ -20,6 +20,8 @@ internal interface AppActorIdentityStore {
     fun resolveAppUserId(explicitAppUserId: String?): String
     fun clearLegacyIdentityState()
     fun setAppUserId(appUserId: String?)
+    /** Sets [appUserId] only while [expected] is still current, atomically with the other identity writes. */
+    fun replaceAppUserId(expected: String, appUserId: String)
     fun setLastRequestId(requestId: String?)
     fun setInstallReferrer(referrer: String?)
     fun clearIdentity()
@@ -87,9 +89,17 @@ internal class AppActorSharedPrefsIdentityStore(
     }
 
     override fun setAppUserId(appUserId: String?) {
-        preferences.edit().apply {
-            if (appUserId.isNullOrBlank()) remove(KEY_APP_USER_ID) else putString(KEY_APP_USER_ID, appUserId)
-        }.apply()
+        synchronized(WRITE_LOCK) {
+            preferences.edit().apply {
+                if (appUserId.isNullOrBlank()) remove(KEY_APP_USER_ID) else putString(KEY_APP_USER_ID, appUserId)
+            }.apply()
+        }
+    }
+
+    override fun replaceAppUserId(expected: String, appUserId: String) {
+        synchronized(WRITE_LOCK) {
+            if (currentAppUserId == expected) setAppUserId(appUserId)
+        }
     }
 
     override fun setLastRequestId(requestId: String?) {
@@ -111,14 +121,18 @@ internal class AppActorSharedPrefsIdentityStore(
     }
 
     override fun clearIdentity() {
-        preferences.edit()
-            .remove(KEY_APP_USER_ID)
-            .remove(KEY_LEGACY_SERVER_USER_ID)
-            .remove(KEY_LAST_REQUEST_ID)
-            .apply()
+        synchronized(WRITE_LOCK) {
+            preferences.edit()
+                .remove(KEY_APP_USER_ID)
+                .remove(KEY_LEGACY_SERVER_USER_ID)
+                .remove(KEY_LAST_REQUEST_ID)
+                .apply()
+        }
     }
 
     private companion object {
+        // Process-wide: every runtime's store writes the same preferences.
+        val WRITE_LOCK = Any()
         const val PREFS_NAME = "appactor_identity"
         const val KEY_APP_USER_ID = "appactor_billing_app_user_id"
         const val KEY_LEGACY_SERVER_USER_ID = "appactor_billing_server_user_id"

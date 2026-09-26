@@ -26,7 +26,6 @@ import com.appactor.android.storage.AppActorSharedPrefsIdentityStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.flow.MutableStateFlow
 
 internal class AppActorRuntimeFactory(
     private val storeAdapterFactory: (Context) -> AppActorStoreAdapter,
@@ -139,7 +138,6 @@ internal class AppActorRuntimeFactory(
             experimentManager = experimentManager,
             onCustomerInfoChanged = callbackState.onCustomerInfoChanged,
             onReceiptPipelineEvent = callbackState.onReceiptPipelineEvent,
-            customerInfoStateFlow = MutableStateFlow(cachedCustomerInfo),
             lastCustomerInfo = cachedCustomerInfo,
         )
     }

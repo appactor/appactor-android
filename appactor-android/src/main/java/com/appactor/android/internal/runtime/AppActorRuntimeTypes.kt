@@ -23,7 +23,6 @@ import com.appactor.android.storage.AppActorIdentityStore
 import com.appactor.android.storage.AppActorPostedLedgerStore
 import com.appactor.android.storage.AppActorReceiptQueueStore
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.flow.MutableStateFlow
 
 internal data class AppActorRuntimeState(
     val sessionId: Long,
@@ -50,7 +49,6 @@ internal data class AppActorRuntimeState(
     val onCustomerInfoChanged: ((AppActorCustomerInfo) -> Unit)? = null,
     val onReceiptPipelineEvent: ((AppActorReceiptPipelineEvent) -> Unit)? = null,
     val onDeferredPurchaseResolved: ((productId: String, customerInfo: AppActorCustomerInfo) -> Unit)? = null,
-    val customerInfoStateFlow: kotlinx.coroutines.flow.StateFlow<AppActorCustomerInfo> = MutableStateFlow(AppActorCustomerInfo.empty),
     val lastCustomerInfo: AppActorCustomerInfo = AppActorCustomerInfo.empty,
     val lastCustomerInfoSource: AppActorDiagnosticsDataSource? = null,
     val lastOfferingsSource: AppActorDiagnosticsDataSource? = null,
