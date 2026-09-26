@@ -1149,8 +1149,7 @@ public object AppActor {
     ): AppActorCustomerInfo {
         return executeGuardedRead(resolveAppUserId = true) { snapshot ->
             step(snapshot)
-            // The step may have adopted a canonical id. Its customer info is no guide: a drain
-            // can return another user's, whose queued purchase it finished.
+            // The step may have adopted a canonical id, so fetch for whoever is current now.
             val info = snapshot.runtime.customerManager.getCustomerInfo(
                 appUserId = snapshot.runtime.identityStore.currentAppUserId ?: snapshot.appUserId,
             )

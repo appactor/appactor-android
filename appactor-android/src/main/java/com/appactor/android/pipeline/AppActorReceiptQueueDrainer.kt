@@ -114,7 +114,7 @@ internal class AppActorReceiptQueueDrainer(
         incoming: AppActorReceiptQueueItem,
         productEntitlements: Map<String, List<String>>,
     ): AppActorReceiptQueueItem? {
-        if (existing.productType != AppActorProductType.Unknown.wireValue) {
+        if (!existing.isRecoverableDeadLetter) {
             return null
         }
 

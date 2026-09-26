@@ -144,7 +144,6 @@ internal class AppActorAtomicJsonReceiptQueueStore(
         private const val CORRUPT_SIDECAR_SUFFIX = ".corrupt"
         const val STALE_CLAIM_THRESHOLD_MILLIS: Long = 2 * 60 * 1_000L
         const val DEAD_LETTER_RETENTION_MILLIS: Long = 30L * 24 * 60 * 60 * 1_000
-        private val RECOVERABLE_PRODUCT_TYPE = com.appactor.android.models.AppActorProductType.Unknown.wireValue
         private val SOURCE_INTENT_PRIORITY = mapOf(
             "queue" to 0,
             "sync" to 1,
@@ -214,7 +213,7 @@ internal class AppActorAtomicJsonReceiptQueueStore(
                 val appUserId = existing.ownerAfterSighting(item.appUserId)
                 item.copy(
                     appUserId = appUserId,
-                    productType = if (item.productType != RECOVERABLE_PRODUCT_TYPE) item.productType else existing.productType,
+                    productType = if (item.productType != AppActorProductType.Unknown.wireValue) item.productType else existing.productType,
                     orderId = item.orderId ?: existing.orderId,
                     basePlanId = item.basePlanId ?: existing.basePlanId,
                     offerId = item.offerId ?: existing.offerId,
