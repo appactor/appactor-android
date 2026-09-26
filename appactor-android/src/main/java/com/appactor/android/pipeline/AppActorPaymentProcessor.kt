@@ -579,9 +579,9 @@ internal class AppActorPaymentProcessor(
         val revived = items.map { item ->
             item.withoutGuessedSubscriptionPlan().copy(
                 // Older versions wrote a dead letter they finished on Play into the
-                // posted ledger instead of flagging it, and did not stamp when it was dead-lettered.
+                // posted ledger instead of flagging it.
                 finishedOnDevice = item.finishedOnDevice || isPurchasePosted(item),
-                deadLetteredAtMillis = item.deadLetteredAtMillis ?: item.lastUpdatedAtMillis,
+                deadLetteredAtMillis = item.deadLetterRetentionStartMillis,
                 phase = AppActorReceiptQueuePhase.NeedsPost,
                 retryCount = 0,
                 nextRetryAtMillis = now,

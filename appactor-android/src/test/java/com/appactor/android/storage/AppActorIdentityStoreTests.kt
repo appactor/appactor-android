@@ -88,7 +88,7 @@ class AppActorIdentityStoreTests {
         val store = AppActorSharedPrefsIdentityStore(context)
         store.setAppUserId("undefined")
 
-        val resolved = store.resolveAppUserId(null)
+        val resolved = store.ensureAppUserId()
 
         assertTrue(resolved.startsWith("appactor-anon-"))
         assertEquals(resolved, store.currentAppUserId)

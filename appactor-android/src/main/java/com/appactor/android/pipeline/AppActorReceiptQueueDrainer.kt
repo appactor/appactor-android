@@ -428,7 +428,7 @@ internal class AppActorReceiptQueueDrainer(
     ) {
         // The posted ledger stays untouched: the backend never recorded this purchase, and the
         // startup revival must post it again once the backend accepts it.
-        val finalized = item.finishedOnDevice || finalizeDeadLetteredPurchase(item)
+        val finalized = finalizeDeadLetteredPurchase(item)
         val now = dateProviderMillis()
         val updated = item.copy(
             finishedOnDevice = finalized,
@@ -474,6 +474,7 @@ internal class AppActorReceiptQueueDrainer(
         !item.finishedOnDevice && isPurchasePosted(item)
 
     private suspend fun finalizeDeadLetteredPurchase(item: AppActorReceiptQueueItem): Boolean {
+        if (item.finishedOnDevice) return true
         val shouldConsume = item.shouldConsume || item.productType == AppActorProductType.Consumable.wireValue
         val shouldAcknowledge = item.shouldAcknowledge ||
             (item.productType == AppActorProductType.Subscription.wireValue ||

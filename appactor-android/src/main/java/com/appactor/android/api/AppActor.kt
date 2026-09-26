@@ -1705,7 +1705,6 @@ public object AppActor {
             "platform_version" to platformInfo?.version,
         )
     }
-
 }
 
 private fun currentAppVersion(context: Context): String? {

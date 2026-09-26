@@ -6,10 +6,9 @@ import com.appactor.android.internal.logging.AppActorLogger
 import com.appactor.android.models.AppActorValidation
 import java.util.UUID
 
-internal const val ANONYMOUS_APP_USER_ID_PREFIX: String = "appactor-anon-"
+private const val ANONYMOUS_APP_USER_ID_PREFIX: String = "appactor-anon-"
 
-internal fun isAnonymousAppUserId(appUserId: String?): Boolean =
-    appUserId?.startsWith(ANONYMOUS_APP_USER_ID_PREFIX) == true
+internal fun isAnonymousAppUserId(appUserId: String): Boolean = appUserId.startsWith(ANONYMOUS_APP_USER_ID_PREFIX)
 
 internal interface AppActorIdentityStore {
     val currentAppUserId: String?
