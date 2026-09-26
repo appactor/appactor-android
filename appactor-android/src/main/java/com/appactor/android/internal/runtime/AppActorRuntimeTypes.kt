@@ -23,8 +23,15 @@ import com.appactor.android.pipeline.AppActorPaymentProcessor
 import com.appactor.android.storage.AppActorIdentityStore
 import com.appactor.android.storage.AppActorPostedLedgerStore
 import com.appactor.android.storage.AppActorReceiptQueueStore
+import com.appactor.android.models.AppActorError
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 internal data class AppActorRuntimeState(
     val sessionId: Long,
@@ -84,6 +91,31 @@ internal val appActorBackgroundExceptionHandler: CoroutineExceptionHandler =
     CoroutineExceptionHandler { _, throwable ->
         AppActorLogger.error("Unexpected error in an AppActor background task: $throwable", throwable)
     }
+
+/**
+ * Runs a fetch several callers share in this scope, completes [request] with its outcome, then
+ * runs [cleanup]. Not in the first caller's coroutine: that caller being cancelled would fail the
+ * others, or answer the cancelled caller from a cache. Started ATOMIC so [request] completes even
+ * when reset() cancelled the scope before the launch began; a cancelled scope fails it with
+ * NotConfigured, since the callers awaiting it were not cancelled themselves.
+ */
+internal fun <T> CoroutineScope.launchSharedRequest(
+    request: CompletableDeferred<T>,
+    cleanup: suspend () -> Unit,
+    block: suspend () -> T,
+) {
+    launch(start = CoroutineStart.ATOMIC) {
+        try {
+            request.complete(block())
+        } catch (throwable: Throwable) {
+            request.completeExceptionally(
+                if (throwable is CancellationException) AppActorError.NotConfigured else throwable
+            )
+        } finally {
+            withContext(NonCancellable) { cleanup() }
+        }
+    }
+}
 
 internal fun throwIfCancellation(throwable: Throwable) {
     if (throwable is kotlinx.coroutines.CancellationException) {

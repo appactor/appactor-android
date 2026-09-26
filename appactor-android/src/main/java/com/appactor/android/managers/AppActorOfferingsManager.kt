@@ -15,6 +15,8 @@ import com.appactor.android.cache.AppActorOfflineProductCatalog
 import com.appactor.android.cache.AppActorOfflineProductCatalogStore
 import com.appactor.android.cache.AppActorOfferingsCacheStore
 import com.appactor.android.internal.logging.AppActorLogger
+import com.appactor.android.internal.runtime.launchSharedRequest
+import com.appactor.android.internal.runtime.throwIfCancellation
 import com.appactor.android.models.AppActorDiagnosticsDataSource
 import com.appactor.android.models.AppActorError
 import com.appactor.android.models.AppActorOfferingsFetchPolicy
@@ -27,13 +29,10 @@ import com.appactor.android.models.AppActorPackageType
 import com.appactor.android.models.AppActorProductType
 import com.appactor.android.models.AppActorStore
 import com.appactor.android.models.appActorStoreLookupProductId
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonArray
@@ -145,7 +144,10 @@ internal class AppActorOfferingsManager(
         // Phase 2: Execute action WITHOUT holding the lock
         return when (action) {
             is OfferingsAction.Await -> action.deferred.await()
-            is OfferingsAction.Execute -> executeFetch(action.request, action.generation, forceRefresh = false)
+            is OfferingsAction.Execute -> {
+                launchRequest(action.request) { fetchOfferings(forceRefresh = false, generation = action.generation) }
+                action.request.await()
+            }
             is OfferingsAction.ReturnCachedPayload -> try {
                 decodeAndEnrich(
                     payload = action.payload,
@@ -234,7 +236,10 @@ internal class AppActorOfferingsManager(
         }
         return when (action) {
             is OfferingsAction.Await -> action.deferred.await()
-            is OfferingsAction.Execute -> executeFetch(action.request, action.generation, forceRefresh)
+            is OfferingsAction.Execute -> {
+                launchRequest(action.request) { fetchOfferings(forceRefresh, action.generation) }
+                action.request.await()
+            }
             is OfferingsAction.ReturnCachedPayload -> decodeAndEnrich(
                 payload = action.payload,
                 cachedAtMillis = action.cachedAtMillis,
@@ -316,27 +321,6 @@ internal class AppActorOfferingsManager(
 
     // MARK: - Internal
 
-    private suspend fun executeFetch(
-        request: CompletableDeferred<AppActorOfferings>,
-        generation: Long,
-        forceRefresh: Boolean,
-    ): AppActorOfferings {
-        return try {
-            val result = fetchOfferings(forceRefresh, generation)
-            request.complete(result)
-            result
-        } catch (throwable: Throwable) {
-            request.completeExceptionally(throwable)
-            throw throwable
-        } finally {
-            stateMutex.withLock {
-                if (inFlight === request) {
-                    inFlight = null
-                }
-            }
-        }
-    }
-
     private suspend fun fetchOfferings(forceRefresh: Boolean, generation: Long): AppActorOfferings {
         val requestLocales = currentLocales()
         return try {
@@ -388,6 +372,7 @@ internal class AppActorOfferingsManager(
                 }
             }
         } catch (throwable: Throwable) {
+            throwIfCancellation(throwable)
             if (forceRefresh || !shouldFallbackToCache(throwable)) {
                 throw throwable.toAppActorError("Failed to fetch offerings.")
             }
@@ -469,6 +454,7 @@ internal class AppActorOfferingsManager(
                 }
             }
         } catch (throwable: Throwable) {
+            throwIfCancellation(throwable)
             if (!shouldFallbackToCache(throwable)) {
                 throw throwable.toAppActorError("Failed to fetch offerings.")
             }
@@ -529,30 +515,16 @@ internal class AppActorOfferingsManager(
         }
     }
 
-    /**
-     * Runs [block] in the background, completes [request] with its outcome and clears it from
-     * inFlight. Started ATOMIC so this happens even when reset() cancelled the scope before the
-     * launch began; otherwise every caller awaiting [request] would wait forever.
-     */
+    /** Runs [block] in the background for every caller of [request], then clears it from inFlight. */
     private fun launchRequest(
         request: CompletableDeferred<AppActorOfferings>,
         block: suspend () -> AppActorOfferings,
     ) {
-        backgroundScope.launch(start = CoroutineStart.ATOMIC) {
-            try {
-                request.complete(block())
-            } catch (throwable: Throwable) {
-                // The callers awaiting the request were not cancelled themselves; a
-                // CancellationException would end them silently instead of failing them.
-                request.completeExceptionally(
-                    if (throwable is CancellationException) AppActorError.NotConfigured else throwable
-                )
-            } finally {
-                stateMutex.withLock {
-                    if (inFlight === request) inFlight = null
-                }
-            }
-        }
+        backgroundScope.launchSharedRequest(
+            request = request,
+            cleanup = { stateMutex.withLock { if (inFlight === request) inFlight = null } },
+            block = block,
+        )
     }
 
     private fun decodeBootstrapSeed(

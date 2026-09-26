@@ -14,7 +14,12 @@ import java.io.IOException
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 import kotlinx.coroutines.CancellationException
+import com.appactor.android.internal.runtime.launchSharedRequest
+import com.appactor.android.internal.runtime.throwIfCancellation
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.serialization.Serializable
 
 internal class AppActorExperimentManager(
@@ -23,6 +28,7 @@ internal class AppActorExperimentManager(
     private val appVersionProvider: () -> String?,
     private val countryProvider: () -> String?,
     private val dateProviderMillis: () -> Long = { System.currentTimeMillis() },
+    private val backgroundScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
 ) {
 
     private val stateLock = ReentrantLock()
@@ -47,24 +53,22 @@ internal class AppActorExperimentManager(
             is ExperimentRequestState.Cached -> requestState.assignment
             is ExperimentRequestState.Await -> requestState.deferred.await()
             is ExperimentRequestState.Execute -> {
-                try {
-                    val result = fetchAssignment(
-                        experimentKey = experimentKey,
-                        appUserId = appUserId,
-                        requestGeneration = requestState.generation,
-                    )
-                    request.complete(result)
-                    result
-                } catch (throwable: Throwable) {
-                    request.completeExceptionally(throwable)
-                    throw throwable
-                } finally {
-                    stateLock.withLock {
-                        if (inFlight[experimentKey] === request) {
-                            inFlight.remove(experimentKey)
+                backgroundScope.launchSharedRequest(
+                    request = request,
+                    cleanup = {
+                        stateLock.withLock {
+                            if (inFlight[experimentKey] === request) inFlight.remove(experimentKey)
                         }
-                    }
-                }
+                    },
+                    block = {
+                        fetchAssignment(
+                            experimentKey = experimentKey,
+                            appUserId = appUserId,
+                            requestGeneration = requestState.generation,
+                        )
+                    },
+                )
+                request.await()
             }
         }
     }
@@ -135,6 +139,7 @@ internal class AppActorExperimentManager(
             )
         } catch (throwable: Throwable) {
             ensureGeneration(requestGeneration)
+            throwIfCancellation(throwable)
             loadFromDiskCache(appUserId, requestGeneration)
             val cached = stateLock.withLock { cachedAssignments[experimentKey] }
             if (cached != null && shouldFallbackToCache(throwable)) {

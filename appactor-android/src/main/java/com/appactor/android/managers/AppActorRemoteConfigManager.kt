@@ -16,7 +16,12 @@ import java.util.Locale
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 import kotlinx.coroutines.CancellationException
+import com.appactor.android.internal.runtime.launchSharedRequest
+import com.appactor.android.internal.runtime.throwIfCancellation
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 
 internal class AppActorRemoteConfigManager(
     private val backendClient: AppActorBackendClient,
@@ -24,6 +29,7 @@ internal class AppActorRemoteConfigManager(
     private val appVersionProvider: () -> String?,
     private val countryProvider: () -> String?,
     private val dateProviderMillis: () -> Long = { System.currentTimeMillis() },
+    private val backgroundScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
 ) {
 
     private val stateLock = ReentrantLock()
@@ -133,24 +139,19 @@ internal class AppActorRemoteConfigManager(
             is RemoteConfigRequestState.Cached -> requestState.configs
             is RemoteConfigRequestState.Await -> requestState.deferred.await()
             is RemoteConfigRequestState.Execute -> {
-                try {
-                    val result = fetchRemoteConfigs(
-                        context = context,
-                        requestGeneration = requestState.generation,
-                    )
-                    request.complete(result)
-                    result
-                } catch (throwable: Throwable) {
-                    request.completeExceptionally(throwable)
-                    throw throwable
-                } finally {
-                    stateLock.withLock {
-                        if (inFlight[context] === request) {
-                            inFlight.remove(context)
-                            inFlightGenerations.remove(context)
+                backgroundScope.launchSharedRequest(
+                    request = request,
+                    cleanup = {
+                        stateLock.withLock {
+                            if (inFlight[context] === request) {
+                                inFlight.remove(context)
+                                inFlightGenerations.remove(context)
+                            }
                         }
-                    }
-                }
+                    },
+                    block = { fetchRemoteConfigs(context = context, requestGeneration = requestState.generation) },
+                )
+                request.await()
             }
         }
     }
@@ -243,6 +244,8 @@ internal class AppActorRemoteConfigManager(
             }
         } catch (throwable: Throwable) {
             ensureGeneration(context, requestGeneration)
+            // A cancelled fetch is not answered from the cache.
+            throwIfCancellation(throwable)
             val cachedValue = cacheStore.load(
                 appUserId = context.appUserId,
                 appVersion = context.appVersion,

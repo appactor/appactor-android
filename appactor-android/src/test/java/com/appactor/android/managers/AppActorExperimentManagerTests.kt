@@ -19,6 +19,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.yield
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -100,6 +101,29 @@ class AppActorExperimentManagerTests {
 
         assertTrue(assignment != null)
         assertEquals("variant_b", assignment?.variantKey)
+    }
+
+    @Test
+    fun `cancelling the first caller does not fail another waiting on the same fetch`() = runBlocking {
+        val started = CompletableDeferred<Unit>()
+        val unblock = CompletableDeferred<Unit>()
+        val mock = mockk<AppActorBackendClient>(relaxed = true)
+        coEvery { mock.postExperimentAssignment(any(), any(), any(), any()) } coAnswers {
+            started.complete(Unit)
+            unblock.await()
+            successResponse()
+        }
+        val manager = createManager(mock)
+
+        val leader = async { manager.getAssignment("paywall_copy", "user_android_123") }
+        started.await()
+        val follower = async { manager.getAssignment("paywall_copy", "user_android_123") }
+        yield() // the follower now awaits the leader's fetch
+        leader.cancel()
+        unblock.complete(Unit)
+
+        assertEquals("variant_b", withTimeout(5_000) { follower.await() }?.variantKey)
+        coVerify(exactly = 1) { mock.postExperimentAssignment(any(), any(), any(), any()) }
     }
 
     @Test

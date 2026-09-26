@@ -18,7 +18,12 @@ import com.appactor.android.models.AppActorConfiguration
 import com.appactor.android.models.AppActorCustomerInfo
 import com.appactor.android.models.AppActorDiagnosticsDataSource
 import com.appactor.android.models.AppActorVerificationResult
+import com.appactor.android.internal.runtime.launchSharedRequest
+import com.appactor.android.internal.runtime.throwIfCancellation
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.IOException
@@ -33,6 +38,7 @@ internal class AppActorCustomerManager(
     private val offlineProductCatalogStore: AppActorOfflineProductCatalogStore,
     private val storeAdapter: AppActorStoreAdapter,
     private val dateProviderMillis: () -> Long = { System.currentTimeMillis() },
+    private val backgroundScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
 ) {
 
     private val inflightMutex = Mutex()
@@ -121,34 +127,36 @@ internal class AppActorCustomerManager(
         // forceRefresh only controls: skip ETag (guarantee fresh 200) + skip in-flight dedup.
         // Never writes the identity: a fetch can outlive the session it was made for (a reset or
         // logout while it is in flight), and would then restore the previous user.
-
-        if (!forceRefresh) {
-            inflightMutex.withLock {
-                inFlight[appUserId]
-            }?.let { existing ->
-                return existing.await()
+        if (forceRefresh) {
+            return fetchCustomerInfo(appUserId, forceRefresh = true)
+        }
+        val task = inflightMutex.withLock {
+            inFlight[appUserId] ?: CompletableDeferred<AppActorCustomerInfo>().also { task ->
+                inFlight[appUserId] = task
+                backgroundScope.launchSharedRequest(
+                    request = task,
+                    cleanup = {
+                        inflightMutex.withLock {
+                            if (inFlight[appUserId] === task) inFlight.remove(appUserId)
+                        }
+                    },
+                    block = { fetchCustomerInfo(appUserId, forceRefresh = false) },
+                )
             }
         }
+        return task.await()
+    }
 
-        val task = CompletableDeferred<AppActorCustomerInfo>()
-        if (!forceRefresh) {
-            val existing = inflightMutex.withLock {
-                inFlight[appUserId] ?: run {
-                    inFlight[appUserId] = task
-                    null
-                }
-            }
-            if (existing != null) {
-                return existing.await()
-            }
-        }
-
+    private suspend fun fetchCustomerInfo(
+        appUserId: String,
+        forceRefresh: Boolean,
+    ): AppActorCustomerInfo {
         return try {
             val response = backendClient.getCustomer(
                 appUserId = appUserId,
                 eTag = cacheStore.eTag(appUserId = appUserId, forceRefresh = forceRefresh),
             )
-            val result = when {
+            when {
                 response.isNotModified -> {
                     val cached = cacheStore.handleNotModified(appUserId = appUserId, rotatedETag = response.eTag)
                         ?: cacheStore.load(appUserId)
@@ -168,12 +176,9 @@ internal class AppActorCustomerManager(
 
                 else -> processFreshResponse(appUserId, response)
             }
-
-            if (!forceRefresh) {
-                task.complete(result)
-            }
-            result
         } catch (throwable: Throwable) {
+            // A cancelled fetch is not answered from the cache.
+            throwIfCancellation(throwable)
             val fallback = if (!forceRefresh) {
                 cacheStore.load(appUserId)
                     ?.takeIf { shouldFallbackToCache(throwable) }
@@ -186,24 +191,9 @@ internal class AppActorCustomerManager(
             }
             if (fallback != null) {
                 lastLoadSource = AppActorDiagnosticsDataSource.Cache
-                if (!forceRefresh) {
-                    task.complete(fallback)
-                }
                 return fallback
             }
-            if (!forceRefresh) {
-                task.completeExceptionally(throwable)
-            }
             throw throwable
-        } finally {
-            if (!forceRefresh) {
-                inflightMutex.withLock {
-                    val current = inFlight[appUserId]
-                    if (current === task) {
-                        inFlight.remove(appUserId)
-                    }
-                }
-            }
         }
     }
 
