@@ -352,20 +352,13 @@ internal class AppActorPaymentProcessor(
                 }
                 val shouldEmitDeferredCallback =
                     emitDeferredPurchaseCallback && identityStore.currentAppUserId == receiptAppUserId
-                val customerInfo = when (
-                    val outcome = enqueueAndProcess(
-                        purchase = purchase,
-                        productEntitlements = productEntitlements,
-                        appUserIdOverride = receiptAppUserId,
-                        sourceIntent = updateContext.sourceIntent,
-                        clientPurchaseContext = updateContext.clientPurchaseContext,
-                    )
-                ) {
-                    is ProcessingOutcome.Success -> outcome.customerInfo
-                    is ProcessingOutcome.AlreadyPosted -> outcome.customerInfo
-                    is ProcessingOutcome.Queued,
-                    is ProcessingOutcome.PermanentFailure -> return@forEach
-                }
+                val customerInfo = enqueueAndProcess(
+                    purchase = purchase,
+                    productEntitlements = productEntitlements,
+                    appUserIdOverride = receiptAppUserId,
+                    sourceIntent = updateContext.sourceIntent,
+                    clientPurchaseContext = updateContext.clientPurchaseContext,
+                ).finishedCustomerInfo ?: return@forEach
                 // A pending purchase is posted for the user who started it, and one already queued
                 // by the purchase flow for its buyer; only the current user's info is reported.
                 if (customerInfo.appUserId == identityStore.currentAppUserId) {
@@ -1037,6 +1030,15 @@ internal sealed interface ProcessingOutcome {
         val customerInfo: AppActorCustomerInfo,
     ) : ProcessingOutcome
 }
+
+/** The customer info of a purchase the backend has recorded, or null while it is not. */
+internal val ProcessingOutcome.finishedCustomerInfo: AppActorCustomerInfo?
+    get() = when (this) {
+        is ProcessingOutcome.Success -> customerInfo
+        is ProcessingOutcome.AlreadyPosted -> customerInfo
+        is ProcessingOutcome.Queued,
+        is ProcessingOutcome.PermanentFailure -> null
+    }
 
 internal fun AppActorGoogleReceiptResponseDTO.toPipelineStatus(): AppActorPaymentProcessor.ReceiptPipelineStatus {
     return when (status) {

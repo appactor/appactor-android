@@ -1136,30 +1136,23 @@ public object AppActor {
         }
     }
 
-    public suspend fun drainReceiptQueueAndRefreshCustomer(): AppActorCustomerInfo {
-        return executeGuardedRead(resolveAppUserId = true) { snapshot ->
-            snapshot.runtime.paymentProcessor.drainAll()
-            val info = snapshot.runtime.customerManager.getCustomerInfo(
-                appUserId = resolveFollowUpAppUserId(snapshot),
-            )
-            if (persistCustomerInfoIfCurrent(snapshot, info)) {
-                publishCustomerInfoIfCurrent(
-                    snapshot = snapshot,
-                    info = info,
-                    source = snapshot.runtime.customerManager.lastLoadSource(),
-                )
-            }
-            info
-        }
-    }
+    public suspend fun drainReceiptQueueAndRefreshCustomer(): AppActorCustomerInfo =
+        refreshCustomerInfoAfter { snapshot -> snapshot.runtime.paymentProcessor.drainAll() }
 
-    public suspend fun syncPurchases(): AppActorCustomerInfo {
+    public suspend fun syncPurchases(): AppActorCustomerInfo =
+        refreshCustomerInfoAfter { snapshot ->
+            snapshot.runtime.paymentProcessor.syncCurrentPurchases(appUserIdOverride = snapshot.appUserId)
+        }
+
+    private suspend fun refreshCustomerInfoAfter(
+        step: suspend (AppActorOperationSnapshot) -> Unit,
+    ): AppActorCustomerInfo {
         return executeGuardedRead(resolveAppUserId = true) { snapshot ->
-            snapshot.runtime.paymentProcessor.syncCurrentPurchases(
-                appUserIdOverride = snapshot.appUserId,
-            )
+            step(snapshot)
+            // The step may have adopted a canonical id. Its customer info is no guide: a drain
+            // can return another user's, whose queued purchase it finished.
             val info = snapshot.runtime.customerManager.getCustomerInfo(
-                appUserId = resolveFollowUpAppUserId(snapshot),
+                appUserId = snapshot.runtime.identityStore.currentAppUserId ?: snapshot.appUserId,
             )
             if (persistCustomerInfoIfCurrent(snapshot, info)) {
                 publishCustomerInfoIfCurrent(
@@ -1315,11 +1308,6 @@ public object AppActor {
         }
     }
 
-    // The sync may have adopted a canonical id. A drain's customer info is no guide: it can
-    // belong to another user whose queued purchase the drain finished.
-    private fun resolveFollowUpAppUserId(snapshot: AppActorOperationSnapshot): String =
-        snapshot.runtime.identityStore.currentAppUserId ?: snapshot.appUserId
-
     private fun publishCustomerInfoLocked(
         currentRuntime: AppActorRuntimeState,
         info: AppActorCustomerInfo,
@@ -1438,10 +1426,7 @@ public object AppActor {
         operation(captureOperationSnapshot(resolveAppUserId = true))
 
     private suspend fun isSnapshotCurrent(snapshot: AppActorOperationSnapshot): Boolean {
-        return transitionMutex.withLock {
-            val currentRuntime = runtime ?: return@withLock false
-            currentRuntime.sessionId == snapshot.runtime.sessionId && identityEpoch == snapshot.epoch
-        }
+        return transitionMutex.withLock { runtimeIfCurrentLocked(snapshot) != null }
     }
 
     private suspend fun persistCustomerInfoIfCurrent(
@@ -1449,7 +1434,8 @@ public object AppActor {
         info: AppActorCustomerInfo,
     ): Boolean {
         return transitionMutex.withLock {
-            val currentRuntime = runtimeIfCurrentLocked(snapshot, info) ?: return@withLock false
+            val currentRuntime = runtimeIfCurrentLocked(snapshot)?.takeIf { it.ownsCustomerInfo(info) }
+                ?: return@withLock false
             persistCustomerInfoLocked(currentRuntime, info)
             true
         }
@@ -1464,21 +1450,14 @@ public object AppActor {
         currentRuntime.identityStore.setLastRequestId(info.requestId)
     }
 
-    private fun runtimeIfCurrentLocked(
-        snapshot: AppActorOperationSnapshot,
-        info: AppActorCustomerInfo,
-    ): AppActorRuntimeState? {
-        val currentRuntime = runtime ?: return null
-        if (currentRuntime.sessionId != snapshot.runtime.sessionId || identityEpoch != snapshot.epoch) {
-            return null
-        }
-        // A drain or sync also finishes purchases other users left queued; their customer info
-        // must not reach this user's session.
-        val infoAppUserId = info.appUserId?.takeIf { it.isNotBlank() }
-        if (infoAppUserId != null && infoAppUserId != currentRuntime.identityStore.currentAppUserId) {
-            return null
-        }
-        return currentRuntime
+    private fun runtimeIfCurrentLocked(snapshot: AppActorOperationSnapshot): AppActorRuntimeState? =
+        runtime?.takeIf { it.sessionId == snapshot.runtime.sessionId && identityEpoch == snapshot.epoch }
+
+    // A drain or sync also finishes purchases other users left queued; their customer info must
+    // not reach this user's session.
+    private fun AppActorRuntimeState.ownsCustomerInfo(info: AppActorCustomerInfo): Boolean {
+        val infoAppUserId = info.appUserId?.takeIf { it.isNotBlank() } ?: return true
+        return infoAppUserId == identityStore.currentAppUserId
     }
 
     private suspend fun publishCustomerInfoIfCurrent(
@@ -1488,7 +1467,8 @@ public object AppActor {
         guard: (AppActorRuntimeState) -> Boolean = { true },
     ): Boolean {
         val callback = transitionMutex.withLock {
-            val currentRuntime = runtimeIfCurrentLocked(snapshot, info) ?: return@withLock null
+            val currentRuntime = runtimeIfCurrentLocked(snapshot)?.takeIf { it.ownsCustomerInfo(info) }
+                ?: return@withLock null
             if (!guard(currentRuntime)) {
                 return@withLock null
             }
@@ -1540,10 +1520,7 @@ public object AppActor {
         requestId: String?,
     ): Boolean {
         return transitionMutex.withLock {
-            val currentRuntime = runtime ?: return@withLock false
-            if (currentRuntime.sessionId != snapshot.runtime.sessionId || identityEpoch != snapshot.epoch) {
-                return@withLock false
-            }
+            val currentRuntime = runtimeIfCurrentLocked(snapshot) ?: return@withLock false
             currentRuntime.identityStore.setLastRequestId(requestId)
             true
         }
@@ -1581,10 +1558,7 @@ public object AppActor {
         source: AppActorDiagnosticsDataSource?,
     ) {
         transitionMutex.withLock {
-            val currentRuntime = runtime ?: return@withLock
-            if (currentRuntime.sessionId != snapshot.runtime.sessionId || identityEpoch != snapshot.epoch) {
-                return@withLock
-            }
+            val currentRuntime = runtimeIfCurrentLocked(snapshot) ?: return@withLock
             runtime = currentRuntime.copy(
                 lastRemoteConfigSource = source ?: currentRuntime.lastRemoteConfigSource,
             )

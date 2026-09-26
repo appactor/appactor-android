@@ -147,10 +147,7 @@ internal class AppActorRestoreSyncCoordinator(
         // only when its purchase is seen again, so it goes back through the queue, which keeps
         // a purchase-flow receipt with its buyer.
         val (revivableItems, queuedItems) = if (unfinishedOnly) {
-            queueStore.snapshot().partition { item ->
-                item.phase == AppActorReceiptQueuePhase.DeadLettered &&
-                    item.productType == AppActorProductType.Unknown.wireValue
-            }
+            queueStore.snapshot().partition { it.isRecoverableDeadLetter }
         } else {
             emptyList<AppActorReceiptQueueItem>() to emptyList()
         }
@@ -167,18 +164,13 @@ internal class AppActorRestoreSyncCoordinator(
             val pendingUpdateContext = consumePendingPurchaseUpdateContext(normalized)
             if (pendingUpdateContext != null) {
                 val pendingAppUserId = pendingUpdateContext.appUserId?.takeIf { it.isNotBlank() } ?: appUserId
-                val customerInfo = when (val outcome = enqueueAndProcess(
+                val customerInfo = enqueueAndProcess(
                     normalized,
                     productEntitlements,
                     pendingAppUserId,
                     pendingUpdateContext.sourceIntent,
                     pendingUpdateContext.clientPurchaseContext,
-                )) {
-                    is ProcessingOutcome.Success -> outcome.customerInfo
-                    is ProcessingOutcome.AlreadyPosted -> outcome.customerInfo
-                    is ProcessingOutcome.Queued,
-                    is ProcessingOutcome.PermanentFailure -> return@forEach
-                }
+                ).finishedCustomerInfo ?: return@forEach
                 report(customerInfo)
                 fireDeferredPurchaseCallbackIfNeeded(
                     normalized,
@@ -190,18 +182,15 @@ internal class AppActorRestoreSyncCoordinator(
             if (normalized.productType == AppActorProductType.Unknown ||
                 normalized.purchaseToken in revivablePurchaseTokens
             ) {
-                when (val outcome = enqueueAndProcess(
-                    normalized,
-                    productEntitlements,
-                    appUserId,
-                    metadata.sourceIntent,
-                    metadata.clientPurchaseContext(dateProviderMillis()),
-                )) {
-                    is ProcessingOutcome.Success -> report(outcome.customerInfo)
-                    is ProcessingOutcome.AlreadyPosted -> report(outcome.customerInfo)
-                    is ProcessingOutcome.Queued,
-                    is ProcessingOutcome.PermanentFailure -> Unit
-                }
+                report(
+                    enqueueAndProcess(
+                        normalized,
+                        productEntitlements,
+                        appUserId,
+                        metadata.sourceIntent,
+                        metadata.clientPurchaseContext(dateProviderMillis()),
+                    ).finishedCustomerInfo
+                )
             } else {
                 syncCandidates += normalized
             }
@@ -265,20 +254,15 @@ internal class AppActorRestoreSyncCoordinator(
             } catch (throwable: Throwable) {
                 if (throwable is CancellationException) throw throwable
                 syncCandidates.forEach { purchase ->
-                    when (
-                        val outcome = enqueueAndProcess(
+                    report(
+                        enqueueAndProcess(
                             purchase,
                             productEntitlements,
                             appUserId,
                             metadata.sourceIntent,
                             metadata.clientPurchaseContext(dateProviderMillis()),
-                        )
-                    ) {
-                        is ProcessingOutcome.Success -> report(outcome.customerInfo)
-                        is ProcessingOutcome.AlreadyPosted -> report(outcome.customerInfo)
-                        is ProcessingOutcome.Queued,
-                        is ProcessingOutcome.PermanentFailure -> Unit
-                    }
+                        ).finishedCustomerInfo
+                    )
                 }
             }
         }

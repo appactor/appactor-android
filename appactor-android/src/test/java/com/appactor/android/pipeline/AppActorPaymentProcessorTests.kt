@@ -3293,7 +3293,7 @@ class AppActorPaymentProcessorTests {
         }
         every { mock.setAppUserId(any()) } answers { storedAppUserId = firstArg() }
         every { mock.replaceAppUserId(any(), any()) } answers {
-            (storedAppUserId == firstArg<String>()).also { current -> if (current) storedAppUserId = secondArg() }
+            if (storedAppUserId == firstArg<String>()) storedAppUserId = secondArg()
         }
         every { mock.setLastRequestId(any()) } answers { storedLastRequestId = firstArg() }
         every { mock.setInstallReferrer(any()) } answers { }

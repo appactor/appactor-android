@@ -93,12 +93,7 @@ internal class AppActorReceiptQueueDrainer(
         var finishedAny = false
         var latestCustomer: AppActorCustomerInfo? = null
         claimed.forEach { item ->
-            val customerInfo = when (val outcome = processClaimedItem(item, productEntitlements)) {
-                is ProcessingOutcome.Success -> outcome.customerInfo
-                is ProcessingOutcome.AlreadyPosted -> outcome.customerInfo
-                is ProcessingOutcome.Queued,
-                is ProcessingOutcome.PermanentFailure -> return@forEach
-            }
+            val customerInfo = processClaimedItem(item, productEntitlements).finishedCustomerInfo ?: return@forEach
             finishedAny = true
             // The queue also holds purchases other users left behind (a logout or an account
             // switch); only the current user's customer info goes back to the caller.
@@ -126,7 +121,7 @@ internal class AppActorReceiptQueueDrainer(
         val now = dateProviderMillis()
         val adoptClientContext = shouldAdoptDeadLetterClientPurchaseContext(existing, incoming)
         val baseline = existing.copy(
-            appUserId = if (existing.hasPurchaseBinding) existing.appUserId else incoming.appUserId,
+            appUserId = existing.ownerAfterSighting(incoming.appUserId),
             environment = incoming.environment,
             purchaseState = incoming.purchaseState,
             orderId = incoming.orderId ?: existing.orderId,
@@ -191,8 +186,7 @@ internal class AppActorReceiptQueueDrainer(
         existing: AppActorReceiptQueueItem,
         incoming: AppActorReceiptQueueItem,
     ): Boolean {
-        val incomingHasAttempt = incoming.clientPurchaseAttemptStartedAt != null &&
-            !incoming.clientPurchaseAttemptId.isNullOrBlank()
+        val incomingHasAttempt = incoming.hasPurchaseAttempt
         val incomingHasAnyContext = incoming.clientDeliverySource != null ||
             incoming.clientPurchaseAttemptStartedAt != null ||
             incoming.clientPurchaseAttemptId != null ||
@@ -207,9 +201,7 @@ internal class AppActorReceiptQueueDrainer(
             return incomingHasAttempt || incoming.clientDeliverySource != AppActorClientDeliverySource.TransactionUpdates.wireValue
         }
 
-        val existingHasAttempt = existing.clientPurchaseAttemptStartedAt != null &&
-            !existing.clientPurchaseAttemptId.isNullOrBlank()
-        if (incomingHasAttempt && !existingHasAttempt) return true
+        if (incomingHasAttempt && !existing.hasPurchaseAttempt) return true
         return incomingHasAttempt &&
             incoming.clientDeliverySource == AppActorClientDeliverySource.PurchaseFlow.wireValue &&
             existing.clientDeliverySource != AppActorClientDeliverySource.PurchaseFlow.wireValue

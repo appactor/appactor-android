@@ -3,6 +3,7 @@ package com.appactor.android.storage
 import android.content.Context
 import com.appactor.android.backend.client.AppActorBackendJson
 import com.appactor.android.internal.logging.AppActorLogger
+import com.appactor.android.models.AppActorProductType
 import kotlinx.serialization.Serializable
 import java.io.File
 import java.util.concurrent.locks.ReentrantLock
@@ -67,16 +68,27 @@ internal data class AppActorReceiptQueueItem(
     val deadLetterRetentionStartMillis: Long
         get() = deadLetteredAtMillis ?: lastUpdatedAtMillis
 
+    val hasPurchaseAttempt: Boolean
+        get() = clientPurchaseAttemptStartedAt != null && !clientPurchaseAttemptId.isNullOrBlank()
+
+    /** An unknown-type dead letter stays queued: seeing its purchase again, once typed, revives it. */
+    val isRecoverableDeadLetter: Boolean
+        get() = phase == AppActorReceiptQueuePhase.DeadLettered && productType == AppActorProductType.Unknown.wireValue
+
     /**
-     * Queued by a purchase flow, so it belongs to the user who bought it. A later sighting of the
-     * same purchase in another user's session (after a logout or an account switch) must not
-     * take it over, as on iOS.
+     * Who the item belongs to once its purchase is seen again for [incomingAppUserId]. One being
+     * posted or finished keeps its user. So does one a purchase flow queued: it belongs to the user
+     * who bought it, whichever session sees it later (after a logout or an account switch), as on iOS.
      */
-    val hasPurchaseBinding: Boolean
-        get() = (clientPurchaseAttemptStartedAt != null && !clientPurchaseAttemptId.isNullOrBlank()) ||
-            clientDeliverySource == "purchase_flow" ||
-            offeringId != null ||
-            packageId != null
+    fun ownerAfterSighting(incomingAppUserId: String): String =
+        if (phase == AppActorReceiptQueuePhase.Posting || phase == AppActorReceiptQueuePhase.NeedsFinish || hasPurchaseBinding) {
+            appUserId
+        } else {
+            incomingAppUserId
+        }
+
+    private val hasPurchaseBinding: Boolean
+        get() = hasPurchaseAttempt || clientDeliverySource == "purchase_flow" || offeringId != null || packageId != null
 
     companion object {
         fun makeKey(
@@ -161,8 +173,7 @@ internal class AppActorAtomicJsonReceiptQueueStore(
             existing: AppActorReceiptQueueItem,
             incoming: AppActorReceiptQueueItem,
         ): Boolean {
-            val incomingHasAttempt = incoming.clientPurchaseAttemptStartedAt != null &&
-                !incoming.clientPurchaseAttemptId.isNullOrBlank()
+            val incomingHasAttempt = incoming.hasPurchaseAttempt
             if (incoming.clientDeliverySource == null &&
                 incoming.clientPurchaseAttemptStartedAt == null &&
                 incoming.clientPurchaseAttemptId == null &&
@@ -177,9 +188,7 @@ internal class AppActorAtomicJsonReceiptQueueStore(
             ) {
                 return incomingHasAttempt || incoming.clientDeliverySource != "transaction_updates"
             }
-            val existingHasAttempt = existing.clientPurchaseAttemptStartedAt != null &&
-                !existing.clientPurchaseAttemptId.isNullOrBlank()
-            if (incomingHasAttempt && !existingHasAttempt) return true
+            if (incomingHasAttempt && !existing.hasPurchaseAttempt) return true
             return incomingHasAttempt &&
                 incoming.clientDeliverySource == "purchase_flow" &&
                 existing.clientDeliverySource != "purchase_flow"
@@ -202,15 +211,7 @@ internal class AppActorAtomicJsonReceiptQueueStore(
                 item
             } else {
                 val adoptClientContext = shouldAdoptClientPurchaseContext(existing, item)
-                val appUserId = if (
-                    existing.phase != AppActorReceiptQueuePhase.Posting &&
-                    existing.phase != AppActorReceiptQueuePhase.NeedsFinish &&
-                    !existing.hasPurchaseBinding
-                ) {
-                    item.appUserId
-                } else {
-                    existing.appUserId
-                }
+                val appUserId = existing.ownerAfterSighting(item.appUserId)
                 item.copy(
                     appUserId = appUserId,
                     productType = if (item.productType != RECOVERABLE_PRODUCT_TYPE) item.productType else existing.productType,
@@ -365,8 +366,7 @@ internal class AppActorAtomicJsonReceiptQueueStore(
         // Items with productType "unknown" may still be revived by the payment
         // processor when offerings metadata becomes available.
         val consumable = current.values.filter {
-            it.phase == AppActorReceiptQueuePhase.DeadLettered &&
-                it.productType != RECOVERABLE_PRODUCT_TYPE
+            it.phase == AppActorReceiptQueuePhase.DeadLettered && !it.isRecoverableDeadLetter
         }
         if (consumable.isEmpty()) return emptyList()
         val updated = current.toMutableMap()

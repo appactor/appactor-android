@@ -21,7 +21,7 @@ internal interface AppActorIdentityStore {
     fun clearLegacyIdentityState()
     fun setAppUserId(appUserId: String?)
     /** Sets [appUserId] only while [expected] is still current, atomically with the other identity writes. */
-    fun replaceAppUserId(expected: String, appUserId: String): Boolean
+    fun replaceAppUserId(expected: String, appUserId: String)
     fun setLastRequestId(requestId: String?)
     fun setInstallReferrer(referrer: String?)
     fun clearIdentity()
@@ -96,10 +96,10 @@ internal class AppActorSharedPrefsIdentityStore(
         }
     }
 
-    override fun replaceAppUserId(expected: String, appUserId: String): Boolean = synchronized(WRITE_LOCK) {
-        if (currentAppUserId != expected) return false
-        setAppUserId(appUserId)
-        true
+    override fun replaceAppUserId(expected: String, appUserId: String) {
+        synchronized(WRITE_LOCK) {
+            if (currentAppUserId == expected) setAppUserId(appUserId)
+        }
     }
 
     override fun setLastRequestId(requestId: String?) {
