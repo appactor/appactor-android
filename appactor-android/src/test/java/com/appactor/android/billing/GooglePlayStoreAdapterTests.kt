@@ -665,6 +665,48 @@ class GooglePlayStoreAdapterTests {
     }
 
     @Test
+    fun `launch purchase on an empty cache launches the named base plan without auto-selection`() = kotlinx.coroutines.runBlocking {
+        val (billingClient, captures) = createMockBillingClient(
+            productDetails = listOf(
+                AppActorBillingProductDetailsPayload(
+                    productId = "com.appactor.pro.monthly",
+                    productType = AppActorProductType.Subscription,
+                    subscriptionOffers = listOf(
+                        AppActorBillingSubscriptionOfferPayload(
+                            basePlanId = "monthly001",
+                            offerId = null,
+                            offerToken = "base-plan-token",
+                            pricingPhases = listOf(AppActorPricingPhase(priceAmountMicros = 9_990_000, currencyCode = "USD")),
+                        ),
+                        AppActorBillingSubscriptionOfferPayload(
+                            basePlanId = "monthly001",
+                            offerId = "trial7d",
+                            offerToken = "trial-token",
+                            pricingPhases = listOf(
+                                AppActorPricingPhase(billingPeriod = "P1W", priceAmountMicros = 0, currencyCode = "USD"),
+                                AppActorPricingPhase(priceAmountMicros = 9_990_000, currencyCode = "USD"),
+                            ),
+                        ),
+                    ),
+                )
+            ),
+        )
+        // A package kept across reset() reaches a new adapter whose cache is empty.
+        val adapter = GooglePlayStoreAdapter(context, billingClient)
+
+        adapter.launchPurchase(
+            Activity(),
+            AppActorStoreProductRequest(
+                productId = "com.appactor.pro.monthly",
+                productType = AppActorProductType.Subscription,
+                basePlanId = "monthly001",
+            ),
+        )
+
+        assertEquals("base-plan-token", captures.lastLaunchOfferToken)
+    }
+
+    @Test
     fun `launch purchase maps one time price snapshot onto purchase`() = kotlinx.coroutines.runBlocking {
         val (billingClient, _) = createMockBillingClient(
             productDetails = listOf(
@@ -1286,7 +1328,8 @@ class GooglePlayStoreAdapterTests {
         assertEquals("monthly001", products.single().basePlanId)
         assertEquals("trial7d", products.single().offerId)
 
-        adapter.launchPurchase(activity = Activity(), request = request)
+        // The package shows the auto-selected offer, so its purchase names it.
+        adapter.launchPurchase(activity = Activity(), request = request.copy(offerId = products.single().offerId))
 
         assertEquals("trial-token", captures.lastLaunchOfferToken)
     }

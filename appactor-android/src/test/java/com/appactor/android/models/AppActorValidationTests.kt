@@ -40,6 +40,12 @@ class AppActorValidationTests {
     }
 
     @Test
+    fun `placeholders are told apart from malformed ids`() {
+        assertTrue(AppActorValidation.isPlaceholderAppUserId(" Guest "))
+        assertFalse(AppActorValidation.isPlaceholderAppUserId("user/123"))
+    }
+
+    @Test
     fun `validate throws invalid configuration`() {
         val error = runCatching { AppActorValidation.validateAppUserId("guest") }.exceptionOrNull()
 

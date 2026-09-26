@@ -435,6 +435,56 @@ class AppActorPaymentProcessorTests {
     }
 
     @Test
+    fun `retry dead lettered items reposts a dead letter an older version marked posted`() = runBlocking {
+        val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
+        val dependencies = createDependencies(
+            receiptResponse = AppActorBackendHttpResponse(
+                body = receiptResponse,
+                statusCode = 200,
+                requestId = receiptResponse.requestId,
+                signatureVerified = true,
+            ),
+        )
+        val deadLetter = legacyDeadLetter(appUserId = "null")
+        dependencies.queueStore.upsert(deadLetter)
+        // Older versions wrote the posted ledger when they finished a dead letter on Play.
+        dependencies.ledgerStore.markPosted(deadLetter.key)
+
+        dependencies.processor.retryDeadLetteredItems()
+
+        val posted = dependencies.postedReceipts.single()
+        assertEquals("user_android_123", posted.appUserId)
+        assertTrue(dependencies.acknowledgedTokens.isEmpty())
+        assertTrue(dependencies.queueStore.snapshot().isEmpty())
+    }
+
+    @Test
+    fun `purchase update without a base plan joins the queued purchase flow item`() = runBlocking {
+        val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
+        val dependencies = createDependencies(
+            receiptResponse = AppActorBackendHttpResponse(
+                body = receiptResponse,
+                statusCode = 200,
+                requestId = receiptResponse.requestId,
+                signatureVerified = true,
+            )
+        )
+        coEvery { dependencies.backendClient.postGoogleReceipt(any()) } throws AppActorBackendException.Http(
+            statusCode = 429,
+            retryAfterSeconds = 30.0,
+        )
+        dependencies.processor.purchase(Activity(), monthlyPackage())
+        val queued = dependencies.queueStore.snapshot().single()
+
+        dependencies.processor.processPurchaseUpdates(
+            listOf(runtimeStylePurchase(basePlanId = null, offerId = null))
+        )
+
+        assertEquals(listOf(queued.key), dependencies.queueStore.snapshot().map { it.key })
+        assertEquals("monthly001", dependencies.queueStore.snapshot().single().basePlanId)
+    }
+
+    @Test
     fun `purchase skips repost when duplicate token is already marked posted`() = runBlocking {
         val customerEnvelope = fixtureCustomerEnvelope("fixtures/backend/customer_android_active.json")
         val dependencies = createDependencies(
@@ -3526,6 +3576,43 @@ class AppActorPaymentProcessorTests {
     // endregion
 
     // region — Helpers
+
+    private fun legacyDeadLetter(appUserId: String): AppActorReceiptQueueItem {
+        val now = System.currentTimeMillis()
+        return AppActorReceiptQueueItem(
+            key = "google:com.appactor.pro.monthly:monthly001:token_legacy_dead",
+            appUserId = appUserId,
+            packageName = context.packageName,
+            environment = "production",
+            productId = "com.appactor.pro.monthly",
+            productType = AppActorProductType.Subscription.wireValue,
+            purchaseToken = "token_legacy_dead",
+            purchaseTime = "1710000000000",
+            purchaseState = "PURCHASED",
+            basePlanId = "monthly001",
+            idempotencyKey = "google:com.appactor.pro.monthly:monthly001:token_legacy_dead",
+            isAcknowledged = true,
+            createdAtMillis = now,
+            lastUpdatedAtMillis = now,
+            phase = com.appactor.android.storage.AppActorReceiptQueuePhase.DeadLettered,
+            lastError = "MALFORMED_PAYLOAD (finalized locally)",
+        )
+    }
+
+    private fun runtimeStylePurchase(basePlanId: String?, offerId: String?): AppActorStorePurchase {
+        return AppActorStorePurchase(
+            productId = "com.appactor.pro.monthly",
+            productType = AppActorProductType.Subscription,
+            purchaseToken = "token_123",
+            orderId = "GPA.1234",
+            purchaseTimeMillis = 1_710_000_000_000,
+            purchaseState = com.appactor.android.billing.AppActorStorePurchaseState.Purchased,
+            basePlanId = basePlanId,
+            offerId = offerId,
+            isAcknowledged = false,
+            isAutoRenewing = true,
+        )
+    }
 
     private fun monthlyPackage(): AppActorPackage {
         return AppActorPackage(

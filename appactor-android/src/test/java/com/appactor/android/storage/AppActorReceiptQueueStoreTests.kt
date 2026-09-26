@@ -188,15 +188,15 @@ class AppActorReceiptQueueStoreTests {
     }
 
     @Test
-    fun `queue store purges dead lettered items created before the retention window on load`() {
+    fun `queue store purges items first dead lettered before the retention window on load`() {
         val directory = tempDirectory("queue-dead-letter-retention")
         val now = System.currentTimeMillis()
-        // Re-dead-lettered by today's launch revival, but first queued before the window.
+        // Re-dead-lettered by today's launch revival, but first dead-lettered before the window.
         val oldDeadLetter = queueItem(
-            createdAtMillis = now - AppActorAtomicJsonReceiptQueueStore.DEAD_LETTER_RETENTION_MILLIS - 1_000,
+            createdAtMillis = now,
             phase = AppActorReceiptQueuePhase.DeadLettered,
             purchaseToken = "token_old",
-        ).copy(lastUpdatedAtMillis = now)
+        ).copy(deadLetteredAtMillis = now - AppActorAtomicJsonReceiptQueueStore.DEAD_LETTER_RETENTION_MILLIS - 1_000)
         val freshPending = queueItem(
             createdAtMillis = now,
             phase = AppActorReceiptQueuePhase.NeedsPost,

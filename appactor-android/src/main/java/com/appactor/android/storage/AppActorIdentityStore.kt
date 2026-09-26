@@ -62,8 +62,13 @@ internal class AppActorSharedPrefsIdentityStore(
     }
 
     override fun resolveAppUserId(explicitAppUserId: String?): String {
+        // A placeholder such as "null" (e.g. `user?.id.toString()` while signed out) means no
+        // user, like a blank id; configure() must not fail for it.
+        if (explicitAppUserId != null && AppActorValidation.isPlaceholderAppUserId(explicitAppUserId)) {
+            AppActorLogger.warn("[Identity] appUserId '$explicitAppUserId' is a placeholder the backend rejects; treating it as no user.")
+        }
         val normalizedExplicit = explicitAppUserId
-            ?.takeIf { it.trim().isNotEmpty() }
+            ?.takeIf { it.trim().isNotEmpty() && !AppActorValidation.isPlaceholderAppUserId(it) }
         if (normalizedExplicit != null) {
             AppActorValidation.validateAppUserId(normalizedExplicit)
             setAppUserId(normalizedExplicit)

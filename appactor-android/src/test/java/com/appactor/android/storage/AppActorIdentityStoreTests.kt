@@ -62,10 +62,20 @@ class AppActorIdentityStoreTests {
     }
 
     @Test
-    fun `resolve app user id rejects an id the backend rejects`() {
+    fun `resolve app user id treats a placeholder id as no user`() {
         val store = AppActorSharedPrefsIdentityStore(context)
 
-        val error = runCatching { store.resolveAppUserId("null") }.exceptionOrNull()
+        val resolved = store.resolveAppUserId("null")
+
+        assertTrue(resolved.startsWith("appactor-anon-"))
+        assertEquals(resolved, store.currentAppUserId)
+    }
+
+    @Test
+    fun `resolve app user id rejects a malformed id`() {
+        val store = AppActorSharedPrefsIdentityStore(context)
+
+        val error = runCatching { store.resolveAppUserId("tenant/user_1") }.exceptionOrNull()
 
         assertTrue(error is AppActorError.InvalidConfiguration)
         assertNull(store.currentAppUserId)

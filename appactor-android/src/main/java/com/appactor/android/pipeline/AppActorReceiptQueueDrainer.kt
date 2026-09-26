@@ -230,7 +230,7 @@ internal class AppActorReceiptQueueDrainer(
             queueStore.update(normalizedItem)
         }
 
-        if (isPurchasePosted(normalizedItem)) {
+        if (isRecordedByBackend(normalizedItem)) {
             return finishAlreadyPostedItem(normalizedItem, productEntitlements)
         }
 
@@ -393,7 +393,7 @@ internal class AppActorReceiptQueueDrainer(
             retryCount = nextRetryCount,
             nextRetryAtMillis = nextRetryAt,
             claimedAtMillis = null,
-            phase = if (isPurchasePosted(item)) {
+            phase = if (isRecordedByBackend(item)) {
                 AppActorReceiptQueuePhase.NeedsFinish
             } else {
                 AppActorReceiptQueuePhase.NeedsPost
@@ -425,12 +425,14 @@ internal class AppActorReceiptQueueDrainer(
         // The posted ledger stays untouched: the backend never recorded this purchase, and the
         // startup revival must post it again once the backend accepts it.
         val finalized = item.finishedOnDevice || finalizeDeadLetteredPurchase(item)
+        val now = dateProviderMillis()
         val updated = item.copy(
             finishedOnDevice = finalized,
+            deadLetteredAtMillis = item.deadLetteredAtMillis ?: now,
             phase = AppActorReceiptQueuePhase.DeadLettered,
             claimedAtMillis = null,
             nextRetryAtMillis = 0L,
-            lastUpdatedAtMillis = dateProviderMillis(),
+            lastUpdatedAtMillis = now,
             lastError = buildDeadLetterError(
                 code = code,
                 message = message,
@@ -461,6 +463,11 @@ internal class AppActorReceiptQueueDrainer(
         )
         scheduleNextRetryWake()
     }
+
+    // A dead letter finished on Play was refused by the backend, so a posted-ledger entry for it
+    // (written by older versions) does not mean the backend recorded it.
+    private fun isRecordedByBackend(item: AppActorReceiptQueueItem): Boolean =
+        !item.finishedOnDevice && isPurchasePosted(item)
 
     private suspend fun finalizeDeadLetteredPurchase(item: AppActorReceiptQueueItem): Boolean {
         val shouldConsume = item.shouldConsume || item.productType == AppActorProductType.Consumable.wireValue

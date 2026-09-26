@@ -34,12 +34,15 @@ internal object AppActorValidation {
 
     fun isValidAppUserId(appUserId: String): Boolean = invalidAppUserIdReason(appUserId) == null
 
+    /** A "no user" stand-in such as "null", "guest" or "0", which configure() treats as anonymous. */
+    fun isPlaceholderAppUserId(appUserId: String): Boolean = appUserId.trim().lowercase() in BLOCKED_APP_USER_IDS
+
     private fun invalidAppUserIdReason(appUserId: String): String? = when {
         appUserId.isEmpty() -> "appUserId must not be empty."
         appUserId.length > MAX_APP_USER_ID_LENGTH -> "appUserId must be at most $MAX_APP_USER_ID_LENGTH characters."
         '/' in appUserId -> "appUserId must not contain '/'."
         CONTROL_CHARACTERS.containsMatchIn(appUserId) -> "appUserId must not contain control characters."
-        appUserId.trim().lowercase() in BLOCKED_APP_USER_IDS ->
+        isPlaceholderAppUserId(appUserId) ->
             "appUserId '$appUserId' is a placeholder the backend rejects; pass null for an anonymous user."
         else -> null
     }

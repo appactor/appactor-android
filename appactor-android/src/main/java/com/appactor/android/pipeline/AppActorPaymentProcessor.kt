@@ -22,6 +22,7 @@ import com.appactor.android.models.AppActorPurchaseResult
 import com.appactor.android.models.AppActorReceiptPipelineEvent
 import com.appactor.android.models.AppActorSubscriptionReplacementMode
 import com.appactor.android.models.AppActorStore
+import com.appactor.android.models.AppActorValidation
 import com.appactor.android.models.toResolvedPurchaseTarget
 import com.appactor.android.storage.AppActorIdentityStore
 import com.appactor.android.storage.AppActorAtomicJsonReceiptQueueStore
@@ -567,6 +568,8 @@ internal class AppActorPaymentProcessor(
      * giving them a fresh retry cycle. Called once per session at startup so
      * that transient backend failures from a previous session get another chance
      * when conditions may have changed (network restored, backend fixed, etc.).
+     * A dead letter is re-posted at every launch until the backend accepts it or
+     * its retention ends.
      */
     suspend fun retryDeadLetteredItems(
         limit: Int = 20,
@@ -576,6 +579,14 @@ internal class AppActorPaymentProcessor(
         val now = dateProviderMillis()
         val revived = items.map { item ->
             item.copy(
+                // Older versions wrote a dead letter they finished on Play into the
+                // posted ledger instead of flagging it.
+                finishedOnDevice = item.finishedOnDevice || isPurchasePosted(item),
+                // Purchases made under an id the backend rejects can only be credited to
+                // the id that replaced it.
+                appUserId = item.appUserId.takeIf(AppActorValidation::isValidAppUserId)
+                    ?: identityStore.currentAppUserId
+                    ?: identityStore.ensureAppUserId(),
                 phase = AppActorReceiptQueuePhase.NeedsPost,
                 retryCount = 0,
                 nextRetryAtMillis = now,
@@ -913,6 +924,23 @@ internal class AppActorPaymentProcessor(
 
     private fun queueItemForIncomingPurchase(item: AppActorReceiptQueueItem): AppActorReceiptQueueItem {
         if (queueStore.get(item.key) != null) return item
+        // A subscription seen outside the purchase flow has no base plan, so its key misses the
+        // purchase-flow item queued for the same purchase; join that item instead of adding one.
+        if (item.basePlanId == null) {
+            val purchaseFlowItem = queueStore.snapshot().firstOrNull { queued ->
+                queued.basePlanId != null &&
+                    queued.purchaseToken == item.purchaseToken &&
+                    queued.productId == item.productId &&
+                    queuedEconomicRevision(queued) == queuedEconomicRevision(item)
+            }
+            if (purchaseFlowItem != null) {
+                return item.copy(
+                    key = purchaseFlowItem.key,
+                    basePlanId = purchaseFlowItem.basePlanId,
+                    idempotencyKey = purchaseFlowItem.idempotencyKey,
+                )
+            }
+        }
         val legacyKey = legacyQueueKey(item)
         if (legacyKey == item.key) return item
         val legacyItem = queueStore.get(legacyKey) ?: return item

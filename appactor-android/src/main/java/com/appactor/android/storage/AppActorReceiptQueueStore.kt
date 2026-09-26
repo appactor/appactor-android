@@ -51,6 +51,8 @@ internal data class AppActorReceiptQueueItem(
     val shouldConsume: Boolean = false,
     /** A dead letter consumed or acknowledged on Play; a later post must not finish it again. */
     val finishedOnDevice: Boolean = false,
+    /** When the item was first dead-lettered; the launch revival re-posts it until retention ends. */
+    val deadLetteredAtMillis: Long? = null,
     val retryCount: Int = 0,
     val nextRetryAtMillis: Long = 0L,
     val createdAtMillis: Long,
@@ -224,6 +226,7 @@ internal class AppActorAtomicJsonReceiptQueueStore(
                     shouldAcknowledge = existing.shouldAcknowledge || item.shouldAcknowledge,
                     shouldConsume = existing.shouldConsume || item.shouldConsume,
                     finishedOnDevice = existing.finishedOnDevice || item.finishedOnDevice,
+                    deadLetteredAtMillis = existing.deadLetteredAtMillis ?: item.deadLetteredAtMillis,
                     retryCount = existing.retryCount,
                     nextRetryAtMillis = existing.nextRetryAtMillis,
                     createdAtMillis = existing.createdAtMillis,
@@ -444,14 +447,15 @@ internal class AppActorAtomicJsonReceiptQueueStore(
         }
     }
 
-    // Keyed on createdAtMillis: every launch revives and re-posts dead letters, which refreshes
-    // lastUpdatedAtMillis, so that field would keep a permanently rejected item forever.
+    // Every launch revives and re-posts dead letters, which refreshes lastUpdatedAtMillis, so
+    // retention counts from the first dead-lettering (items from older versions lack it).
     private fun purgeExpiredDeadLetteredItems(
         source: LinkedHashMap<String, AppActorReceiptQueueItem>
     ): LinkedHashMap<String, AppActorReceiptQueueItem> {
         val cutoff = System.currentTimeMillis() - DEAD_LETTER_RETENTION_MILLIS
         val filtered = source.filterValues { item ->
-            item.phase != AppActorReceiptQueuePhase.DeadLettered || item.createdAtMillis >= cutoff
+            item.phase != AppActorReceiptQueuePhase.DeadLettered ||
+                (item.deadLetteredAtMillis ?: item.lastUpdatedAtMillis) >= cutoff
         }
         return if (filtered.size == source.size) {
             source

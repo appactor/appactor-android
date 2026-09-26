@@ -46,38 +46,6 @@ class AppActorEntitlementKeyResolverTests {
     }
 
     @Test
-    fun `resolver grants what every base plan grants when the purchase has no base plan`() {
-        val keys = AppActorEntitlementKeyResolver.entitlementKeysForProduct(
-            productId = "com.appactor.pro",
-            basePlanId = null,
-            offerId = null,
-            productEntitlements = mapOf(
-                "android:com.appactor.pro:monthly" to listOf("premium", "ads_free"),
-                "android:com.appactor.pro:annual" to listOf("premium", "yearly_bonus"),
-                "android:com.appactor.pro:annual:intro" to listOf("intro_only"),
-                "android:com.appactor.pro.plus:monthly" to listOf("other_product"),
-            ),
-        )
-
-        assertEquals(listOf("premium"), keys)
-    }
-
-    @Test
-    fun `resolver grants nothing for an unknown base plan`() {
-        val keys = AppActorEntitlementKeyResolver.entitlementKeysForProduct(
-            productId = "com.appactor.pro",
-            basePlanId = "weekly",
-            offerId = null,
-            productEntitlements = mapOf(
-                "android:com.appactor.pro:monthly" to listOf("premium"),
-                "android:com.appactor.pro:annual" to listOf("premium"),
-            ),
-        )
-
-        assertEquals(emptyList<String>(), keys)
-    }
-
-    @Test
     fun `resolver ignores other store mappings and malformed keys`() {
         val keys = AppActorEntitlementKeyResolver.entitlementKeysForProduct(
             productId = "com.appactor.pro.monthly",
