@@ -19,9 +19,16 @@ import com.appactor.android.backend.dto.AppActorLoginResponseDTO
 import com.appactor.android.backend.dto.AppActorOfferingsEnvelopeDTO
 import com.appactor.android.backend.dto.AppActorRemoteConfigsEnvelopeDTO
 import com.appactor.android.models.AppActorConfiguration
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import okhttp3.Call
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -29,6 +36,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okio.Buffer
 import java.io.IOException
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.min
 import kotlin.math.pow
 import kotlinx.serialization.json.contentOrNull
@@ -437,6 +445,8 @@ internal class AppActorHttpBackendClient(
             } catch (backendException: AppActorBackendException.Http) {
                 throw backendException
             } catch (ioException: IOException) {
+                // A call cancelled with its coroutine ends here; that is no network failure.
+                currentCoroutineContext().ensureActive()
                 lastError = AppActorBackendException.Network(
                     description = "Backend request failed.",
                     throwable = ioException,
@@ -528,9 +538,29 @@ internal class AppActorHttpBackendClient(
         }.getOrNull()
     }
 
-    private fun executeRaw(request: Request): RawBackendResponse {
+    private suspend fun executeRaw(request: Request): RawBackendResponse = coroutineScope {
+        val call = okHttpClient.newCall(request)
+        val finished = AtomicBoolean(false)
+        // A blocking execute() doesn't see the coroutine's cancellation and would run on to
+        // OkHttp's timeouts, holding up reset(), which waits for the runtime's work to end.
+        val canceller = launch(start = CoroutineStart.UNDISPATCHED) {
+            try {
+                awaitCancellation()
+            } finally {
+                if (!finished.get()) call.cancel()
+            }
+        }
         try {
-            okHttpClient.newCall(request).execute().use { response ->
+            executeCall(call, request)
+        } finally {
+            finished.set(true)
+            canceller.cancel()
+        }
+    }
+
+    private fun executeCall(call: Call, request: Request): RawBackendResponse {
+        try {
+            call.execute().use { response ->
                 val statusCode = response.code
                 val rawBytes = response.body?.bytes()
                 val rawBody = rawBytes?.toString(Charsets.UTF_8)

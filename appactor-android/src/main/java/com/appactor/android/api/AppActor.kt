@@ -1364,20 +1364,34 @@ public object AppActor {
                 return@synchronized null
             }
             // A 304 refresh brings the same info with only a new requestId. As on iOS that is no
-            // change: the flow keeps its value, and the callback, once it has had this info,
-            // stays quiet; a listener that re-fetches would otherwise loop.
+            // change: the flow keeps its value, and a listener that has already been called with
+            // this info isn't called again; one that re-fetches would otherwise loop.
             val unchanged = latestRuntime.lastCustomerInfo.isSameInfoAs(info)
-            val alreadyNotified = latestRuntime.notifiedCustomerInfo?.isSameInfoAs(info) == true
             val updatedRuntime = latestRuntime.copy(
                 lastCustomerInfo = if (unchanged) latestRuntime.lastCustomerInfo else info,
                 lastCustomerInfoSource = source ?: latestRuntime.lastCustomerInfoSource,
-                notifiedCustomerInfo = info,
             )
             runtime = updatedRuntime
             if (!unchanged) {
                 customerInfoStateFlow.value = info
             }
-            updatedRuntime.onCustomerInfoChanged.takeUnless { alreadyNotified }
+            val listener = updatedRuntime.onCustomerInfoChanged ?: return@synchronized null
+            if (updatedRuntime.deliveredCustomerInfo?.isSameInfoAs(info) == true) {
+                return@synchronized null
+            }
+            val sessionId = updatedRuntime.sessionId
+            // Recorded when the call really happens: a delivery dropped for an identity change
+            // leaves the listener still owed this info.
+            { delivered ->
+                recordDeliveredCustomerInfo(sessionId, delivered)
+                listener(delivered)
+            }
+        }
+    }
+
+    private fun recordDeliveredCustomerInfo(sessionId: Long, info: AppActorCustomerInfo) {
+        synchronized(this) {
+            runtime?.takeIf { it.sessionId == sessionId }?.let { runtime = it.copy(deliveredCustomerInfo = info) }
         }
     }
 
@@ -1628,13 +1642,16 @@ public object AppActor {
         source: AppActorDiagnosticsDataSource?,
     ) {
         transitionMutex.withLock {
-            val currentRuntime = runtime ?: return@withLock
-            if (currentRuntime.sessionId != runtimeSessionId) {
-                return@withLock
+            // Under the lock the listener setters take too, so neither write loses the other.
+            synchronized(this) {
+                val currentRuntime = runtime ?: return@withLock
+                if (currentRuntime.sessionId != runtimeSessionId) {
+                    return@withLock
+                }
+                runtime = currentRuntime.copy(
+                    lastOfferingsSource = source ?: currentRuntime.lastOfferingsSource,
+                )
             }
-            runtime = currentRuntime.copy(
-                lastOfferingsSource = source ?: currentRuntime.lastOfferingsSource,
-            )
         }
     }
 
@@ -1643,10 +1660,12 @@ public object AppActor {
         source: AppActorDiagnosticsDataSource?,
     ) {
         transitionMutex.withLock {
-            val currentRuntime = runtimeIfCurrentLocked(snapshot) ?: return@withLock
-            runtime = currentRuntime.copy(
-                lastRemoteConfigSource = source ?: currentRuntime.lastRemoteConfigSource,
-            )
+            synchronized(this) {
+                val currentRuntime = runtimeIfCurrentLocked(snapshot) ?: return@withLock
+                runtime = currentRuntime.copy(
+                    lastRemoteConfigSource = source ?: currentRuntime.lastRemoteConfigSource,
+                )
+            }
         }
     }
 

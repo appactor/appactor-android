@@ -389,16 +389,9 @@ class AppActorRemoteConfigManagerTests {
     }
 
     @Test
-    fun `remote config unknown public disk fallback prefers user cache when available`() = runBlocking {
+    fun `a user-scoped app starting offline gets its stored user entry`() = runBlocking {
+        // Each online probe of a user-scoped app discards the public entry, so only the user's is stored.
         val cacheStore = createCacheStore("remote-config-public-unknown-user-fallback")
-        cacheStore.save(
-            appUserId = null,
-            appVersion = "1.0.0",
-            country = "TR",
-            payload = AppActorBackendJson.instance.encodeToString(sampleEnvelope("audience" to JsonPrimitive("public"))),
-            eTag = "\"etag_public\"",
-            verified = true,
-        )
         cacheStore.save(
             appUserId = "user_android_123",
             appVersion = "1.0.0",

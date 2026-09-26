@@ -103,13 +103,28 @@ class GooglePlayBillingClientBridgeTests {
             billingClientFactory = { _, _ -> fakeBillingClient },
         )
 
-        val failure = runCatching { bridge.connect() }.exceptionOrNull()
+        // connect() stays best effort: the setup result only feeds the connection state.
+        bridge.connect()
         fakeBillingClient.ready = true
 
-        assertTrue(failure is com.appactor.android.models.AppActorError.InvalidConfiguration)
+        assertEquals(1, fakeBillingClient.startConnectionCalls)
         assertFalse(bridge.isConnected())
         assertTrue(bridge.currentCapabilities().isEmpty())
         bridge.shutdown()
+    }
+
+    @Test
+    fun `connect after shutdown returns instead of waiting on a cancelled scope`() = runBlocking {
+        val fakeBillingClient = FakeBillingClient(initialReady = false)
+        val bridge = GooglePlayBillingClientBridge(
+            context = context,
+            billingClientFactory = { _, _ -> fakeBillingClient },
+        )
+
+        bridge.shutdown()
+
+        kotlinx.coroutines.withTimeout(5_000) { bridge.connect() }
+        assertFalse(bridge.isConnected())
     }
 
     @Test

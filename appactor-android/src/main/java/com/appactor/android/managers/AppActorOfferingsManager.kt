@@ -29,10 +29,13 @@ import com.appactor.android.models.AppActorPackageType
 import com.appactor.android.models.AppActorProductType
 import com.appactor.android.models.AppActorStore
 import com.appactor.android.models.appActorStoreLookupProductId
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonArray
@@ -212,12 +215,18 @@ internal class AppActorOfferingsManager(
                     )
                     seed.source
                 } catch (throwable: Throwable) {
-                    action.request.completeExceptionally(throwable)
-                    stateMutex.withLock {
-                        if (inFlight === action.request) {
-                            inFlight = null
+                    // Those awaiting the request were not cancelled themselves.
+                    action.request.completeExceptionally(
+                        if (throwable is CancellationException) AppActorError.NotConfigured else throwable
+                    )
+                    withContext(NonCancellable) {
+                        stateMutex.withLock {
+                            if (inFlight === action.request) {
+                                inFlight = null
+                            }
                         }
                     }
+                    throwIfCancellation(throwable)
                     AppActorLogger.debug("Bootstrap offerings prefetch failed: ${throwable.message}")
                     null
                 }

@@ -33,6 +33,8 @@ import com.appactor.android.storage.AppActorReceiptQueuePhase
 import com.appactor.android.storage.AppActorReceiptQueueStore
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -117,7 +119,8 @@ internal class AppActorPaymentProcessor(
             val drained = pipelineMutex.withLock {
                 receiptQueueDrainer.drainAllAssumingLocked(limit)
             }
-            drained?.let { onRetryWakeDrained?.invoke(it) }
+            // A reschedule cancels this job once the drain is done; the publish must not be lost.
+            drained?.let { withContext(NonCancellable) { onRetryWakeDrained?.invoke(it) } }
         },
     )
 

@@ -307,6 +307,18 @@ class AppActorBackendContractTests {
     }
 
     @Test
+    fun `an attribution too large for the backend drops the metadata it does not read`() {
+        val clipped = AppActorAttributionRequestDTO(
+            provider = "custom",
+            source = "facebook",
+            metadata = (1..20).associate { index -> "key_$index" to kotlinx.serialization.json.JsonPrimitive("v".repeat(1_000)) },
+        ).clippedToServerLimits()
+
+        assertTrue(clipped.metadata.isEmpty())
+        assertEquals("facebook", clipped.source)
+    }
+
+    @Test
     fun `customer url builder encodes app user ids as path segments`() {
         val encodedUrl = buildAppActorUrl(
             baseUrl = "https://api.appactor.com",

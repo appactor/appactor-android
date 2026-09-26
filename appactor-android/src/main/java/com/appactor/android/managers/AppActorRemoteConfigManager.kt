@@ -9,6 +9,7 @@ import com.appactor.android.cache.AppActorRemoteConfigsCacheStore
 import com.appactor.android.models.AppActorConfigValue
 import com.appactor.android.models.AppActorConfigValueType
 import com.appactor.android.models.AppActorDiagnosticsDataSource
+import com.appactor.android.models.AppActorError
 import com.appactor.android.models.AppActorRemoteConfigItem
 import com.appactor.android.models.AppActorRemoteConfigs
 import java.io.IOException
@@ -61,12 +62,12 @@ internal class AppActorRemoteConfigManager(
         val publicContext = userContext.copy(appUserId = null)
         val modeContext = ModeContext(appVersion = appVersion, country = country)
 
-        val preferredContext = stateLock.withLock {
+        val (preferredContext, clearGenerationAtStart) = stateLock.withLock {
             preferredContextLocked(
                 userContext = userContext,
                 publicContext = publicContext,
                 modeContext = modeContext,
-            )
+            ) to clearGeneration
         }
         if (preferredContext.appUserId != null) {
             val configs = resolveContext(preferredContext)
@@ -98,10 +99,13 @@ internal class AppActorRemoteConfigManager(
                 modeContext = modeContext,
             )
 
-            // The probe never reached the server (offline, or a 5xx), so which context the app
-            // uses is unknown. A user-scoped app keeps only the user's entry on disk; a public one
-            // only the public entry, which the probe has already fallen back to.
-            else -> storedConfigs(userContext) ?: probe.getOrThrow()
+            // The probe never reached the server, so which context the app uses is unknown. A
+            // public app's probe has fallen back to its stored public entry. A user-scoped app
+            // keeps only the user's entry, since each online probe discards the public one.
+            else -> probe.getOrElse { error ->
+                if ((error as? AppActorError)?.isTransient != true) throw error
+                storedConfigs(userContext, clearGenerationAtStart) ?: throw error
+            }
         }
     }
 
@@ -369,9 +373,14 @@ internal class AppActorRemoteConfigManager(
         }
     }
 
-    /** The context's disk entry, made the current one; null when there is none. */
-    private fun storedConfigs(context: RemoteConfigContext): AppActorRemoteConfigs? {
-        val generationAtRead = stateLock.withLock { clearGeneration }
+    /**
+     * The context's disk entry, made the current one; null when there is none, or when a
+     * clearCache() since [clearGenerationAtStart] may have deleted it.
+     */
+    private fun storedConfigs(
+        context: RemoteConfigContext,
+        clearGenerationAtStart: Long,
+    ): AppActorRemoteConfigs? {
         val cachedValue = cacheStore.load(
             appUserId = context.appUserId,
             appVersion = context.appVersion,
@@ -382,8 +391,7 @@ internal class AppActorRemoteConfigManager(
         }.getOrNull() ?: return null
         val configs = decoded.toModel()
         return stateLock.withLock {
-            // A clearCache() since the read deleted this entry.
-            if (clearGeneration != generationAtRead) return@withLock null
+            if (clearGeneration != clearGenerationAtStart) return@withLock null
             cachedConfigs[context] = configs
             cachedAtMillis[context] = cachedValue.cachedAtMillis
             lastRequestId = decoded.requestId

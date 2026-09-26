@@ -33,6 +33,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.onStart
@@ -106,6 +108,12 @@ internal class GooglePlayBillingClientBridge(
     private var isSetUp: Boolean = false
 
     @Volatile
+    private var lastSetupResult: BillingResult? = null
+
+    @Volatile
+    private var isShutDown: Boolean = false
+
+    @Volatile
     private var reconnectJob: Job? = null
 
     @Volatile
@@ -137,14 +145,23 @@ internal class GooglePlayBillingClientBridge(
     }
 
 	override suspend fun connect() {
+        if (isShutDown) return
         if (isSetUp) {
             refreshConnectedState()
             return
         }
-        awaitConnected(scheduleReconnectOnFailure = true)
+        // Best effort, as before: the call that follows still runs when the setup fails, and the
+        // library reconnects for it. The setup result feeds isConnected() and the capabilities.
+        try {
+            awaitConnected(scheduleReconnectOnFailure = true)
+        } catch (throwable: Throwable) {
+            currentCoroutineContext().ensureActive()
+            AppActorLogger.debug("Billing setup failed: ${throwable.message}")
+        }
     }
 
     override fun shutdown() {
+        isShutDown = true
         isSetUp = false
         purchaseContinuation = null
         pendingPurchaseProductType = null
@@ -158,7 +175,8 @@ internal class GooglePlayBillingClientBridge(
             reconnectJob?.cancel()
             reconnectJob = null
         }
-        activeConnectionAttempt?.cancel()
+        // Failed rather than cancelled: whoever awaits it was not cancelled.
+        activeConnectionAttempt?.completeExceptionally(AppActorError.Unknown("Billing bridge was shut down."))
         activeConnectionAttempt = null
         failPendingRequests(AppActorError.Unknown("Billing bridge was shut down before pending requests completed."))
         purchaseUpdatesChannel.close()
@@ -274,15 +292,21 @@ internal class GooglePlayBillingClientBridge(
                 }
             }
             val launchResult = billingClient.launchBillingFlow(activity, paramsBuilder.build())
-            if (launchResult.responseCode == BillingResponseCode.SERVICE_DISCONNECTED) {
-                // Below API 29 the library doesn't wait for its reconnect here; the next
-                // connect() starts the connection again before the next launch.
-                isSetUp = false
-            }
             if (launchResult.responseCode != BillingResponseCode.OK) {
                 purchaseContinuation = null
                 pendingPurchaseProductType = null
-                continuation.resume(launchResult.toLaunchResult(productType = productType))
+                var failure = launchResult
+                if (launchResult.responseCode == BillingResponseCode.SERVICE_DISCONNECTED) {
+                    // Below API 29 the library doesn't wait for its reconnect here. Connect again
+                    // for the next launch, and report a device without Play billing as such, not
+                    // as a network error.
+                    isSetUp = false
+                    scheduleReconnect()
+                    lastSetupResult
+                        ?.takeIf { it.responseCode == BillingResponseCode.BILLING_UNAVAILABLE }
+                        ?.let { failure = it }
+                }
+                continuation.resume(failure.toLaunchResult(productType = productType))
             }
         }
     }
@@ -431,6 +455,8 @@ internal class GooglePlayBillingClientBridge(
     private suspend fun awaitConnected(
         scheduleReconnectOnFailure: Boolean,
     ) {
+        // Its scope is cancelled, so an attempt launched now would never complete.
+        if (isShutDown) throw AppActorError.Unknown("Billing bridge was shut down.")
         if (isSetUp) {
             refreshConnectedState()
             return
@@ -473,6 +499,7 @@ internal class GooglePlayBillingClientBridge(
                 billingClient.startConnection(
                     object : com.android.billingclient.api.BillingClientStateListener {
                         override fun onBillingSetupFinished(billingResult: BillingResult) {
+                            lastSetupResult = billingResult
                             isSetUp = billingResult.responseCode == BillingResponseCode.OK
                             if (!continuation.isActive) return
                             if (isSetUp) {
