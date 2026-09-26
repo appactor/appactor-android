@@ -9,6 +9,7 @@ import com.appactor.android.cache.AppActorExperimentCacheStore
 import com.appactor.android.cache.AppActorOfflineProductCatalogStore
 import com.appactor.android.cache.AppActorOfferingsCacheStore
 import com.appactor.android.cache.AppActorRemoteConfigsCacheStore
+import com.appactor.android.internal.logging.AppActorLogger
 import com.appactor.android.managers.AppActorCustomerManager
 import com.appactor.android.managers.AppActorAttributesManager
 import com.appactor.android.managers.AppActorExperimentManager
@@ -22,6 +23,7 @@ import com.appactor.android.pipeline.AppActorPaymentProcessor
 import com.appactor.android.storage.AppActorIdentityStore
 import com.appactor.android.storage.AppActorPostedLedgerStore
 import com.appactor.android.storage.AppActorReceiptQueueStore
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 
 internal data class AppActorRuntimeState(
@@ -71,6 +73,15 @@ internal data class AppActorStartupHandles(
     val bootstrapCompletionJob: kotlinx.coroutines.Job? = null,
     val purchaseUpdatesJob: kotlinx.coroutines.Job? = null,
 )
+
+/**
+ * Backstop for the SDK's own background scopes: an exception that escapes a launch is logged
+ * instead of crashing the host app. Each launch should still catch what it expects.
+ */
+internal val appActorBackgroundExceptionHandler: CoroutineExceptionHandler =
+    CoroutineExceptionHandler { _, throwable ->
+        AppActorLogger.error("Unexpected error in an AppActor background task.", throwable)
+    }
 
 internal fun throwIfCancellation(throwable: Throwable) {
     if (throwable is kotlinx.coroutines.CancellationException) {

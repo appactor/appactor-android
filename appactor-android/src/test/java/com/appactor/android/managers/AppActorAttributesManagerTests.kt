@@ -538,6 +538,58 @@ class AppActorAttributesManagerTests {
     }
 
     @Test
+    fun `a rejected attribution saved as the merge base before this version is cleared`() = runBlocking {
+        val backend = FakeAttributesBackendClient(attributionStatus = 400)
+        val store = InMemoryAttributeQueueStore()
+        // Older versions saved the snapshot when an attribution was queued, not when delivered.
+        val rejected = AppActorAttributionRequestDTO(provider = "custom", adName = "rejected_ad")
+        store.save("user_a", AppActorQueuedAttributeMutation(attribution = rejected))
+        store.saveAttributionSnapshot("user_a", rejected)
+        val manager = manager(backend, store)
+
+        manager.flushPending("user_a")
+        backend.attributionStatus = null
+        manager.updateCustomAttribution(
+            "user_a",
+            AppActorAttribution(provider = "custom", campaignName = "spring_sale", campaign = "spring_sale"),
+        )
+
+        val request = backend.attributionRequests.single().second
+        assertEquals("spring_sale", request.campaign)
+        assertNull(request.adName)
+    }
+
+    @Test
+    fun `a flush that ends after a reset writes nothing back`() = runBlocking {
+        val store = InMemoryAttributeQueueStore()
+        val backend = FakeAttributesBackendClient(onAttributionPosted = { store.clearAll() })
+        val manager = manager(backend, store)
+
+        manager.updateAttribution("user_a", AppActorAttribution(provider = "custom", source = "facebook"))
+
+        assertNull(store.load("user_a"))
+        assertNull(store.loadAttributionSnapshot("user_a"))
+    }
+
+    @Test
+    fun `one user's failed flush does not hold back the other users`() = runBlocking {
+        val backend = FakeAttributesBackendClient(failMutations = true)
+        val store = InMemoryAttributeQueueStore()
+        val manager = manager(backend, store)
+        manager.setAttribute("user_a", "tier", AppActorAttributeValue.string("gold"))
+        manager.setAttribute("user_b", "tier", AppActorAttributeValue.string("silver"))
+
+        backend.failMutations = false
+        backend.missingUserIds = setOf("user_a")
+        val failure = runCatching { manager.flushPendingForAllUsers() }.exceptionOrNull()
+
+        assertNotNull(failure)
+        assertEquals(listOf("user_b"), backend.patchRequests.map { it.first })
+        assertNotNull(store.load("user_a"))
+        assertNull(store.load("user_b"))
+    }
+
+    @Test
     fun `unsetting an attribute of a user the server does not know yet is done`() = runBlocking {
         val backend = FakeAttributesBackendClient(deleteAttributeStatus = 404)
         val store = InMemoryAttributeQueueStore()
@@ -621,6 +673,9 @@ class AppActorAttributesManagerTests {
         var rejectedAttributeKeys: Set<String> = emptySet(),
         var attributionStatus: Int? = null,
         var deleteAttributeStatus: Int? = null,
+        /** PATCHes for these users fail with a 404, which is not a rejected payload. */
+        var missingUserIds: Set<String> = emptySet(),
+        var onAttributionPosted: () -> Unit = {},
     ) : AppActorBackendClient {
         var patchAttempts = 0
         val patchRequests = mutableListOf<Pair<String, AppActorAttributesPatchRequestDTO>>()
@@ -641,6 +696,7 @@ class AppActorAttributesManagerTests {
             request: AppActorAttributesPatchRequestDTO,
         ): AppActorBackendHttpResponse<Unit> {
             patchAttempts += 1
+            if (appUserId in missingUserIds) throw AppActorBackendException.Http(statusCode = 404)
             if (request.attributes.keys.any { it in rejectedAttributeKeys }) {
                 throw AppActorBackendException.Http(statusCode = 409)
             }
@@ -675,6 +731,7 @@ class AppActorAttributesManagerTests {
         ): AppActorBackendHttpResponse<Unit> = mutation {
             attributionStatus?.let { throw AppActorBackendException.Http(statusCode = it) }
             attributionRequests += appUserId to request
+            onAttributionPosted()
         }
 
         private fun mutation(block: () -> Unit): AppActorBackendHttpResponse<Unit> {

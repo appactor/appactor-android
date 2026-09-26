@@ -532,7 +532,10 @@ public object AppActor {
             currentRuntime.paymentProcessor.beginIdentityTransition()
             val info = try {
                 currentRuntime.paymentProcessor.drainAll()
-                flushAttributesBeforeIdentityTransition(currentRuntime, currentAppUserId)
+                // As on iOS, the outgoing user's writes must not block the switch.
+                flushAttributesBestEffort("before the identity change") {
+                    currentRuntime.attributesManager.flushPending(currentAppUserId)
+                }
                 if (currentAppUserId != newAppUserId) {
                     currentRuntime.customerManager.clearCache(currentAppUserId)
                 }
@@ -593,7 +596,10 @@ public object AppActor {
             currentRuntime.paymentProcessor.beginIdentityTransition()
             val callbacks = try {
                 currentRuntime.paymentProcessor.drainAll()
-                flushAttributesBeforeIdentityTransition(currentRuntime, currentAppUserId)
+                // As on iOS, the outgoing user's writes must not block the switch.
+                flushAttributesBestEffort("before the identity change") {
+                    currentRuntime.attributesManager.flushPending(currentAppUserId)
+                }
                 currentRuntime.customerManager.clearCache(currentAppUserId)
                 currentRuntime.remoteConfigManager.clearCache(currentAppUserId)
                 currentRuntime.experimentManager.clearCache(currentAppUserId)
@@ -1224,32 +1230,23 @@ public object AppActor {
         runtime = newRuntime
         val flushRuntime = newRuntime
         flushRuntime.scope.launch {
-            try {
+            // A failure here (an invalid API key's 401, say) used to crash the app.
+            flushAttributesBestEffort("after configure") {
                 flushRuntime.attributesManager.flushPendingForAllUsers()
-            } catch (throwable: Throwable) {
-                // Nothing catches above this launch, so a failure (an invalid API key's 401, say)
-                // would crash the app. The writes stay queued for the next flush.
-                throwIfCancellation(throwable)
-                AppActorLogger.warn("Attribute flush after configure failed: ${throwable.message}")
             }
         }
     }
 
-    /**
-     * Sends the outgoing user's queued attribute writes before the identity changes. Best effort,
-     * as on iOS: a failure leaves them queued for that user and must not block the switch.
-     */
-    private suspend fun flushAttributesBeforeIdentityTransition(
-        currentRuntime: AppActorRuntimeState,
-        appUserId: String,
+    /** Runs an attribute flush whose failure only leaves the writes queued for a later flush. */
+    private suspend fun flushAttributesBestEffort(
+        occasion: String,
+        flush: suspend () -> Unit,
     ) {
         try {
-            currentRuntime.attributesManager.flushPending(appUserId)
+            flush()
         } catch (throwable: Throwable) {
             throwIfCancellation(throwable)
-            AppActorLogger.warn(
-                "Attribute flush before the identity change failed; the writes stay queued: ${throwable.message}"
-            )
+            AppActorLogger.warn("Attribute flush $occasion failed; the writes stay queued: ${throwable.message}")
         }
     }
 

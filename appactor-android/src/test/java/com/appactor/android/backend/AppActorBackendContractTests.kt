@@ -16,6 +16,7 @@ import com.appactor.android.backend.mappers.toResult
 import com.appactor.android.models.AppActorPackageType
 import com.appactor.android.models.AppActorProductType
 import com.appactor.android.models.AppActorStore
+import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -168,23 +169,15 @@ class AppActorBackendContractTests {
     @Test
     fun `customer with a null product id still decodes`() {
         // The backend sends null once a product row is gone, e.g. after its app was deleted.
-        val customer = """
-            {
-              "entitlements": {},
-              "subscriptions": { "premium": { "isActive": false, "store": "app_store", "productId": null } },
-              "nonSubscriptions": { "coins": [ { "store": "play_store", "productId": null } ] }
-            }
-        """.trimIndent()
+        val payload = fixture("fixtures/backend/customer_null_product_id.json")
 
         // The customer envelope goes through its own serializer (a tree decoder)...
-        val envelope = AppActorBackendJson.instance.decodeFromString<AppActorCustomerEnvelopeDTO>(
-            """{ "requestId": "req_null_product", "appUserId": "user_a", "customer": $customer }"""
-        )
-        val info = envelope.toModel()
+        val info = AppActorBackendJson.instance.decodeFromString<AppActorCustomerEnvelopeDTO>(payload).toModel()
         assertEquals("", info.subscriptions["premium"]?.productIdentifier)
         assertEquals("", info.nonSubscriptions["coins"]?.single()?.productIdentifier)
 
         // ...while a receipt response embeds the customer through the generated (streaming) one.
+        val customer = AppActorBackendJson.instance.parseToJsonElement(payload).jsonObject.getValue("customer")
         val receipt = AppActorBackendJson.instance.decodeFromString<AppActorGoogleReceiptResponseDTO>(
             """{ "status": "ok", "requestId": "req_null_product", "customer": $customer }"""
         )

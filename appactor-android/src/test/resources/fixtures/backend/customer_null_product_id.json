@@ -1,0 +1,34 @@
+{
+  "requestDate": "2026-09-26T12:00:00.000Z",
+  "requestDateMs": 1790424000000,
+  "requestId": "req_android_customer_null_product_001",
+  "appUserId": "user_android_123",
+  "customer": {
+    "managementUrl": null,
+    "tokenBalance": null,
+    "firstSeen": "2026-01-10T09:00:00.000Z",
+    "lastSeen": "2026-09-26T11:55:00.000Z",
+    "entitlements": {},
+    "subscriptions": {
+      "premium": {
+        "isActive": false,
+        "status": "expired",
+        "expiresAt": "2026-08-10T09:00:00.000Z",
+        "purchaseDate": "2026-07-10T09:00:00.000Z",
+        "store": "app_store",
+        "productId": null,
+        "isSandbox": false
+      }
+    },
+    "nonSubscriptions": {
+      "coins": [
+        {
+          "purchaseDate": "2026-07-01T09:00:00.000Z",
+          "store": "play_store",
+          "productId": null,
+          "isConsumable": true
+        }
+      ]
+    }
+  }
+}

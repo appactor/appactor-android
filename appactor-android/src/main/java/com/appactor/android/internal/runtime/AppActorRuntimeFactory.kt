@@ -60,7 +60,7 @@ internal class AppActorRuntimeFactory(
         val remoteConfigsCacheStore = AppActorRemoteConfigsCacheStore(eTagManager)
         val experimentCacheStore = AppActorExperimentCacheStore(eTagManager)
         val attributeQueueStore = AppActorSharedPrefsAttributeQueueStore(configuration.applicationContext)
-        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default + appActorBackgroundExceptionHandler)
         val offeringsManager = AppActorOfferingsManager(
             backendClient = backendClient,
             cacheStore = offeringsCacheStore,
