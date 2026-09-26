@@ -713,6 +713,56 @@ class GooglePlayStoreAdapterTests {
     }
 
     @Test
+    fun `query active purchases sends a subscription without a cached base plan`() = kotlinx.coroutines.runBlocking {
+        val basePlan = { basePlanId: String, price: Long ->
+            AppActorBillingSubscriptionOfferPayload(
+                basePlanId = basePlanId,
+                offerId = null,
+                offerToken = "$basePlanId-token",
+                pricingPhases = listOf(AppActorPricingPhase(priceAmountMicros = price, currencyCode = "USD")),
+            )
+        }
+        val (billingClient, _) = createMockBillingClient(
+            productDetails = listOf(
+                AppActorBillingProductDetailsPayload(
+                    productId = "com.appactor.pro",
+                    productType = AppActorProductType.Subscription,
+                    subscriptionOffers = listOf(basePlan("monthly", 4_990_000), basePlan("annual", 39_990_000)),
+                )
+            ),
+            activePurchasesByType = mapOf(
+                AppActorProductType.Subscription to listOf(
+                    AppActorBillingPurchasePayload(
+                        products = listOf("com.appactor.pro"),
+                        productType = AppActorProductType.Subscription,
+                        purchaseToken = "annual_token",
+                        purchaseTimeMillis = 1_710_000_000_000,
+                        purchaseState = AppActorStorePurchaseState.Purchased,
+                        isAcknowledged = true,
+                    )
+                )
+            ),
+        )
+        val adapter = GooglePlayStoreAdapter(context, billingClient)
+        adapter.queryProductDetails(
+            listOf("monthly", "annual").map { basePlanId ->
+                AppActorStoreProductRequest(
+                    productId = "com.appactor.pro",
+                    productType = AppActorProductType.Subscription,
+                    basePlanId = basePlanId,
+                )
+            }
+        )
+
+        val purchase = adapter.queryActivePurchases().single()
+
+        assertEquals(AppActorProductType.Subscription, purchase.productType)
+        assertNull(purchase.basePlanId)
+        assertNull(purchase.offerId)
+        assertNull(purchase.priceAmountMicros)
+    }
+
+    @Test
     fun `resolve direct purchase request fails when underspecified subscription target is ambiguous`() = kotlinx.coroutines.runBlocking {
         val (billingClient, _) = createMockBillingClient(
             productDetails = listOf(

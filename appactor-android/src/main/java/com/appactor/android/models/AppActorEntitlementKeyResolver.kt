@@ -49,7 +49,24 @@ internal object AppActorEntitlementKeyResolver {
                 productEntitlements[flatKey].orEmpty()
             }
 
+            compoundKey == null -> entitlementsSharedByEveryBasePlan(productId, productEntitlements)
+
             else -> emptyList()
         }
+    }
+
+    // A subscription seen outside the purchase flow carries no base plan: Play does not report
+    // it. Grant only what every base plan of the product grants, which holds whichever plan
+    // the user is on.
+    private fun entitlementsSharedByEveryBasePlan(
+        productId: String,
+        productEntitlements: Map<String, List<String>>,
+    ): List<String> {
+        val basePlanKeyPrefix = "android:$productId:"
+        return productEntitlements
+            .filterKeys { key -> key.startsWith(basePlanKeyPrefix) && ':' !in key.removePrefix(basePlanKeyPrefix) }
+            .values
+            .reduceOrNull { shared, entitlements -> shared.filter { it in entitlements } }
+            .orEmpty()
     }
 }

@@ -129,7 +129,7 @@ internal class GooglePlayStoreAdapter(
                             productType = payload.productType,
                             obfuscatedAccountId = payload.obfuscatedAccountId,
                         )
-                        payload.toStorePurchase(resolvedRequest)
+                        payload.toStorePurchase(resolvedRequest.withoutSubscriptionPlan())
                     }
                 }
             }
@@ -231,26 +231,9 @@ internal class GooglePlayStoreAdapter(
         val inAppPurchases = billingClient.queryPurchases(AppActorProductType.NonConsumable)
         return (subscriptions + inAppPurchases).flatMap { payload ->
             payload.products.map { productId ->
-                val matchedRequest = resolvedProductsByKey.entries
-                    .firstOrNull { (_, resolved) -> resolved.product.productId == productId }
-                    ?.value
-                val inferredRequest = matchedRequest?.toRequest(obfuscatedAccountId = payload.obfuscatedAccountId)
-                    ?: runCatching {
-                        resolveDirectPurchaseRequest(
-                            recoveryRequest(
-                                productId = productId,
-                                payloadProductType = payload.productType,
-                                obfuscatedAccountId = payload.obfuscatedAccountId,
-                            )
-                        )
-                    }.getOrNull()
-                val resolvedRequest = inferredRequest
-                    ?: recoveryRequest(
-                        productId = productId,
-                        payloadProductType = payload.productType,
-                        obfuscatedAccountId = payload.obfuscatedAccountId,
-                    )
-                payload.toStorePurchase(resolvedRequest)
+                payload.toStorePurchase(
+                    inferPurchaseRequest(productId, payload.productType, payload.obfuscatedAccountId)
+                )
             }
         }
     }
@@ -261,27 +244,30 @@ internal class GooglePlayStoreAdapter(
         val inAppHistory = billingClient.queryPurchaseHistory(AppActorProductType.NonConsumable)
         return (subscriptions + inAppHistory).flatMap { payload ->
             payload.products.map { productId ->
-                val matchedRequest = resolvedProductsByKey.entries
-                    .firstOrNull { (_, resolved) -> resolved.product.productId == productId }
-                    ?.value
-                val inferredRequest = matchedRequest?.toRequest(obfuscatedAccountId = payload.obfuscatedAccountId)
-                    ?: runCatching {
-                        resolveDirectPurchaseRequest(
-                            recoveryRequest(
-                                productId = productId,
-                                payloadProductType = payload.productType,
-                                obfuscatedAccountId = payload.obfuscatedAccountId,
-                            )
-                        )
-                    }.getOrNull()
-                    ?: recoveryRequest(
-                        productId = productId,
-                        payloadProductType = payload.productType,
-                        obfuscatedAccountId = payload.obfuscatedAccountId,
-                    )
-                payload.toHistoryRecord(inferredRequest)
+                payload.toHistoryRecord(
+                    inferPurchaseRequest(productId, payload.productType, payload.obfuscatedAccountId)
+                )
             }
         }
+    }
+
+    /** Labels a Play purchase seen outside the purchase flow from the product catalog. */
+    private suspend fun inferPurchaseRequest(
+        productId: String,
+        payloadProductType: AppActorProductType,
+        obfuscatedAccountId: String?,
+    ): AppActorStoreProductRequest {
+        val recovery = recoveryRequest(
+            productId = productId,
+            payloadProductType = payloadProductType,
+            obfuscatedAccountId = obfuscatedAccountId,
+        )
+        val inferred = resolvedProductsByKey.values
+            .firstOrNull { resolved -> resolved.product.productId == productId }
+            ?.toRequest(obfuscatedAccountId = obfuscatedAccountId)
+            ?: runCatching { resolveDirectPurchaseRequest(recovery) }.getOrNull()
+            ?: recovery
+        return inferred.withoutSubscriptionPlan()
     }
 
     override suspend fun acknowledgePurchase(purchaseToken: String) {
@@ -651,6 +637,17 @@ private fun AppActorStoreProductRequest.fallbackRequestKey(): String {
         productId = productId,
         productType = productType,
     ).cacheKey()
+}
+
+/**
+ * A Play purchase lists product ids but no base plan or offer. Outside the purchase flow a
+ * subscription is therefore sent without them and the backend reads them from Google: a
+ * catalog guess mislabels subscribers of every other base plan, and the backend rejects a
+ * base plan or offer that does not match.
+ */
+private fun AppActorStoreProductRequest.withoutSubscriptionPlan(): AppActorStoreProductRequest {
+    if (productType != AppActorProductType.Subscription) return this
+    return copy(basePlanId = null, offerId = null, priceAmountMicros = null, currencyCode = null)
 }
 
 private fun recoveryRequest(
