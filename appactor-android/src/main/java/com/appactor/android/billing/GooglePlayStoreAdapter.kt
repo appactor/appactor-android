@@ -17,6 +17,8 @@ internal class GooglePlayStoreAdapter(
     private val billingClient: AppActorGoogleBillingClient = GooglePlayBillingClientBridge(context),
 ) : AppActorStoreAdapter {
 
+    // Keyed by the offer each product resolved to, never by the request: a package shows the
+    // resolved offer, and two requests can share a key while resolving to different offers.
     private val resolvedProductsByKey = ConcurrentHashMap<String, ResolvedProduct>()
 
     override suspend fun connect() {
@@ -44,6 +46,14 @@ internal class GooglePlayStoreAdapter(
     override suspend fun queryProductDetails(
         requests: List<AppActorStoreProductRequest>,
     ): List<AppActorStoreProduct> {
+        return resolveProducts(requests).map { (request, resolved) ->
+            resolved.product.copy(sourceRequest = request)
+        }
+    }
+
+    private suspend fun resolveProducts(
+        requests: List<AppActorStoreProductRequest>,
+    ): List<Pair<AppActorStoreProductRequest, ResolvedProduct>> {
         if (requests.isEmpty()) return emptyList()
         connect()
 
@@ -56,20 +66,19 @@ internal class GooglePlayStoreAdapter(
                 logUnresolvedRequest(request, payloads)
                 return@mapNotNull null
             }
-            resolvedProductsByKey[request.cacheKey()] = resolved
-            resolved.product
+            cacheResolvedProduct(resolved)
+            request to resolved
         }
     }
 
+    // A package request names the offer the package shows, so a cached entry is that exact offer.
     override suspend fun launchPurchase(
         activity: Activity,
         request: AppActorStoreProductRequest,
     ): AppActorStorePurchaseLaunchResult {
         connect()
         val resolved = resolvedProductsByKey[request.cacheKey()]
-            ?: queryProductDetails(listOf(request))
-                .firstOrNull()
-                ?.let { resolvedProductsByKey[request.cacheKey()] }
+            ?: resolveProducts(listOf(request)).firstOrNull()?.second
             ?: throw AppActorError.InvalidConfiguration(
                 "No Google Play product details available for ${request.productId}."
             )
@@ -163,7 +172,7 @@ internal class GooglePlayStoreAdapter(
                     basePlanId = resolved.product.basePlanId,
                     offerId = resolved.product.offerId,
                 )
-                cacheResolvedProduct(request, resolvedRequest, resolved)
+                cacheResolvedProduct(resolved)
                 return resolvedRequest
             }
 
@@ -174,7 +183,7 @@ internal class GooglePlayStoreAdapter(
                     )
                 validateExplicitOneTimeProductType(request)
                 val resolved = resolveOneTimePayload(payload, request)
-                cacheResolvedProduct(request, request, resolved)
+                cacheResolvedProduct(resolved)
                 return request
             }
 
@@ -204,7 +213,7 @@ internal class GooglePlayStoreAdapter(
             )
             val resolved = resolveSubscriptionPayload(subscriptionPayload, resolvedRequest)
                 ?: throw AppActorError.InvalidConfiguration("No Play subscription offer found for $productId.")
-            cacheResolvedProduct(request, resolvedRequest, resolved)
+            cacheResolvedProduct(resolved)
             return resolvedRequest
         }
 
@@ -218,7 +227,7 @@ internal class GooglePlayStoreAdapter(
                 productType = oneTimeProductType,
             )
             val resolved = resolveOneTimePayload(inAppPayload, resolvedRequest)
-            cacheResolvedProduct(request, resolvedRequest, resolved)
+            cacheResolvedProduct(resolved)
             return resolvedRequest
         }
 
@@ -568,15 +577,8 @@ internal class GooglePlayStoreAdapter(
         }
     }
 
-    private fun cacheResolvedProduct(
-        originalRequest: AppActorStoreProductRequest,
-        resolvedRequest: AppActorStoreProductRequest,
-        resolvedProduct: ResolvedProduct,
-    ) {
-        resolvedProductsByKey[resolvedRequest.cacheKey()] = resolvedProduct
-        if (originalRequest.cacheKey() != resolvedRequest.cacheKey()) {
-            resolvedProductsByKey[originalRequest.cacheKey()] = resolvedProduct
-        }
+    private fun cacheResolvedProduct(resolvedProduct: ResolvedProduct) {
+        resolvedProductsByKey[resolvedProduct.toRequest().cacheKey()] = resolvedProduct
     }
 
     private fun logUnresolvedRequest(

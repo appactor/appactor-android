@@ -610,6 +610,61 @@ class GooglePlayStoreAdapterTests {
     }
 
     @Test
+    fun `launch purchase sells the offer the package shows when requests share a base plan`() = kotlinx.coroutines.runBlocking {
+        val (billingClient, captures) = createMockBillingClient(
+            productDetails = listOf(
+                AppActorBillingProductDetailsPayload(
+                    productId = "com.appactor.pro.monthly",
+                    productType = AppActorProductType.Subscription,
+                    subscriptionOffers = listOf(
+                        AppActorBillingSubscriptionOfferPayload(
+                            basePlanId = "monthly001",
+                            offerId = null,
+                            offerToken = "base-plan-token",
+                            pricingPhases = listOf(AppActorPricingPhase(priceAmountMicros = 9_990_000, currencyCode = "USD")),
+                        ),
+                        AppActorBillingSubscriptionOfferPayload(
+                            basePlanId = "monthly001",
+                            offerId = "trial7d",
+                            offerToken = "trial-token",
+                            pricingPhases = listOf(
+                                AppActorPricingPhase(billingPeriod = "P1W", priceAmountMicros = 0, currencyCode = "USD"),
+                                AppActorPricingPhase(priceAmountMicros = 9_990_000, currencyCode = "USD"),
+                            ),
+                        ),
+                    ),
+                )
+            ),
+        )
+        val adapter = GooglePlayStoreAdapter(context, billingClient)
+        val pinnedUnavailable = AppActorStoreProductRequest(
+            productId = "com.appactor.pro.monthly",
+            productType = AppActorProductType.Subscription,
+            basePlanId = "monthly001",
+            offerId = "intro7d",
+        )
+        val unpinned = pinnedUnavailable.copy(offerId = null)
+        val (degraded, autoSelected) = adapter.queryProductDetails(listOf(pinnedUnavailable, unpinned))
+        assertNull(degraded.offerId)
+        assertEquals(pinnedUnavailable, degraded.sourceRequest)
+        assertEquals("trial7d", autoSelected.offerId)
+        assertEquals(unpinned, autoSelected.sourceRequest)
+
+        // A package purchase names the offer the package shows (toResolvedPurchaseTarget).
+        adapter.launchPurchase(
+            Activity(),
+            AppActorStoreProductRequest(
+                productId = degraded.productId,
+                productType = degraded.productType,
+                basePlanId = degraded.basePlanId,
+                offerId = degraded.offerId,
+            ),
+        )
+
+        assertEquals("base-plan-token", captures.lastLaunchOfferToken)
+    }
+
+    @Test
     fun `launch purchase maps one time price snapshot onto purchase`() = kotlinx.coroutines.runBlocking {
         val (billingClient, _) = createMockBillingClient(
             productDetails = listOf(

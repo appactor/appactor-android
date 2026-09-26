@@ -66,6 +66,11 @@ internal data class AppActorStoreProduct(
     val description: String? = null,
     /** Ordered pricing phases of the resolved subscription offer; empty for one-time products. */
     val pricingPhases: List<AppActorPricingPhase> = emptyList(),
+    /**
+     * The request this product was resolved for. It can name a different offer than the product:
+     * offer auto-selection, or the base-plan fallback for an unavailable pinned offer.
+     */
+    val sourceRequest: AppActorStoreProductRequest? = null,
 )
 
 internal enum class AppActorStorePurchaseState {
