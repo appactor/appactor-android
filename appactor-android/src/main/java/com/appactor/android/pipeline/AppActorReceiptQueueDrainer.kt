@@ -305,21 +305,25 @@ internal class AppActorReceiptQueueDrainer(
             }
         } catch (throwable: Throwable) {
             if (throwable is CancellationException) throw throwable
-            if (throwable is AppActorBackendException.Http && throwable.statusCode in 400..499) {
+            val httpError = throwable as? AppActorBackendException.Http
+            val isRateLimited = httpError?.statusCode == 429
+            // A 429 is the backend's rate limiter answering `retryable_error`. Dead-lettering it
+            // would consume or acknowledge a purchase the backend never recorded.
+            if (httpError != null && httpError.statusCode in 400..499 && !isRateLimited) {
                 deadLetter(
                     item = normalizedItem,
-                    code = throwable.error?.code ?: throwable.statusCode.toString(),
-                    message = throwable.error?.message ?: throwable.message,
+                    code = httpError.error?.code ?: httpError.statusCode.toString(),
+                    message = httpError.error?.message ?: httpError.message,
                 )
                 ProcessingOutcome.PermanentFailure(
-                    code = throwable.error?.code,
-                    message = throwable.error?.message ?: throwable.message,
+                    code = httpError.error?.code,
+                    message = httpError.error?.message ?: httpError.message,
                 )
             } else {
                 scheduleRetryOrDeadLetter(
                     item = normalizedItem,
-                    retryAfterSeconds = null,
-                    errorCode = (throwable as? AppActorBackendException.Http)?.error?.code,
+                    retryAfterSeconds = httpError?.retryAfterSeconds,
+                    errorCode = httpError?.error?.code ?: if (isRateLimited) RATE_LIMIT_EXCEEDED else null,
                     errorMessage = throwable.message,
                 )
             }
@@ -382,7 +386,7 @@ internal class AppActorReceiptQueueDrainer(
             retryCount = nextRetryCount,
             retryAfterSeconds = retryAfterSeconds,
         )
-        if (errorCode == "RATE_LIMIT" || errorCode == "RATE_LIMIT_EXCEEDED") {
+        if (errorCode == "RATE_LIMIT" || errorCode == RATE_LIMIT_EXCEEDED) {
             queueStore.setRateLimitCooldownMillis(nextRetryAt)
         }
         val updated = item.copy(
@@ -534,5 +538,6 @@ internal class AppActorReceiptQueueDrainer(
         const val SOURCE_INTENT_RESTORE = "restore"
         const val SOURCE_INTENT_SYNC = "sync"
         const val SOURCE_INTENT_QUEUE = "queue"
+        const val RATE_LIMIT_EXCEEDED = "RATE_LIMIT_EXCEEDED"
     }
 }

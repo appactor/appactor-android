@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.appactor.android.backend.client.AppActorBackendClient
+import com.appactor.android.backend.client.AppActorBackendException
 import com.appactor.android.backend.client.AppActorBackendHttpResponse
 import com.appactor.android.backend.client.AppActorBackendJson
 import com.appactor.android.backend.dto.AppActorCustomerEnvelopeDTO
@@ -371,6 +372,34 @@ class AppActorPaymentProcessorTests {
         assertTrue(snapshot.single().lastError?.isNotBlank() == true)
         assertEquals(listOf("token_123"), dependencies.acknowledgedTokens)
         assertTrue(dependencies.ledgerStore.isPosted("google:com.appactor.pro.monthly:monthly001:token_123"))
+    }
+
+    @Test
+    fun `rate limited receipt stays queued without finishing the purchase`() = runBlocking {
+        val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
+        val dependencies = createDependencies(
+            receiptResponse = AppActorBackendHttpResponse(
+                body = receiptResponse,
+                statusCode = 200,
+                requestId = receiptResponse.requestId,
+                signatureVerified = true,
+            )
+        )
+        coEvery { dependencies.backendClient.postGoogleReceipt(any()) } throws AppActorBackendException.Http(
+            statusCode = 429,
+            requestId = "req_rate_limited",
+            retryAfterSeconds = 30.0,
+        )
+
+        val result = dependencies.processor.purchase(Activity(), monthlyPackage())
+
+        assertTrue((result as AppActorPurchaseResult.Success).customerInfo.isComputedOffline)
+        val queued = dependencies.queueStore.snapshot().single()
+        assertEquals(com.appactor.android.storage.AppActorReceiptQueuePhase.NeedsPost, queued.phase)
+        assertTrue(dependencies.acknowledgedTokens.isEmpty())
+        assertTrue(dependencies.consumedTokens.isEmpty())
+        assertFalse(dependencies.ledgerStore.isPosted("google:com.appactor.pro.monthly:monthly001:token_123"))
+        assertTrue((dependencies.queueStore.getRateLimitCooldownMillis() ?: 0L) > System.currentTimeMillis())
     }
 
     @Test
