@@ -14,7 +14,9 @@ package com.appactor.android.api {
     method public com.appactor.android.models.AppActorCustomerInfo getCustomerInfo();
     method public suspend Object? getCustomerInfo(kotlin.coroutines.Continuation<? super com.appactor.android.models.AppActorCustomerInfo>);
     method public kotlinx.coroutines.flow.StateFlow<com.appactor.android.models.AppActorCustomerInfo> getCustomerInfoFlow();
+    method public suspend Object? getExperiment(String experimentKey, kotlin.coroutines.Continuation<? super com.appactor.android.models.AppActorExperiment>);
     method public suspend Object? getExperimentAssignment(String experimentKey, kotlin.coroutines.Continuation<? super com.appactor.android.models.AppActorExperimentAssignment?>);
+    method public suspend Object? getOffering(String offeringKey, optional com.appactor.android.models.AppActorOfferingsFetchPolicy fetchPolicy, kotlin.coroutines.Continuation<? super com.appactor.android.models.AppActorOffering?>);
     method public kotlin.jvm.functions.Function1<com.appactor.android.models.AppActorCustomerInfo,kotlin.Unit>? getOnCustomerInfoChanged();
     method public kotlin.jvm.functions.Function2<java.lang.String,com.appactor.android.models.AppActorCustomerInfo,kotlin.Unit>? getOnDeferredPurchaseResolved();
     method public kotlin.jvm.functions.Function1<com.appactor.android.models.AppActorReceiptPipelineEvent,kotlin.Unit>? getOnReceiptPipelineEvent();
@@ -111,9 +113,17 @@ package com.appactor.android.api {
     method public static void getCustomerInfo(optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorCustomerInfo>? onSuccess, optional com.appactor.android.models.AppActorBridgeErrorCallback? onError);
     method public static com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorCustomerInfo>? getCustomerInfoListener();
     method public static kotlin.jvm.functions.Function2<java.lang.String,com.appactor.android.models.AppActorCustomerInfo,kotlin.Unit>? getDeferredPurchaseListener();
+    method public static void getExperiment(String experimentKey);
+    method public static void getExperiment(String experimentKey, optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorExperiment>? onSuccess);
+    method public static void getExperiment(String experimentKey, optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorExperiment>? onSuccess, optional com.appactor.android.models.AppActorBridgeErrorCallback? onError);
     method public static void getExperimentAssignment(String experimentKey);
     method public static void getExperimentAssignment(String experimentKey, optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorExperimentAssignment?>? onSuccess);
     method public static void getExperimentAssignment(String experimentKey, optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorExperimentAssignment?>? onSuccess, optional com.appactor.android.models.AppActorBridgeErrorCallback? onError);
+    method public static void getOffering(String offeringKey);
+    method public static void getOffering(String offeringKey, optional com.appactor.android.models.AppActorOfferingsFetchPolicy fetchPolicy);
+    method public static void getOffering(String offeringKey, optional com.appactor.android.models.AppActorOfferingsFetchPolicy fetchPolicy, optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorOffering?>? onSuccess);
+    method public static void getOffering(String offeringKey, optional com.appactor.android.models.AppActorOfferingsFetchPolicy fetchPolicy, optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorOffering?>? onSuccess, optional com.appactor.android.models.AppActorBridgeErrorCallback? onError);
+    method public static void getOffering(String offeringKey, com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorOffering?>? onSuccess, com.appactor.android.models.AppActorBridgeErrorCallback? onError);
     method public static void getOfferings();
     method public static void getOfferings(optional com.appactor.android.models.AppActorOfferingsFetchPolicy fetchPolicy);
     method public static void getOfferings(optional com.appactor.android.models.AppActorOfferingsFetchPolicy fetchPolicy, optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorOfferings>? onSuccess);
@@ -258,6 +268,8 @@ package com.appactor.android.api {
     method public static void drainReceiptQueueAndRefreshCustomerAsync(optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorCustomerInfo>? onSuccess, optional com.appactor.android.models.AppActorErrorCallback? onError);
     method public static void getCustomerInfoAsync(optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorCustomerInfo>? onSuccess, optional com.appactor.android.models.AppActorErrorCallback? onError);
     method public static void getExperimentAssignmentAsync(String experimentKey, optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorExperimentAssignment?>? onSuccess, optional com.appactor.android.models.AppActorErrorCallback? onError);
+    method public static void getExperimentAsync(String experimentKey, optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorExperiment>? onSuccess, optional com.appactor.android.models.AppActorErrorCallback? onError);
+    method public static void getOfferingAsync(String offeringKey, optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorOffering?>? onSuccess, optional com.appactor.android.models.AppActorErrorCallback? onError);
     method public static void getOfferingsAsync(optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorOfferings>? onSuccess, optional com.appactor.android.models.AppActorErrorCallback? onError);
     method public static void getRemoteConfigsAsync(optional com.appactor.android.models.AppActorSuccessCallback<com.appactor.android.models.AppActorRemoteConfigs>? onSuccess, optional com.appactor.android.models.AppActorErrorCallback? onError);
     method public static void getStoreCapabilitiesAsync(optional com.appactor.android.models.AppActorSuccessCallback<java.util.Set<com.appactor.android.models.AppActorStoreCapability>>? onSuccess, optional com.appactor.android.models.AppActorErrorCallback? onError);
@@ -996,6 +1008,29 @@ package com.appactor.android.models {
     method public void onError(com.appactor.android.models.AppActorError error);
   }
 
+  public final class AppActorExperiment {
+    ctor public AppActorExperiment(String experimentKey, com.appactor.android.models.AppActorExperimentAssignment? assignment);
+    method public boolean boolValue(boolean defaultValue);
+    method public String component1();
+    method public com.appactor.android.models.AppActorExperimentAssignment? component2();
+    method public com.appactor.android.models.AppActorExperiment copy(String experimentKey, com.appactor.android.models.AppActorExperimentAssignment? assignment);
+    method public double doubleValue(double defaultValue);
+    method public operator com.appactor.android.models.AppActorConfigValue? get(String key);
+    method public com.appactor.android.models.AppActorExperimentAssignment? getAssignment();
+    method public String getExperimentKey();
+    method public com.appactor.android.models.AppActorConfigValue getPayload();
+    method public String? getVariantKey();
+    method public int intValue(int defaultValue);
+    method public boolean isEnrolled();
+    method public boolean isVariant(String variantKey);
+    method public String stringValue(String defaultValue);
+    property public final com.appactor.android.models.AppActorExperimentAssignment? assignment;
+    property public final String experimentKey;
+    property public final boolean isEnrolled;
+    property public final com.appactor.android.models.AppActorConfigValue payload;
+    property public final String? variantKey;
+  }
+
   public final class AppActorExperimentAssignment {
     ctor public AppActorExperimentAssignment(String experimentId, String experimentKey, String variantId, String variantKey, com.appactor.android.models.AppActorConfigValue payload, com.appactor.android.models.AppActorConfigValueType valueType, String assignedAt);
     method public String component1();
@@ -1120,6 +1155,7 @@ package com.appactor.android.models {
     method public String? getLookupKey();
     method public java.util.Map<java.lang.String,java.lang.Object?> getMetadata();
     method public com.appactor.android.models.AppActorPackage? getMonthly();
+    method public String getOfferingKey();
     method public java.util.List<com.appactor.android.models.AppActorPackage> getPackages();
     method public com.appactor.android.models.AppActorPackage? getSixMonth();
     method public com.appactor.android.models.AppActorPackage? getThreeMonth();
@@ -1135,6 +1171,7 @@ package com.appactor.android.models {
     property public final String? lookupKey;
     property public final java.util.Map<java.lang.String,java.lang.Object?> metadata;
     property public final com.appactor.android.models.AppActorPackage? monthly;
+    property public final String offeringKey;
     property public final java.util.List<com.appactor.android.models.AppActorPackage> packages;
     property public final com.appactor.android.models.AppActorPackage? sixMonth;
     property public final com.appactor.android.models.AppActorPackage? threeMonth;
@@ -1149,13 +1186,16 @@ package com.appactor.android.models {
     method public java.util.Map<java.lang.String,java.util.List<java.lang.String>> component3();
     method public com.appactor.android.models.AppActorVerificationResult component4();
     method public com.appactor.android.models.AppActorOfferings copy(com.appactor.android.models.AppActorOffering? current, java.util.Map<java.lang.String,com.appactor.android.models.AppActorOffering> all, java.util.Map<java.lang.String,? extends java.util.List<java.lang.String>> productEntitlements, com.appactor.android.models.AppActorVerificationResult verification);
+    method public operator com.appactor.android.models.AppActorOffering? get(String offeringKey);
     method public java.util.Map<java.lang.String,com.appactor.android.models.AppActorOffering> getAll();
+    method public java.util.List<com.appactor.android.models.AppActorOffering> getAllOfferings();
     method public com.appactor.android.models.AppActorOffering? getCurrent();
+    method public com.appactor.android.models.AppActorOffering? getOffering(String offeringKey);
     method public java.util.Map<java.lang.String,java.util.List<java.lang.String>> getProductEntitlements();
     method public com.appactor.android.models.AppActorVerificationResult getVerification();
     method public com.appactor.android.models.AppActorOffering? offering(String id);
-    method public com.appactor.android.models.AppActorOffering? offeringByLookupKey(String lookupKey);
     property public final java.util.Map<java.lang.String,com.appactor.android.models.AppActorOffering> all;
+    property public final java.util.List<com.appactor.android.models.AppActorOffering> allOfferings;
     property public final com.appactor.android.models.AppActorOffering? current;
     property public final java.util.Map<java.lang.String,java.util.List<java.lang.String>> productEntitlements;
     property public final com.appactor.android.models.AppActorVerificationResult verification;
