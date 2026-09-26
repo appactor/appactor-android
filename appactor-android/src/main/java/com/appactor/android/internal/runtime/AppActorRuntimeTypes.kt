@@ -94,8 +94,8 @@ internal val appActorBackgroundExceptionHandler: CoroutineExceptionHandler =
     }
 
 /**
- * Runs a fetch several callers share in this scope, completes [request] with its outcome, then
- * runs [cleanup]. Not in the first caller's coroutine: that caller being cancelled would fail the
+ * Runs a fetch several callers share in this scope, runs [cleanup], then completes [request] with
+ * the fetch's outcome. Not in the first caller's coroutine: that caller being cancelled would fail the
  * others, or answer the cancelled caller from a cache. Started ATOMIC so [request] completes even
  * when reset() cancelled the scope before the launch began; a cancelled scope fails it with
  * NotConfigured, since the callers awaiting it were not cancelled themselves.

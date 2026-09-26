@@ -304,7 +304,13 @@ public object AppActor {
         set(value) {
             synchronized(this) {
                 preconfiguredCallbacks = preconfiguredCallbacks.copy(onCustomerInfoChanged = value)
-                runtime = runtime?.copy(onCustomerInfoChanged = value)
+                // A new listener hasn't had any info yet.
+                runtime = runtime?.let { current ->
+                    current.copy(
+                        onCustomerInfoChanged = value,
+                        notifiedCustomerInfo = current.notifiedCustomerInfo.takeIf { value === current.onCustomerInfoChanged },
+                    )
+                }
             }
         }
 

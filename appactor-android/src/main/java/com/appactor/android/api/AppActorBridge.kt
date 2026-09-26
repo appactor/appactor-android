@@ -5,7 +5,6 @@ import android.content.Context
 import com.appactor.android.models.AppActorAttributeValue
 import com.appactor.android.models.AppActorAttribution
 import com.appactor.android.models.AppActorBridgeErrorCallback
-import com.appactor.android.models.AppActorError
 import com.appactor.android.models.AppActorBridgeReceiptEvent
 import com.appactor.android.models.AppActorConfigValue
 import com.appactor.android.models.AppActorCompletionCallback

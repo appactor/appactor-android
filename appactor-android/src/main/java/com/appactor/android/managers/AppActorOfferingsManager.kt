@@ -215,10 +215,7 @@ internal class AppActorOfferingsManager(
                     )
                     seed.source
                 } catch (throwable: Throwable) {
-                    // Those awaiting the request were not cancelled themselves.
-                    action.request.completeExceptionally(
-                        if (throwable is CancellationException) AppActorError.NotConfigured else throwable
-                    )
+                    // Cleared first, so a call made once the request fails starts its own fetch.
                     withContext(NonCancellable) {
                         stateMutex.withLock {
                             if (inFlight === action.request) {
@@ -226,6 +223,10 @@ internal class AppActorOfferingsManager(
                             }
                         }
                     }
+                    // Those awaiting the request were not cancelled themselves.
+                    action.request.completeExceptionally(
+                        if (throwable is CancellationException) AppActorError.NotConfigured else throwable
+                    )
                     throwIfCancellation(throwable)
                     AppActorLogger.debug("Bootstrap offerings prefetch failed: ${throwable.message}")
                     null
@@ -524,7 +525,7 @@ internal class AppActorOfferingsManager(
         }
     }
 
-    /** Runs [block] in the background for every caller of [request], then clears it from inFlight. */
+    /** Runs [block] in the background for every caller of [request], clearing it from inFlight first. */
     private fun launchRequest(
         request: CompletableDeferred<AppActorOfferings>,
         block: suspend () -> AppActorOfferings,
