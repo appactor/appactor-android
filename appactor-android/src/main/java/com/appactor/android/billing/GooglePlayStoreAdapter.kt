@@ -86,11 +86,11 @@ internal class GooglePlayStoreAdapter(
         val resolvedRequest = resolved.toRequest(obfuscatedAccountId = request.obfuscatedAccountId)
         return when (launchResult) {
             is AppActorBillingLaunchResult.Purchased -> AppActorStorePurchaseLaunchResult.Purchased(
-                purchases = launchResult.purchases.map { it.toStorePurchase(resolvedRequest) }
+                purchases = launchResult.purchases.flatMap { it.toLaunchedStorePurchases(resolvedRequest) }
             )
 
             is AppActorBillingLaunchResult.Pending -> AppActorStorePurchaseLaunchResult.Pending(
-                purchases = launchResult.purchases.map { it.toStorePurchase(resolvedRequest) }
+                purchases = launchResult.purchases.flatMap { it.toLaunchedStorePurchases(resolvedRequest) }
             )
 
             AppActorBillingLaunchResult.Cancelled -> AppActorStorePurchaseLaunchResult.Cancelled
@@ -664,6 +664,27 @@ private fun recoveryRequest(
         },
         obfuscatedAccountId = obfuscatedAccountId,
     )
+}
+
+/**
+ * Labels a purchase-flow result with the products Play says it holds. After a DEFERRED change to
+ * another product the new token still lists the old product until the next renewal; labelled with
+ * the requested product, the backend reads a line item that has not started and expires the
+ * subscriber's current entitlement.
+ */
+private fun AppActorBillingPurchasePayload.toLaunchedStorePurchases(
+    request: AppActorStoreProductRequest,
+): List<AppActorStorePurchase> {
+    if (products.isEmpty() || request.productId in products) return listOf(toStorePurchase(request))
+    return products.map { productId ->
+        toStorePurchase(
+            AppActorStoreProductRequest(
+                productId = productId,
+                productType = productType,
+                obfuscatedAccountId = request.obfuscatedAccountId,
+            )
+        )
+    }
 }
 
 private fun AppActorBillingPurchasePayload.toStorePurchase(

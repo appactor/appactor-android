@@ -559,6 +559,57 @@ class GooglePlayStoreAdapterTests {
     }
 
     @Test
+    fun `launch purchase labels a deferred change with the product play reports`() = kotlinx.coroutines.runBlocking {
+        val (billingClient, _) = createMockBillingClient(
+            productDetails = listOf(
+                AppActorBillingProductDetailsPayload(
+                    productId = "com.appactor.basic",
+                    productType = AppActorProductType.Subscription,
+                    subscriptionOffers = listOf(
+                        AppActorBillingSubscriptionOfferPayload(
+                            basePlanId = "monthly",
+                            offerId = null,
+                            offerToken = "basic-token",
+                            pricingPhases = listOf(AppActorPricingPhase(priceAmountMicros = 1_990_000, currencyCode = "USD")),
+                        )
+                    ),
+                )
+            ),
+            // Until the next renewal the new token still lists the product being replaced.
+            launchResult = AppActorBillingLaunchResult.Purchased(
+                purchases = listOf(
+                    AppActorBillingPurchasePayload(
+                        products = listOf("com.appactor.premium"),
+                        productType = AppActorProductType.Subscription,
+                        purchaseToken = "deferred_token",
+                        purchaseTimeMillis = 1_710_000_000_000,
+                        purchaseState = AppActorStorePurchaseState.Purchased,
+                        isAcknowledged = false,
+                    )
+                )
+            ),
+        )
+        val adapter = GooglePlayStoreAdapter(context, billingClient)
+        val request = AppActorStoreProductRequest(
+            productId = "com.appactor.basic",
+            productType = AppActorProductType.Subscription,
+            basePlanId = "monthly",
+            oldPurchaseToken = "premium_token",
+        )
+        adapter.queryProductDetails(listOf(request))
+
+        val purchase = (adapter.launchPurchase(Activity(), request) as AppActorStorePurchaseLaunchResult.Purchased)
+            .purchases
+            .single()
+
+        assertEquals("com.appactor.premium", purchase.productId)
+        assertEquals(AppActorProductType.Subscription, purchase.productType)
+        assertEquals("deferred_token", purchase.purchaseToken)
+        assertNull(purchase.basePlanId)
+        assertNull(purchase.priceAmountMicros)
+    }
+
+    @Test
     fun `launch purchase maps one time price snapshot onto purchase`() = kotlinx.coroutines.runBlocking {
         val (billingClient, _) = createMockBillingClient(
             productDetails = listOf(
