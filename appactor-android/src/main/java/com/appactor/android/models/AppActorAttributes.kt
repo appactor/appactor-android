@@ -46,11 +46,11 @@ public sealed class AppActorAttributeValue {
             require(value.all(Double::isFinite)) { "Attribute number array values must be finite." }
         }
 
-        override fun toJsonElement(): JsonElement = typedArray(JsonArray(value.map(::JsonPrimitive)), "number_array")
+        override fun toJsonElement(): JsonElement = JsonArray(value.map(::JsonPrimitive))
     }
 
     public data class BooleanArrayValue(public val value: List<Boolean>) : AppActorAttributeValue() {
-        override fun toJsonElement(): JsonElement = typedArray(JsonArray(value.map(::JsonPrimitive)), "boolean_array")
+        override fun toJsonElement(): JsonElement = JsonArray(value.map(::JsonPrimitive))
     }
 
     @Deprecated("Date arrays are not supported by the AppActor backend. Send individual date attributes instead.")
@@ -59,17 +59,21 @@ public sealed class AppActorAttributeValue {
             JsonArray(value.map { JsonPrimitive(AppActorIso8601.format(it)) })
     }
 
-    public companion object {
-        // The backend infers an array's type from its items, so an empty array would be taken
-        // as string_array and fix the key's app-wide definition to that. Number and boolean
-        // arrays therefore always state their type.
-        private fun typedArray(items: JsonArray, valueType: String): JsonElement = JsonObject(
-            mapOf(
-                "value" to items,
-                "valueType" to JsonPrimitive(valueType),
-            ),
-        )
+    /**
+     * The value as sent in an attribute PATCH. The backend infers an array's type from its items,
+     * so an empty array would be taken as string_array and fix the key's app-wide definition to
+     * that. Number and boolean arrays therefore state their type.
+     */
+    internal fun toAttributePatchElement(): JsonElement {
+        val valueType = when (this) {
+            is NumberArrayValue -> "number_array"
+            is BooleanArrayValue -> "boolean_array"
+            else -> return toJsonElement()
+        }
+        return JsonObject(mapOf("value" to toJsonElement(), "valueType" to JsonPrimitive(valueType)))
+    }
 
+    public companion object {
         @JvmStatic
         public fun string(value: String): AppActorAttributeValue = StringValue(value)
 
@@ -409,11 +413,14 @@ internal object AppActorAttributesValidation {
 }
 
 internal object AppActorIso8601 {
-    private val formatter = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
-        timeZone = TimeZone.getTimeZone("UTC")
+    // SimpleDateFormat isn't thread-safe; one per thread spares the log path a shared lock.
+    // (Not ThreadLocal.withInitial, which Android has only from API 26.)
+    private val formatter = object : ThreadLocal<SimpleDateFormat>() {
+        override fun initialValue(): SimpleDateFormat =
+            SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
+                timeZone = TimeZone.getTimeZone("UTC")
+            }
     }
 
-    fun format(date: Date): String = synchronized(formatter) {
-        formatter.format(date)
-    }
+    fun format(date: Date): String = formatter.get()!!.format(date)
 }

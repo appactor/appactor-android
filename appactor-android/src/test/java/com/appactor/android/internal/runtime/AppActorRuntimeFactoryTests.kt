@@ -2,6 +2,7 @@ package com.appactor.android.internal.runtime
 
 import com.appactor.android.models.AppActorCustomerInfo
 import com.appactor.android.models.AppActorReceiptPipelineEvent
+import kotlinx.coroutines.CoroutineExceptionHandler
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertSame
@@ -44,5 +45,16 @@ class AppActorRuntimeFactoryTests {
         assertNotNull(runtime.offeringsManager)
         assertNotNull(runtime.remoteConfigManager)
         assertNotNull(runtime.experimentManager)
+    }
+
+    @Test
+    fun `runtime scope logs an escaped exception instead of crashing the app`() {
+        val runtime = createRuntimeState(storeAdapter = createMockStoreAdapter())
+
+        // K1: an uncaught failure in a background launch (an invalid API key's 401) crashed the app.
+        assertSame(
+            appActorBackgroundExceptionHandler,
+            runtime.scope.coroutineContext[CoroutineExceptionHandler],
+        )
     }
 }

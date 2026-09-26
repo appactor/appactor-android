@@ -487,9 +487,10 @@ class AppActorAttributesManagerTests {
             ),
         )
 
-        // [a, bad, c] -> [a, bad] + [c] -> [a] + [bad]: only the bad key is lost.
+        // [a, bad, c] -> [a, bad] + [c] -> [a] + [bad]: only the bad key is lost. A 409 is final
+        // only once a fresh request gets it too, so [bad] is sent twice.
         assertEquals(setOf("a", "c"), backend.patchRequests.flatMap { it.second.attributes.keys }.toSet())
-        assertEquals(5, backend.patchAttempts)
+        assertEquals(6, backend.patchAttempts)
         assertNull(store.load("user_a"))
 
         manager.setAttribute("user_a", "tier", AppActorAttributeValue.string("gold"))
@@ -562,8 +563,9 @@ class AppActorAttributesManagerTests {
     @Test
     fun `a flush that ends after a reset writes nothing back`() = runBlocking {
         val store = InMemoryAttributeQueueStore()
-        val backend = FakeAttributesBackendClient(onAttributionPosted = { store.clearAll() })
-        val manager = manager(backend, store)
+        lateinit var manager: AppActorAttributesManager
+        val backend = FakeAttributesBackendClient(onAttributionPosted = { manager.clearQueue() })
+        manager = manager(backend, store)
 
         manager.updateAttribution("user_a", AppActorAttribution(provider = "custom", source = "facebook"))
 
@@ -580,13 +582,44 @@ class AppActorAttributesManagerTests {
         manager.setAttribute("user_b", "tier", AppActorAttributeValue.string("silver"))
 
         backend.failMutations = false
-        backend.missingUserIds = setOf("user_a")
+        backend.failingUsers = mapOf("user_a" to 404)
         val failure = runCatching { manager.flushPendingForAllUsers() }.exceptionOrNull()
 
         assertNotNull(failure)
         assertEquals(listOf("user_b"), backend.patchRequests.map { it.first })
         assertNotNull(store.load("user_a"))
         assertNull(store.load("user_b"))
+    }
+
+    @Test
+    fun `an auth failure stops the flush of all users at once`() = runBlocking {
+        val backend = FakeAttributesBackendClient(failMutations = true)
+        val store = InMemoryAttributeQueueStore()
+        val manager = manager(backend, store)
+        manager.setAttribute("user_a", "tier", AppActorAttributeValue.string("gold"))
+        manager.setAttribute("user_b", "tier", AppActorAttributeValue.string("silver"))
+
+        backend.failMutations = false
+        backend.failingUsers = mapOf("user_a" to 401)
+        val attemptsBefore = backend.patchAttempts
+        val failure = runCatching { manager.flushPendingForAllUsers() }.exceptionOrNull()
+
+        assertNotNull(failure)
+        assertEquals("user_b was not tried", attemptsBefore + 1, backend.patchAttempts)
+        assertNotNull(store.load("user_b"))
+    }
+
+    @Test
+    fun `a 409 for a replayed nonce is retried with a fresh request`() = runBlocking {
+        val backend = FakeAttributesBackendClient(nextAttributionStatus = 409)
+        val store = InMemoryAttributeQueueStore()
+        val manager = manager(backend, store)
+
+        manager.updateAttribution("user_a", AppActorAttribution(provider = "custom", source = "facebook"))
+
+        assertEquals("facebook", backend.attributionRequests.single().second.source)
+        assertNull(store.load("user_a"))
+        assertEquals("facebook", store.loadAttributionSnapshot("user_a")?.source)
     }
 
     @Test
@@ -673,9 +706,11 @@ class AppActorAttributesManagerTests {
         var rejectedAttributeKeys: Set<String> = emptySet(),
         var attributionStatus: Int? = null,
         var deleteAttributeStatus: Int? = null,
-        /** PATCHes for these users fail with a 404, which is not a rejected payload. */
-        var missingUserIds: Set<String> = emptySet(),
-        var onAttributionPosted: () -> Unit = {},
+        /** PATCHes for these users fail with the given status. */
+        var failingUsers: Map<String, Int> = emptyMap(),
+        /** The next attribution post fails with this status, the one after it succeeds. */
+        var nextAttributionStatus: Int? = null,
+        var onAttributionPosted: suspend () -> Unit = {},
     ) : AppActorBackendClient {
         var patchAttempts = 0
         val patchRequests = mutableListOf<Pair<String, AppActorAttributesPatchRequestDTO>>()
@@ -696,7 +731,7 @@ class AppActorAttributesManagerTests {
             request: AppActorAttributesPatchRequestDTO,
         ): AppActorBackendHttpResponse<Unit> {
             patchAttempts += 1
-            if (appUserId in missingUserIds) throw AppActorBackendException.Http(statusCode = 404)
+            failingUsers[appUserId]?.let { throw AppActorBackendException.Http(statusCode = it) }
             if (request.attributes.keys.any { it in rejectedAttributeKeys }) {
                 throw AppActorBackendException.Http(statusCode = 409)
             }
@@ -728,10 +763,13 @@ class AppActorAttributesManagerTests {
         override suspend fun postAttribution(
             appUserId: String,
             request: AppActorAttributionRequestDTO,
-        ): AppActorBackendHttpResponse<Unit> = mutation {
+        ): AppActorBackendHttpResponse<Unit> {
             attributionStatus?.let { throw AppActorBackendException.Http(statusCode = it) }
-            attributionRequests += appUserId to request
-            onAttributionPosted()
+            nextAttributionStatus?.let {
+                nextAttributionStatus = null
+                throw AppActorBackendException.Http(statusCode = it)
+            }
+            return mutation { attributionRequests += appUserId to request }.also { onAttributionPosted() }
         }
 
         private fun mutation(block: () -> Unit): AppActorBackendHttpResponse<Unit> {

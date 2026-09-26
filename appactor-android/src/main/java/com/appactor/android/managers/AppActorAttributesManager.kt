@@ -8,11 +8,13 @@ import com.appactor.android.backend.dto.AppActorAttributionRequestDTO
 import com.appactor.android.backend.dto.AppActorAttributesPatchRequestDTO
 import com.appactor.android.backend.dto.AppActorIntegrationIdentifierRequestDTO
 import com.appactor.android.internal.AppActorSDK
+import com.appactor.android.internal.runtime.throwIfCancellation
 import com.appactor.android.internal.logging.AppActorLogger
 import com.appactor.android.models.AppActorAttributeReservedKeys
 import com.appactor.android.models.AppActorAttributeValue
 import com.appactor.android.models.AppActorAttributesValidation
 import com.appactor.android.models.AppActorAttribution
+import com.appactor.android.models.AppActorError
 import com.appactor.android.models.AppActorIso8601
 import com.appactor.android.models.AppActorPlatformInfo
 import com.appactor.android.storage.AppActorAttributeQueueStore
@@ -38,9 +40,12 @@ internal class AppActorAttributesManager(
     private val countryProvider: () -> String?,
 ) {
     private val queueMutex = Mutex()
-    // One flush at a time: concurrent flushes of a queue would send it twice, and a DELETE could
-    // overtake the PATCH that creates the user on the server and find no user.
-    private val flushMutex = Mutex()
+    // One flush per user at a time: concurrent flushes of a queue would send it twice, and a
+    // DELETE could overtake the PATCH that creates the user on the server and find no user.
+    private val flushMutexes = mutableMapOf<String, Mutex>()
+    // Set by reset() through clearQueue(). A write or flush still running for the old session
+    // must not put anything back into the store the next session uses.
+    private var isCleared = false
 
     suspend fun setAttributes(
         appUserId: String,
@@ -261,7 +266,8 @@ internal class AppActorAttributesManager(
     }
 
     /**
-     * Flushes queued mutations for [appUserId], removing each one from the queue as it is done.
+     * Flushes queued mutations for [appUserId]. Whatever was delivered or dropped leaves the queue
+     * when the flush ends, even when a later step failed.
      *
      * A mutation the server rejects for good (400, 409, 413, 422) is logged and dropped, so one
      * bad value can't hold back everything queued behind it or fail every later write, logIn and
@@ -272,17 +278,16 @@ internal class AppActorAttributesManager(
      *   when a transient failure left mutations queued for a later retry. Throws on any other
      *   permanent failure, such as an invalid API key.
      */
-    suspend fun flushPending(appUserId: String): Boolean = flushMutex.withLock {
+    suspend fun flushPending(appUserId: String): Boolean = flushMutex(appUserId).withLock {
         val pending = queueMutex.withLock { queueStore.load(appUserId) } ?: return@withLock true
         if (pending.isEmpty()) {
             queueMutex.withLock { queueStore.save(appUserId, null) }
             return@withLock true
         }
 
-        // What was delivered or dropped so far. It leaves the queue in one write when the flush
-        // ends, even when a later step failed.
+        // What was delivered or dropped so far, removed from the queue in one write at the end.
         var flushed = AppActorQueuedAttributeMutation()
-        var deliveredAttribution: AppActorAttributionRequestDTO? = null
+        var attributionDelivered = false
         try {
             if (pending.attributes.isNotEmpty()) {
                 patchIsolatingRejections(appUserId, pending.attributes) { done ->
@@ -319,34 +324,47 @@ internal class AppActorAttributesManager(
                 flushed = flushed.copy(unsetIntegrationIdentifiers = flushed.unsetIntegrationIdentifiers + type)
             }
             pending.attribution?.let { request ->
-                if (deliver { backendClient.postAttribution(appUserId, request) }) {
-                    deliveredAttribution = request
-                }
+                attributionDelivered = deliver { backendClient.postAttribution(appUserId, request) }
                 flushed = flushed.copy(attribution = request)
             }
             true
         } catch (throwable: Throwable) {
-            if (throwable is CancellationException) throw throwable
+            throwIfCancellation(throwable)
             val error = throwable.toAppActorError(defaultMessage = "Attribute flush failed.")
             if (!error.isTransient) throw error
             AppActorLogger.debug("Attribute flush failed; pending mutations remain queued.")
             false
         } finally {
             withContext(NonCancellable) {
-                removeFlushed(appUserId, flushed, deliveredAttribution)
+                removeFlushed(appUserId, flushed, attributionDelivered)
             }
         }
     }
 
+    private fun flushMutex(appUserId: String): Mutex =
+        synchronized(flushMutexes) { flushMutexes.getOrPut(appUserId) { Mutex() } }
+
     /** Sends one request. Returns `false` when the server rejected its payload for good. */
     private suspend fun deliver(send: suspend () -> Unit): Boolean {
-        return try {
+        try {
             send()
-            true
+            return true
+        } catch (throwable: Throwable) {
+            if (!throwable.isRejectedPayload) throw throwable
+            if (throwable.httpStatusCode != 409) {
+                logRejection(throwable)
+                return false
+            }
+        }
+        // The server also answers 409 to a replayed signing nonce: a retry of a request it already
+        // saw, by OkHttp or after a 5xx. A 409 is final only once a fresh request gets it too.
+        try {
+            send()
+            return true
         } catch (throwable: Throwable) {
             if (!throwable.isRejectedPayload) throw throwable
             logRejection(throwable)
-            false
+            return false
         }
     }
 
@@ -361,7 +379,7 @@ internal class AppActorAttributesManager(
         attributes: Map<String, JsonElement>,
         onDone: (Map<String, JsonElement>) -> Unit,
     ) {
-        try {
+        val send: suspend () -> Unit = {
             backendClient.patchUserAttributes(
                 appUserId = appUserId,
                 request = AppActorAttributesPatchRequestDTO(
@@ -370,18 +388,22 @@ internal class AppActorAttributesManager(
                     observedAt = AppActorIso8601.format(java.util.Date()),
                 ),
             )
+        }
+        if (attributes.size == 1) {
+            deliver(send)
+            onDone(attributes)
+            return
+        }
+        try {
+            send()
+            onDone(attributes)
         } catch (throwable: Throwable) {
             if (!throwable.isRejectedPayload) throw throwable
-            if (attributes.size > 1) {
-                val keys = attributes.keys.sorted()
-                keys.chunked((keys.size + 1) / 2).forEach { half ->
-                    patchIsolatingRejections(appUserId, attributes.filterKeys { it in half }, onDone)
-                }
-                return
+            val keys = attributes.keys.sorted()
+            keys.chunked((keys.size + 1) / 2).forEach { half ->
+                patchIsolatingRejections(appUserId, attributes.filterKeys { it in half }, onDone)
             }
-            logRejection(throwable)
         }
-        onDone(attributes)
     }
 
     private fun logRejection(throwable: Throwable) {
@@ -391,28 +413,28 @@ internal class AppActorAttributesManager(
     private suspend fun removeFlushed(
         appUserId: String,
         flushed: AppActorQueuedAttributeMutation,
-        deliveredAttribution: AppActorAttributionRequestDTO?,
+        attributionDelivered: Boolean,
     ) {
         if (flushed.isEmpty()) return
         queueMutex.withLock {
-            // No queue means a reset() wiped the store during the flush: write nothing back.
-            val current = queueStore.load(appUserId) ?: return@withLock
-            queueStore.save(appUserId, current.removeFlushed(flushed))
+            if (isCleared) return@withLock
+            queueStore.save(appUserId, queueStore.load(appUserId)?.removeFlushed(flushed))
             // The server replaces the whole attribution on every post, so the helpers merge over
             // the last one it accepted. A rejected one must not stay that base; an install from
             // before this change may have saved it there when it was queued.
-            val rejectedAttribution = flushed.attribution?.takeIf { it != deliveredAttribution }
-            if (deliveredAttribution != null) {
-                queueStore.saveAttributionSnapshot(appUserId, deliveredAttribution)
-            } else if (rejectedAttribution != null && queueStore.loadAttributionSnapshot(appUserId) == rejectedAttribution) {
+            val attribution = flushed.attribution ?: return@withLock
+            if (attributionDelivered) {
+                queueStore.saveAttributionSnapshot(appUserId, attribution)
+            } else if (queueStore.loadAttributionSnapshot(appUserId) == attribution) {
                 queueStore.saveAttributionSnapshot(appUserId, null)
             }
         }
     }
 
     /**
-     * Flushes every user's queue. One user's failure doesn't hold back the others; the first one
-     * is rethrown once all were tried.
+     * Flushes every user's queue. One user's failure doesn't hold back the others, and the first
+     * one is rethrown once all were tried. An auth failure (401, 403) would fail every user alike,
+     * so it is rethrown at once.
      */
     suspend fun flushPendingForAllUsers() {
         var firstFailure: Throwable? = null
@@ -420,15 +442,19 @@ internal class AppActorAttributesManager(
             try {
                 flushPending(appUserId)
             } catch (throwable: Throwable) {
-                if (throwable is CancellationException) throw throwable
+                throwIfCancellation(throwable)
+                if (throwable.httpStatusCode in AUTH_FAILURE_STATUS_CODES) throw throwable
                 if (firstFailure == null) firstFailure = throwable
             }
         }
         firstFailure?.let { throw it }
     }
 
-    fun clearQueue() {
-        queueStore.clearAll()
+    suspend fun clearQueue() {
+        queueMutex.withLock {
+            isCleared = true
+            queueStore.clearAll()
+        }
     }
 
     private suspend fun enqueue(
@@ -436,6 +462,7 @@ internal class AppActorAttributesManager(
         transform: (AppActorQueuedAttributeMutation) -> AppActorQueuedAttributeMutation,
     ) {
         queueMutex.withLock {
+            if (isCleared) return@withLock
             val existing = queueStore.load(appUserId) ?: AppActorQueuedAttributeMutation()
             val updated = transform(existing)
             queueStore.save(appUserId, updated.takeBounded())
@@ -494,7 +521,7 @@ internal class AppActorAttributesManager(
                 AppActorAttributesValidation.normalizeCustomKey(key)
             }
         }.mapValues { (_, value) ->
-            value?.also(AppActorAttributesValidation::validateValue)?.toJsonElement()
+            value?.also(AppActorAttributesValidation::validateValue)?.toAttributePatchElement()
         }
     }
 
@@ -611,11 +638,16 @@ internal class AppActorAttributesManager(
     }
 
     private val Throwable.isRejectedPayload: Boolean
-        get() = this is AppActorBackendException.Http && statusCode in REJECTED_PAYLOAD_STATUS_CODES
+        get() = httpStatusCode in REJECTED_PAYLOAD_STATUS_CODES
+
+    /** The HTTP status behind this failure, also when flushPending wrapped it in an AppActorError. */
+    private val Throwable.httpStatusCode: Int?
+        get() = ((this as? AppActorError)?.cause ?: this).let { (it as? AppActorBackendException.Http)?.statusCode }
 
     private companion object {
         /** Statuses with which the server rejects a payload for good; resending can't succeed. */
         val REJECTED_PAYLOAD_STATUS_CODES = setOf(400, 409, 413, 422)
+        val AUTH_FAILURE_STATUS_CODES = setOf(401, 403)
         const val MAX_PENDING_ATTRIBUTES = 100
         const val MAX_PENDING_INTEGRATION_IDENTIFIERS = 50
         private const val MAX_PLATFORM_LENGTH = 24

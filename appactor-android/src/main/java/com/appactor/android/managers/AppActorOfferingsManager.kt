@@ -30,6 +30,7 @@ import com.appactor.android.models.appActorStoreLookupProductId
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -529,7 +530,7 @@ internal class AppActorOfferingsManager(
                     if (inFlight === request) inFlight = null
                 }
             }
-        }
+        }.completeWhenCancelledBeforeStart(request)
     }
 
     private fun launchBootstrapEnrichment(
@@ -556,6 +557,16 @@ internal class AppActorOfferingsManager(
                     }
                 }
             }
+        }.completeWhenCancelledBeforeStart(request)
+    }
+
+    /**
+     * A launch cancelled before it starts (reset() cancels the runtime scope) never runs its body,
+     * so it would leave [request] pending and every caller awaiting it waiting forever.
+     */
+    private fun Job.completeWhenCancelledBeforeStart(request: CompletableDeferred<AppActorOfferings>) {
+        invokeOnCompletion { cause ->
+            if (cause != null) request.completeExceptionally(cause)
         }
     }
 

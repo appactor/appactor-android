@@ -80,7 +80,7 @@ internal data class AppActorStartupHandles(
  */
 internal val appActorBackgroundExceptionHandler: CoroutineExceptionHandler =
     CoroutineExceptionHandler { _, throwable ->
-        AppActorLogger.error("Unexpected error in an AppActor background task.", throwable)
+        AppActorLogger.error("Unexpected error in an AppActor background task: $throwable", throwable)
     }
 
 internal fun throwIfCancellation(throwable: Throwable) {

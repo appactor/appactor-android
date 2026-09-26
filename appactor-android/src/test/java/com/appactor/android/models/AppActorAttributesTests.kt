@@ -28,6 +28,19 @@ class AppActorAttributesTests {
             JsonArray(listOf(JsonPrimitive("a"), JsonPrimitive("b"))),
             AppActorAttributeValue.stringArray(listOf("a", "b")).toJsonElement(),
         )
+    }
+
+    @Test
+    fun `attribute PATCH values state the type of number and boolean arrays`() {
+        // The backend would infer string_array for a bare [] and fix the key's definition to it.
+        assertEquals(
+            JsonObject(mapOf("value" to JsonArray(emptyList()), "valueType" to JsonPrimitive("number_array"))),
+            AppActorAttributeValue.numberArray(emptyList()).toAttributePatchElement(),
+        )
+        assertEquals(
+            JsonObject(mapOf("value" to JsonArray(emptyList()), "valueType" to JsonPrimitive("boolean_array"))),
+            AppActorAttributeValue.boolArray(emptyList()).toAttributePatchElement(),
+        )
         assertEquals(
             JsonObject(
                 mapOf(
@@ -35,20 +48,13 @@ class AppActorAttributesTests {
                     "valueType" to JsonPrimitive("number_array"),
                 ),
             ),
-            AppActorAttributeValue.numberArray(listOf(1.5)).toJsonElement(),
+            AppActorAttributeValue.numberArray(listOf(1.5)).toAttributePatchElement(),
         )
-    }
-
-    @Test
-    fun `empty number and boolean arrays state their type`() {
-        // The backend would infer string_array for a bare [] and fix the key's definition to it.
+        assertEquals(JsonPrimitive("a"), AppActorAttributeValue.string("a").toAttributePatchElement())
+        // Attribution metadata keeps the plain form.
         assertEquals(
-            JsonObject(mapOf("value" to JsonArray(emptyList()), "valueType" to JsonPrimitive("number_array"))),
-            AppActorAttributeValue.numberArray(emptyList()).toJsonElement(),
-        )
-        assertEquals(
-            JsonObject(mapOf("value" to JsonArray(emptyList()), "valueType" to JsonPrimitive("boolean_array"))),
-            AppActorAttributeValue.boolArray(emptyList()).toJsonElement(),
+            JsonArray(listOf(JsonPrimitive(true))),
+            AppActorAttributeValue.boolArray(listOf(true)).toJsonElement(),
         )
     }
 

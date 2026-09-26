@@ -603,6 +603,47 @@ class AppActorIdentityTransitionTests {
     }
 
     @Test
+    fun `logout is not blocked by an attribute write that keeps failing`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        AppActor.storeAdapterFactory = { FakeStoreAdapter() }
+
+        TestBackendServer { request ->
+            val path = request.path?.substringBefore("?") ?: ""
+            when (path) {
+                "/v1/payment/identify" -> {
+                    val userId = identifyAppUserId(request, "user_a")
+                    jsonResponse(customerEnvelope(requestId = "req_identify_failing_flush", appUserId = userId))
+                }
+                "/v1/payment/offerings" -> jsonResponse("""{"requestId":"req_off","data":{"offerings":[],"productEntitlements":{}}}""")
+                "/v1/payment/users/user_a/attributes" -> jsonResponse(
+                    """{"error":{"code":"FORBIDDEN","message":"Forbidden"}}""",
+                    403,
+                )
+
+                else -> jsonResponse("{}", 404)
+            }
+        }.use { backend ->
+            AppActor.configure(
+                com.appactor.android.models.AppActorConfiguration(
+                    context = context,
+                    apiKey = "pk_test_123",
+                    appUserId = "user_a",
+                    baseUrl = backend.baseUrl,
+                    options = testOptionsForLocalBackend(),
+                )
+            )
+            val writeFailure = runCatching {
+                AppActor.setAttribute("tier", com.appactor.android.models.AppActorAttributeValue.string("gold"))
+            }.exceptionOrNull()
+            assertTrue(writeFailure != null)
+
+            assertTrue(withTimeout(5_000L) { AppActor.logOut() })
+
+            assertTrue(AppActor.appUserId != "user_a")
+        }
+    }
+
+    @Test
     fun `same user login publishes buffered purchase update for current identity`() = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val purchaseUpdates = MutableSharedFlow<List<AppActorStorePurchase>>(extraBufferCapacity = 1)
