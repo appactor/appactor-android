@@ -6,6 +6,8 @@ import com.appactor.android.internal.logging.AppActorLogger
 import com.appactor.android.models.AppActorValidation
 import java.util.UUID
 
+internal const val ANONYMOUS_APP_USER_ID_PREFIX: String = "appactor-anon-"
+
 internal interface AppActorIdentityStore {
     val currentAppUserId: String?
     val installId: String
@@ -56,7 +58,7 @@ internal class AppActorSharedPrefsIdentityStore(
             }
             AppActorLogger.warn("[Identity] Replacing a stored appUserId the backend rejects with a new anonymous id.")
         }
-        val generated = "appactor-anon-${UUID.randomUUID()}".lowercase()
+        val generated = "$ANONYMOUS_APP_USER_ID_PREFIX${UUID.randomUUID()}".lowercase()
         setAppUserId(generated)
         return generated
     }
@@ -67,8 +69,7 @@ internal class AppActorSharedPrefsIdentityStore(
         if (explicitAppUserId != null && AppActorValidation.isPlaceholderAppUserId(explicitAppUserId)) {
             AppActorLogger.warn("[Identity] appUserId '$explicitAppUserId' is a placeholder the backend rejects; treating it as no user.")
         }
-        val normalizedExplicit = explicitAppUserId
-            ?.takeIf { it.trim().isNotEmpty() && !AppActorValidation.isPlaceholderAppUserId(it) }
+        val normalizedExplicit = explicitAppUserId?.takeUnless(AppActorValidation::meansNoUser)
         if (normalizedExplicit != null) {
             AppActorValidation.validateAppUserId(normalizedExplicit)
             setAppUserId(normalizedExplicit)

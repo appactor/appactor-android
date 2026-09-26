@@ -25,6 +25,7 @@ import com.appactor.android.models.AppActorStore
 import com.appactor.android.models.AppActorValidation
 import com.appactor.android.models.toResolvedPurchaseTarget
 import com.appactor.android.storage.AppActorIdentityStore
+import com.appactor.android.storage.ANONYMOUS_APP_USER_ID_PREFIX
 import com.appactor.android.storage.AppActorAtomicJsonReceiptQueueStore
 import com.appactor.android.storage.AppActorPostedLedgerStore
 import com.appactor.android.storage.AppActorReceiptQueueItem
@@ -577,16 +578,23 @@ internal class AppActorPaymentProcessor(
         val items = queueStore.consumeDeadLettered()
         if (items.isEmpty()) return null
         val now = dateProviderMillis()
+        val currentAppUserId = identityStore.currentAppUserId
         val revived = items.map { item ->
-            item.copy(
+            item.withoutGuessedSubscriptionPlan().copy(
                 // Older versions wrote a dead letter they finished on Play into the
-                // posted ledger instead of flagging it.
+                // posted ledger instead of flagging it, and did not stamp when it was dead-lettered.
                 finishedOnDevice = item.finishedOnDevice || isPurchasePosted(item),
-                // Purchases made under an id the backend rejects can only be credited to
-                // the id that replaced it.
-                appUserId = item.appUserId.takeIf(AppActorValidation::isValidAppUserId)
-                    ?: identityStore.currentAppUserId
-                    ?: identityStore.ensureAppUserId(),
+                deadLetteredAtMillis = item.deadLetteredAtMillis ?: item.lastUpdatedAtMillis,
+                // A purchase made while signed out under an id the backend rejects (e.g. "null")
+                // belongs to the signed-out user, whose id is anonymous now.
+                appUserId = if (
+                    !AppActorValidation.isValidAppUserId(item.appUserId) &&
+                    currentAppUserId?.startsWith(ANONYMOUS_APP_USER_ID_PREFIX) == true
+                ) {
+                    currentAppUserId
+                } else {
+                    item.appUserId
+                },
                 phase = AppActorReceiptQueuePhase.NeedsPost,
                 retryCount = 0,
                 nextRetryAtMillis = now,
@@ -926,9 +934,11 @@ internal class AppActorPaymentProcessor(
         if (queueStore.get(item.key) != null) return item
         // A subscription seen outside the purchase flow has no base plan, so its key misses the
         // purchase-flow item queued for the same purchase; join that item instead of adding one.
-        if (item.basePlanId == null) {
+        if (item.basePlanId == null && item.productType == AppActorProductType.Subscription.wireValue) {
             val purchaseFlowItem = queueStore.snapshot().firstOrNull { queued ->
-                queued.basePlanId != null &&
+                queued.phase != AppActorReceiptQueuePhase.DeadLettered &&
+                    queued.clientDeliverySource == AppActorClientDeliverySource.PurchaseFlow.wireValue &&
+                    queued.basePlanId != null &&
                     queued.purchaseToken == item.purchaseToken &&
                     queued.productId == item.productId &&
                     queuedEconomicRevision(queued) == queuedEconomicRevision(item)
@@ -1105,3 +1115,11 @@ internal fun AppActorReceiptQueueItem.toStorePurchase(): AppActorStorePurchase {
 // UTC format) rather than re-implementing a per-call SimpleDateFormat (android-25).
 internal fun AppActorStorePurchase.purchaseDateString(): String =
     AppActorIso8601.format(Date(purchaseTimeMillis))
+
+// Older versions labelled a subscription seen outside the purchase flow with a base plan guessed
+// from the catalog, which the backend rejects when it is wrong. The backend accepts a subscription
+// without one and reads it from Google, so a revived subscription is posted without it.
+private fun AppActorReceiptQueueItem.withoutGuessedSubscriptionPlan(): AppActorReceiptQueueItem {
+    if (productType != AppActorProductType.Subscription.wireValue) return this
+    return copy(basePlanId = null, offerId = null, priceAmountMicros = null, currencyCode = null)
+}

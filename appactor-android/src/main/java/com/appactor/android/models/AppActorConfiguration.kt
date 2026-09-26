@@ -47,7 +47,7 @@ internal class AppActorConfiguration(
                 "AppActor apiKey must not be blank."
             }
             appUserId
-                ?.takeUnless(AppActorValidation::isPlaceholderAppUserId)
+                ?.takeUnless(AppActorValidation::meansNoUser)
                 ?.let(AppActorValidation::validateAppUserId)
             require(baseUrl.isNotBlank()) {
                 "AppActor baseUrl must not be blank."

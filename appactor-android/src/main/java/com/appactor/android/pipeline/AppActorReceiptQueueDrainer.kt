@@ -307,9 +307,11 @@ internal class AppActorReceiptQueueDrainer(
             if (throwable is CancellationException) throw throwable
             val httpError = throwable as? AppActorBackendException.Http
             val isRateLimited = httpError?.statusCode == 429
-            // A 429 is the backend's rate limiter answering `retryable_error`. Dead-lettering it
-            // would consume or acknowledge a purchase the backend never recorded.
-            if (httpError != null && httpError.statusCode in 400..499 && !isRateLimited) {
+            // A 429 is the backend's rate limiter answering `retryable_error`, and a 408 its
+            // request timeout. Dead-lettering either would consume or acknowledge a purchase the
+            // backend never recorded.
+            val isTransient = isRateLimited || httpError?.statusCode == 408
+            if (httpError != null && httpError.statusCode in 400..499 && !isTransient) {
                 deadLetter(
                     item = normalizedItem,
                     code = httpError.error?.code ?: httpError.statusCode.toString(),

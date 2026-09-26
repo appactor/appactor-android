@@ -444,6 +444,7 @@ class AppActorPaymentProcessorTests {
                 requestId = receiptResponse.requestId,
                 signatureVerified = true,
             ),
+            identityStore = createMockIdentityStore(initialAppUserId = "appactor-anon-123"),
         )
         val deadLetter = legacyDeadLetter(appUserId = "null")
         dependencies.queueStore.upsert(deadLetter)
@@ -453,9 +454,33 @@ class AppActorPaymentProcessorTests {
         dependencies.processor.retryDeadLetteredItems()
 
         val posted = dependencies.postedReceipts.single()
-        assertEquals("user_android_123", posted.appUserId)
+        assertEquals("appactor-anon-123", posted.appUserId)
+        // Older versions guessed a subscription's base plan outside the purchase flow.
+        assertNull(posted.basePlanId)
         assertTrue(dependencies.acknowledgedTokens.isEmpty())
         assertTrue(dependencies.queueStore.snapshot().isEmpty())
+    }
+
+    @Test
+    fun `request timeout on a receipt stays queued without finishing the purchase`() = runBlocking {
+        val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
+        val dependencies = createDependencies(
+            receiptResponse = AppActorBackendHttpResponse(
+                body = receiptResponse,
+                statusCode = 200,
+                requestId = receiptResponse.requestId,
+                signatureVerified = true,
+            )
+        )
+        coEvery { dependencies.backendClient.postGoogleReceipt(any()) } throws AppActorBackendException.Http(statusCode = 408)
+
+        dependencies.processor.purchase(Activity(), monthlyPackage())
+
+        assertEquals(
+            com.appactor.android.storage.AppActorReceiptQueuePhase.NeedsPost,
+            dependencies.queueStore.snapshot().single().phase,
+        )
+        assertTrue(dependencies.acknowledgedTokens.isEmpty())
     }
 
     @Test

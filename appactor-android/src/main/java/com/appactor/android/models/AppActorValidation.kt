@@ -37,8 +37,11 @@ internal object AppActorValidation {
     /** A "no user" stand-in such as "null", "guest" or "0", which configure() treats as anonymous. */
     fun isPlaceholderAppUserId(appUserId: String): Boolean = appUserId.trim().lowercase() in BLOCKED_APP_USER_IDS
 
+    /** What configure() treats as no user: a blank id or a placeholder. */
+    fun meansNoUser(appUserId: String): Boolean = appUserId.isBlank() || isPlaceholderAppUserId(appUserId)
+
     private fun invalidAppUserIdReason(appUserId: String): String? = when {
-        appUserId.isEmpty() -> "appUserId must not be empty."
+        appUserId.isBlank() -> "appUserId must not be blank."
         appUserId.length > MAX_APP_USER_ID_LENGTH -> "appUserId must be at most $MAX_APP_USER_ID_LENGTH characters."
         '/' in appUserId -> "appUserId must not contain '/'."
         CONTROL_CHARACTERS.containsMatchIn(appUserId) -> "appUserId must not contain control characters."

@@ -284,11 +284,12 @@ internal class GooglePlayStoreAdapter(
         )
         // The catalog cannot tell which base plan a subscription is on (see withoutSubscriptionPlan).
         if (recovery.productType == AppActorProductType.Subscription) return recovery
-        return resolvedProductsByKey.values
+        val inferred = resolvedProductsByKey.values
             .firstOrNull { resolved -> resolved.product.productId == productId }
             ?.toRequest(obfuscatedAccountId = obfuscatedAccountId)
             ?: runCatching { resolveDirectPurchaseRequest(recovery) }.getOrNull()
             ?: recovery
+        return inferred.withoutSubscriptionPlan()
     }
 
     override suspend fun acknowledgePurchase(purchaseToken: String) {

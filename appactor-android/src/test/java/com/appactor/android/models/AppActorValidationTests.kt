@@ -23,6 +23,7 @@ class AppActorValidationTests {
     fun `app user ids the backend rejects fail`() {
         listOf(
             "",
+            "   ",
             "a".repeat(256),
             "null",
             "NULL",
