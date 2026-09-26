@@ -2,7 +2,9 @@ package com.appactor.android.backend
 
 import com.appactor.android.backend.client.buildAppActorUrl
 import com.appactor.android.backend.client.AppActorBackendJson
+import com.appactor.android.backend.dto.AppActorAttributionRequestDTO
 import com.appactor.android.backend.dto.AppActorCustomerEnvelopeDTO
+import com.appactor.android.backend.dto.clippedToServerLimits
 import com.appactor.android.backend.dto.AppActorEntitlementDTO
 import com.appactor.android.backend.dto.AppActorGoogleReceiptRequestDTO
 import com.appactor.android.backend.dto.AppActorOfferingDTO
@@ -286,6 +288,22 @@ class AppActorBackendContractTests {
             unsubscribeDetectedAt = "2026-03-14T12:00:00.000Z",
         ).toModel("premium")
         assertFalse(cancelledInGracePeriod.willRenew)
+    }
+
+    @Test
+    fun `attribution fields are cut to the lengths the backend accepts`() {
+        val clipped = AppActorAttributionRequestDTO(
+            provider = "google_play_install_referrer",
+            network = "n".repeat(130),
+            campaign = "c".repeat(300),
+            clickId = " ${"k".repeat(254)}\uD83D\uDE00 ",
+        ).clippedToServerLimits()
+
+        assertEquals(64, clipped.source?.length)
+        assertEquals(120, clipped.network?.length)
+        assertEquals(255, clipped.campaign?.length)
+        // Trimmed first; the emoji's surrogate pair is not split.
+        assertEquals("k".repeat(254), clipped.clickId)
     }
 
     @Test

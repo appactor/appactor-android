@@ -5,6 +5,7 @@ import com.appactor.android.backend.client.AppActorBackendClient
 import com.appactor.android.backend.client.AppActorBackendException
 import com.appactor.android.backend.client.toAppActorError
 import com.appactor.android.backend.dto.AppActorAttributionRequestDTO
+import com.appactor.android.backend.dto.clippedToServerLimits
 import com.appactor.android.backend.dto.AppActorAttributesPatchRequestDTO
 import com.appactor.android.backend.dto.AppActorIntegrationIdentifierRequestDTO
 import com.appactor.android.internal.AppActorSDK
@@ -340,7 +341,7 @@ internal class AppActorAttributesManager(
                 flushed = flushed.copy(unsetIntegrationIdentifiers = flushed.unsetIntegrationIdentifiers + type)
             }
             pending.attribution?.let { request ->
-                attributionDelivered = deliver { backendClient.postAttribution(appUserId, request) }
+                attributionDelivered = deliver { backendClient.postAttribution(appUserId, request.clippedToServerLimits()) }
                 flushed = flushed.copy(attribution = request)
             }
             true

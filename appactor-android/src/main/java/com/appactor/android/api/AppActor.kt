@@ -246,7 +246,7 @@ public object AppActor {
                 }
 
                 override suspend fun drainReceipts(runtimeState: AppActorRuntimeState) {
-                    runtimeState.paymentProcessor.drainAll()
+                    publishDrainedCustomerInfo(runtimeState, runtimeState.paymentProcessor.drainAll())
                 }
 
                 override suspend fun flushPendingAttributes(runtimeState: AppActorRuntimeState) {
@@ -1183,6 +1183,8 @@ public object AppActor {
             )
         )
         customerInfoStateFlow.value = newRuntime.lastCustomerInfo
+        val drainRuntime = newRuntime
+        newRuntime.paymentProcessor.onRetryWakeDrained = { info -> publishDrainedCustomerInfo(drainRuntime, info) }
         preconfiguredFallbackOfferingsDTO?.let { dto ->
             newRuntime.offeringsManager.setFallbackOfferings(dto)
             preconfiguredFallbackOfferingsDTO = null
@@ -1566,6 +1568,21 @@ public object AppActor {
             callback?.invoke(info)
         }
         return callback != null
+    }
+
+    /**
+     * Publishes what a background drain (the foreground or retry-wake one) got back for the current
+     * user. It seeds the customer cache, so the next refresh would wait for that to go stale.
+     */
+    private suspend fun publishDrainedCustomerInfo(
+        runtimeState: AppActorRuntimeState,
+        info: AppActorCustomerInfo?,
+    ) {
+        val appUserId = info?.appUserId ?: return
+        publishPurchaseUpdateIfCurrent(
+            runtimeState = runtimeState,
+            result = AppActorPurchaseUpdateProcessingResult(customerInfo = info, appUserId = appUserId),
+        )
     }
 
     private fun purchaseUpdatePublishCallbackIfCurrentLocked(

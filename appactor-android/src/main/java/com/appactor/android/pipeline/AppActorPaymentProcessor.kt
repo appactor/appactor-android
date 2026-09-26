@@ -88,6 +88,10 @@ internal class AppActorPaymentProcessor(
     @Volatile
     var onDeferredPurchaseResolved: ((productId: String, customerInfo: AppActorCustomerInfo) -> Unit)? = null
 
+    // Gets the current user's customer info from a retry-wake drain, which nothing else publishes.
+    @Volatile
+    var onRetryWakeDrained: (suspend (AppActorCustomerInfo) -> Unit)? = null
+
     // Identity transition buffering — prevents wrong-user attribution
     // when purchases arrive between drainAll() and identity switch. The
     // collaborator owns its own dedicated transitionMutex + buffer state.
@@ -110,9 +114,10 @@ internal class AppActorPaymentProcessor(
         dateProviderMillis = dateProviderMillis,
         activeRateLimitCooldown = { nowMillis -> receiptQueueDrainer.activeRateLimitCooldown(nowMillis) },
         runDrainUnderPipelineLock = { limit ->
-            pipelineMutex.withLock {
+            val drained = pipelineMutex.withLock {
                 receiptQueueDrainer.drainAllAssumingLocked(limit)
             }
+            drained?.let { onRetryWakeDrained?.invoke(it) }
         },
     )
 
