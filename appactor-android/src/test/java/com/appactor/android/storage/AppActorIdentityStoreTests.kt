@@ -2,6 +2,7 @@ package com.appactor.android.storage
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import com.appactor.android.models.AppActorError
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
@@ -58,6 +59,27 @@ class AppActorIdentityStoreTests {
 
         assertEquals(" user_android_123 ", resolved)
         assertEquals(" user_android_123 ", store.currentAppUserId)
+    }
+
+    @Test
+    fun `resolve app user id rejects an id the backend rejects`() {
+        val store = AppActorSharedPrefsIdentityStore(context)
+
+        val error = runCatching { store.resolveAppUserId("null") }.exceptionOrNull()
+
+        assertTrue(error is AppActorError.InvalidConfiguration)
+        assertNull(store.currentAppUserId)
+    }
+
+    @Test
+    fun `ensure app user id replaces a stored id the backend rejects`() {
+        val store = AppActorSharedPrefsIdentityStore(context)
+        store.setAppUserId("undefined")
+
+        val resolved = store.resolveAppUserId(null)
+
+        assertTrue(resolved.startsWith("appactor-anon-"))
+        assertEquals(resolved, store.currentAppUserId)
     }
 
     @Test

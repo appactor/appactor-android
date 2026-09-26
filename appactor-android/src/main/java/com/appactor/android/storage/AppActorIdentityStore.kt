@@ -2,6 +2,8 @@ package com.appactor.android.storage
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.appactor.android.internal.logging.AppActorLogger
+import com.appactor.android.models.AppActorValidation
 import java.util.UUID
 
 internal interface AppActorIdentityStore {
@@ -47,7 +49,12 @@ internal class AppActorSharedPrefsIdentityStore(
     override fun ensureAppUserId(): String {
         val existing = currentAppUserId
         if (!existing.isNullOrBlank()) {
-            return existing
+            // Older versions stored ids the backend rejects (e.g. "null"). Every backend call
+            // for such an id fails, so it holds no server state worth keeping.
+            if (AppActorValidation.isValidAppUserId(existing)) {
+                return existing
+            }
+            AppActorLogger.warn("[Identity] Replacing a stored appUserId the backend rejects with a new anonymous id.")
         }
         val generated = "appactor-anon-${UUID.randomUUID()}".lowercase()
         setAppUserId(generated)
@@ -58,7 +65,7 @@ internal class AppActorSharedPrefsIdentityStore(
         val normalizedExplicit = explicitAppUserId
             ?.takeIf { it.trim().isNotEmpty() }
         if (normalizedExplicit != null) {
-            com.appactor.android.models.AppActorValidation.validateAppUserId(normalizedExplicit)
+            AppActorValidation.validateAppUserId(normalizedExplicit)
             setAppUserId(normalizedExplicit)
             return normalizedExplicit
         }
