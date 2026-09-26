@@ -242,6 +242,23 @@ class AppActorCustomerManagerTests {
     }
 
     @Test
+    fun `a rate limited fetch falls back to the cached customer`() = runBlocking {
+        val mockClient = mockk<AppActorBackendClient>(relaxed = true)
+        coEvery { mockClient.getOfferings(any()) } returns freshOfferingsResponse(fixtureOfferings())
+        coEvery { mockClient.identify(any()) } returns freshCustomerResponse(
+            fixtureCustomer("fixtures/backend/customer_android_active.json")
+        )
+        coEvery { mockClient.getCustomer(any(), any()) } throws
+            com.appactor.android.backend.client.AppActorBackendException.Http(statusCode = 429, requestId = "req_429")
+        val manager = createCustomerManager(mockClient)
+        manager.identify()
+
+        val info = manager.getCustomerInfo("user_android_123")
+
+        assertTrue(info.hasActiveEntitlement("premium"))
+    }
+
+    @Test
     fun `login uses backend login response and updates identity state`() = runBlocking {
         val loginRequestSlot = slot<AppActorLoginRequestDTO>()
         val mockClient = mockk<AppActorBackendClient>(relaxed = true)

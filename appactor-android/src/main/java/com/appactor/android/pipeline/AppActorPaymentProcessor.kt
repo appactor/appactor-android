@@ -3,6 +3,7 @@ package com.appactor.android.pipeline
 import android.app.Activity
 import com.appactor.android.backend.client.AppActorBackendClient
 import com.appactor.android.internal.logging.AppActorLogger
+import com.appactor.android.internal.runtime.appActorBackgroundScope
 import com.appactor.android.backend.dto.AppActorGoogleReceiptResponseDTO
 import com.appactor.android.billing.AppActorStoreAdapter
 import com.appactor.android.billing.AppActorStorePurchase
@@ -33,10 +34,10 @@ import com.appactor.android.storage.AppActorReceiptQueuePhase
 import com.appactor.android.storage.AppActorReceiptQueueStore
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.CoroutineStart
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
@@ -65,7 +66,7 @@ internal class AppActorPaymentProcessor(
     private val packageName: String,
     private val onPipelineEvent: (AppActorReceiptPipelineEvent) -> Unit = {},
     private val dateProviderMillis: () -> Long = { System.currentTimeMillis() },
-    private val backgroundScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+    private val backgroundScope: CoroutineScope = appActorBackgroundScope(),
 ) {
 
     private val purchaseMutex = Mutex()
@@ -87,6 +88,10 @@ internal class AppActorPaymentProcessor(
 
     @Volatile
     var onDeferredPurchaseResolved: ((productId: String, customerInfo: AppActorCustomerInfo) -> Unit)? = null
+
+    // Gets the current user's customer info from a retry-wake drain, which nothing else publishes.
+    @Volatile
+    var onRetryWakeDrained: (suspend (AppActorCustomerInfo) -> Unit)? = null
 
     // Identity transition buffering — prevents wrong-user attribution
     // when purchases arrive between drainAll() and identity switch. The
@@ -110,9 +115,11 @@ internal class AppActorPaymentProcessor(
         dateProviderMillis = dateProviderMillis,
         activeRateLimitCooldown = { nowMillis -> receiptQueueDrainer.activeRateLimitCooldown(nowMillis) },
         runDrainUnderPipelineLock = { limit ->
-            pipelineMutex.withLock {
+            val drained = pipelineMutex.withLock {
                 receiptQueueDrainer.drainAllAssumingLocked(limit)
             }
+            // A reschedule cancels this job once the drain is done; the publish must not be lost.
+            drained?.let { withContext(NonCancellable) { onRetryWakeDrained?.invoke(it) } }
         },
     )
 
@@ -165,7 +172,6 @@ internal class AppActorPaymentProcessor(
         queueStore = queueStore,
         customerManager = customerManager,
         identityStore = identityStore,
-        pendingPurchaseRegistry = pendingPurchaseRegistry,
         receiptQueueDrainer = receiptQueueDrainer,
         dateProviderMillis = dateProviderMillis,
         ensureProductEntitlements = { refreshIfMissing ->
@@ -242,7 +248,7 @@ internal class AppActorPaymentProcessor(
         placement: String? = null,
     ): AppActorPurchaseResult {
         if (!purchaseMutex.tryLock()) {
-            throw AppActorError.InvalidConfiguration("Only one purchase can be in-flight at a time.")
+            throw AppActorError.PurchaseAlreadyInProgress
         }
 
         try {
@@ -271,7 +277,7 @@ internal class AppActorPaymentProcessor(
         placement: String? = null,
     ): AppActorPurchaseResult {
         if (!purchaseMutex.tryLock()) {
-            throw AppActorError.InvalidConfiguration("Only one purchase can be in-flight at a time.")
+            throw AppActorError.PurchaseAlreadyInProgress
         }
         try {
             val appUserId = appUserIdOverride
@@ -460,18 +466,21 @@ internal class AppActorPaymentProcessor(
                             )
 
                             is ProcessingOutcome.Queued -> {
+                                // On top of the cached customer, so the user's other entitlements stay.
+                                val cached = customerManager.cachedInfo(appUserId)
                                 val offline = offlineCustomerInfoBuilder.buildOfflineCustomerInfo(
                                     purchase = primaryPurchase,
                                     appUserId = appUserId,
                                     productEntitlements = productEntitlements,
-                                ) ?: customerManager.cachedInfo(appUserId)
+                                    baseCustomer = cached,
+                                ) ?: cached
                                 if (offline != null) {
                                     AppActorPurchaseResult.Success(
                                         customerInfo = offline,
                                         purchaseInfo = primaryPurchase.toPurchaseInfo(configuration),
                                     )
                                 } else {
-                                    throw AppActorError.Network(
+                                    throw AppActorError.ReceiptQueuedForRetry(
                                         description = "Purchase succeeded but receipt is queued for retry.",
                                     )
                                 }
@@ -535,6 +544,11 @@ internal class AppActorPaymentProcessor(
         }
         retryWakeScheduler.scheduleNextRetryWake()
         return result
+    }
+
+    /** For reset(): see [AppActorPendingPurchaseRegistry.wipe]. */
+    fun wipePendingPurchases() {
+        pendingPurchaseRegistry.wipe()
     }
 
     suspend fun drainReadyQueue(limit: Int = 20): AppActorCustomerInfo? {

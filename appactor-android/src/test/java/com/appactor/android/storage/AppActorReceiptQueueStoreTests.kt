@@ -86,18 +86,33 @@ class AppActorReceiptQueueStoreTests {
     }
 
     @Test
-    fun `deletePersistedFile removes the quarantined corrupt sidecar`() {
+    fun `wipe removes the quarantined corrupt sidecar`() {
         val appactorDir = File(context.filesDir, "appactor").apply { mkdirs() }
         File(appactorDir, "receipt_queue.json").writeText("{broken")
 
-        // Quarantine it, then run the reset/logout cleanup path.
-        AppActorAtomicJsonReceiptQueueStore(context).snapshot()
+        // Quarantine it, then run the reset cleanup path.
+        val store = AppActorAtomicJsonReceiptQueueStore(context)
+        store.snapshot()
         val sidecar = File(appactorDir, "receipt_queue.json.corrupt")
         assertTrue(sidecar.exists())
 
-        AppActorAtomicJsonReceiptQueueStore.deletePersistedFile(context)
+        store.wipe()
         assertFalse(sidecar.exists())
         assertFalse(File(appactorDir, "receipt_queue.json").exists())
+    }
+
+    @Test
+    fun `a wiped store never writes the queue back`() {
+        val directory = tempDirectory("queue-wiped")
+        val store = AppActorAtomicJsonReceiptQueueStore(context, directory)
+        store.upsert(queueItem(purchaseToken = "token_user_a"))
+
+        // An operation of the reset session is still running when reset() wipes the queue.
+        store.wipe()
+        store.upsert(queueItem(purchaseToken = "token_user_a_late"))
+
+        assertFalse(File(directory, "receipt_queue.json").exists())
+        assertTrue(AppActorAtomicJsonReceiptQueueStore(context, directory).snapshot().isEmpty())
     }
 
     @Test

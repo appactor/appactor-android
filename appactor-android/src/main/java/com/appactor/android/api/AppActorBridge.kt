@@ -5,7 +5,6 @@ import android.content.Context
 import com.appactor.android.models.AppActorAttributeValue
 import com.appactor.android.models.AppActorAttribution
 import com.appactor.android.models.AppActorBridgeErrorCallback
-import com.appactor.android.models.AppActorError
 import com.appactor.android.models.AppActorBridgeReceiptEvent
 import com.appactor.android.models.AppActorConfigValue
 import com.appactor.android.models.AppActorCompletionCallback
@@ -139,22 +138,8 @@ public object AppActorBridge {
     ): Unit = AppActor.launchAsync(
         // Route through launchAsync like every other bridge method so the JSON
         // decode runs off the caller thread and callbacks are delivered on the
-        // main thread (android-12). The decode failure is mapped to
-        // AppActorError.Decoding so it still surfaces as CODE_DECODING — routing
-        // the raw SerializationException (an IllegalArgumentException) through
-        // launchAsync would instead map it to CODE_VALIDATION.
-        operation = {
-            try {
-                AppActor.setFallbackOfferings(jsonData)
-            } catch (error: AppActorError) {
-                throw error
-            } catch (error: Exception) {
-                throw AppActorError.Decoding(
-                    error.message ?: "Invalid fallback offerings JSON",
-                    error,
-                )
-            }
-        },
+        // main thread (android-12). A decode failure arrives as AppActorError.Decoding.
+        operation = { AppActor.setFallbackOfferings(jsonData) },
         onComplete = onSuccess?.let { callback -> AppActorCompletionCallback { callback() } },
         onError = onError.asSdkErrorCallback(),
     )

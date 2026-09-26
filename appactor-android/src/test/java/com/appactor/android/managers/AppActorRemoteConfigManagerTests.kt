@@ -389,16 +389,9 @@ class AppActorRemoteConfigManagerTests {
     }
 
     @Test
-    fun `remote config unknown public disk fallback prefers user cache when available`() = runBlocking {
+    fun `a user-scoped app starting offline gets its stored user entry`() = runBlocking {
+        // Each online probe of a user-scoped app discards the public entry, so only the user's is stored.
         val cacheStore = createCacheStore("remote-config-public-unknown-user-fallback")
-        cacheStore.save(
-            appUserId = null,
-            appVersion = "1.0.0",
-            country = "TR",
-            payload = AppActorBackendJson.instance.encodeToString(sampleEnvelope("audience" to JsonPrimitive("public"))),
-            eTag = "\"etag_public\"",
-            verified = true,
-        )
         cacheStore.save(
             appUserId = "user_android_123",
             appVersion = "1.0.0",
@@ -408,7 +401,7 @@ class AppActorRemoteConfigManagerTests {
             verified = true,
         )
         val mockClient = mockk<AppActorBackendClient>(relaxed = true)
-        coEvery { mockClient.getRemoteConfigs(any(), any(), any(), any()) } throws IOException("offline")
+        coEvery { mockClient.getRemoteConfigs(any(), any(), any(), any()) } throws com.appactor.android.backend.client.AppActorBackendException.Network("offline")
         val manager = createManager(
             backendClient = mockClient,
             cacheStore = cacheStore,
@@ -418,6 +411,30 @@ class AppActorRemoteConfigManagerTests {
 
         assertEquals("premium", configs["audience"]?.stringValue)
         coVerify(exactly = 1) { mockClient.getRemoteConfigs(null, "1.0.0", "TR", any()) }
+    }
+
+    @Test
+    fun `a public-only app starting offline gets its stored configs and keeps them`() = runBlocking {
+        val cacheStore = createCacheStore("remote-config-public-only-offline")
+        val onlineClient = mockk<AppActorBackendClient>(relaxed = true)
+        coEvery { onlineClient.getRemoteConfigs(null, any(), any(), any()) } returns AppActorBackendHttpResponse(
+            body = sampleEnvelope("audience" to JsonPrimitive("public")),
+            statusCode = 200,
+            requestId = "req_public",
+            eTag = "\"etag_public\"",
+            signatureVerified = true,
+            remoteConfigRequiresUserContext = false,
+        )
+        createManager(backendClient = onlineClient, cacheStore = cacheStore)
+            .getRemoteConfigs(appUserId = "user_android_123")
+
+        val offlineClient = mockk<AppActorBackendClient>(relaxed = true)
+        coEvery { offlineClient.getRemoteConfigs(any(), any(), any(), any()) } throws IOException("offline")
+        repeat(2) {
+            val restarted = createManager(backendClient = offlineClient, cacheStore = cacheStore)
+            val configs = restarted.getRemoteConfigs(appUserId = "user_android_123")
+            assertEquals("public", configs["audience"]?.stringValue)
+        }
     }
 
     @Test

@@ -141,7 +141,9 @@ internal data class PendingPurchaseEntry(
         }
 
         fun encodeAppUserId(appUserId: String?): String {
-            val normalized = appUserId?.trim()?.takeIf { it.isNotEmpty() } ?: return ""
+            // Kept verbatim: the identity store and the backend treat " user_1 " and "user_1" as
+            // different users.
+            val normalized = appUserId?.takeIf { it.isNotBlank() } ?: return ""
             return ENCODED_APP_USER_ID_PREFIX + URLEncoder.encode(normalized, StandardCharsets.UTF_8.name())
         }
 

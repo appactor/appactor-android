@@ -4,6 +4,7 @@ import com.appactor.android.backend.client.AppActorBackendJson
 import com.appactor.android.backend.dto.AppActorCustomerEnvelopeDTO
 import com.appactor.android.backend.mappers.toModel
 import com.appactor.android.billing.AppActorStoreAdapter
+import com.appactor.android.billing.AppActorStorePurchaseState
 import com.appactor.android.cache.AppActorOfflineProductCatalogStore
 import com.appactor.android.cache.AppActorCustomerCacheStore
 import com.appactor.android.models.AppActorCustomerInfo
@@ -22,6 +23,8 @@ internal class AppActorOfflineEntitlementManager(
         val derivedKeys = if (productEntitlements.isNotEmpty()) {
             runCatching { storeAdapter.queryActivePurchases() }
                 .getOrDefault(emptyList())
+                // Google: grant only on PURCHASED; a PENDING purchase is not paid yet.
+                .filter { it.purchaseState == AppActorStorePurchaseState.Purchased }
                 .flatMap { purchase ->
                     AppActorEntitlementKeyResolver.entitlementKeysForPurchase(
                         purchase = purchase,

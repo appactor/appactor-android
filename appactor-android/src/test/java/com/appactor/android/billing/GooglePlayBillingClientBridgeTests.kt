@@ -71,6 +71,63 @@ class GooglePlayBillingClientBridgeTests {
     }
 
     @Test
+    fun `a pending prepaid plan update is a pending purchase of the new token`() {
+        // Play hands back the old subscription (token_old) with the pending update inside.
+        val purchase = com.android.billingclient.api.Purchase(
+            """
+                {"orderId":"GPA.old","productIds":["prepaid.monthly"],"purchaseToken":"token_old",
+                 "purchaseState":0,"purchaseTime":1710000000000,"acknowledged":true,
+                 "pendingPurchaseUpdate":{"purchaseToken":"token_new","productIds":["prepaid.yearly"]}}
+            """.trimIndent(),
+            "signature",
+        )
+
+        val result = billingResult(BillingClient.BillingResponseCode.OK)
+            .toLaunchResult(AppActorProductType.Subscription, listOf(purchase))
+
+        val pending = (result as AppActorBillingLaunchResult.Pending).purchases.single()
+        assertEquals("token_new", pending.purchaseToken)
+        assertEquals(listOf("prepaid.yearly"), pending.products)
+        assertEquals(AppActorStorePurchaseState.Pending, pending.purchaseState)
+    }
+
+    @Test
+    fun `a device whose play billing is unavailable reports no purchase capability`() = runBlocking {
+        // With automatic service reconnection isReady() is always true, whatever the setup said.
+        val fakeBillingClient = FakeBillingClient(
+            initialReady = true,
+            connectResults = ArrayDeque(listOf(BillingClient.BillingResponseCode.BILLING_UNAVAILABLE)),
+        )
+        val bridge = GooglePlayBillingClientBridge(
+            context = context,
+            billingClientFactory = { _, _ -> fakeBillingClient },
+        )
+
+        // connect() stays best effort: the setup result only feeds the connection state.
+        bridge.connect()
+        fakeBillingClient.ready = true
+
+        assertEquals(1, fakeBillingClient.startConnectionCalls)
+        assertFalse(bridge.isConnected())
+        assertTrue(bridge.currentCapabilities().isEmpty())
+        bridge.shutdown()
+    }
+
+    @Test
+    fun `connect after shutdown returns instead of waiting on a cancelled scope`() = runBlocking {
+        val fakeBillingClient = FakeBillingClient(initialReady = false)
+        val bridge = GooglePlayBillingClientBridge(
+            context = context,
+            billingClientFactory = { _, _ -> fakeBillingClient },
+        )
+
+        bridge.shutdown()
+
+        kotlinx.coroutines.withTimeout(5_000) { bridge.connect() }
+        assertFalse(bridge.isConnected())
+    }
+
+    @Test
     fun `service disconnect clears storefront until the next successful refresh`() = runBlocking {
         val fakeBillingClient = FakeBillingClient(
             storefrontCountryCodes = ArrayDeque(listOf("US", "TR")),

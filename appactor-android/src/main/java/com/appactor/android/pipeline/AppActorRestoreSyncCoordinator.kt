@@ -48,7 +48,6 @@ internal class AppActorRestoreSyncCoordinator(
     private val queueStore: AppActorReceiptQueueStore,
     private val customerManager: AppActorCustomerManager,
     private val identityStore: AppActorIdentityStore,
-    private val pendingPurchaseRegistry: AppActorPendingPurchaseRegistry,
     private val receiptQueueDrainer: AppActorReceiptQueueDrainer,
     private val dateProviderMillis: () -> Long,
     private val ensureProductEntitlements: suspend (refreshIfMissing: Boolean) -> Map<String, List<String>>,
@@ -139,8 +138,6 @@ internal class AppActorRestoreSyncCoordinator(
         }
         val syncCandidates = mutableListOf<AppActorStorePurchase>()
 
-        val allProcessedPurchases = mutableListOf<AppActorStorePurchase>()
-
         // The launch sweep takes only purchases nothing has handled yet, as iOS sweeps only
         // unfinished transactions. Posting a finished purchase for a fresh anonymous user (after
         // a logout, a reset or a reinstall) has the backend merge that user into the buyer and
@@ -162,7 +159,6 @@ internal class AppActorRestoreSyncCoordinator(
                 return@forEach
             }
             val normalized = normalizePurchaseForPosting(purchase)
-            allProcessedPurchases += normalized
             val pendingUpdateContext = consumePendingPurchaseUpdateContext(normalized)
             if (pendingUpdateContext != null) {
                 val pendingAppUserId = pendingUpdateContext.appUserId?.takeIf { it.isNotBlank() } ?: appUserId
@@ -198,13 +194,16 @@ internal class AppActorRestoreSyncCoordinator(
             }
         }
 
-        if (syncCandidates.isNotEmpty()) {
+        // The backend takes at most MAX_PURCHASES_PER_REQUEST purchases per sync request. A chunk
+        // that adopts a canonical id passes it on to the next.
+        var syncAppUserId = appUserId
+        syncCandidates.chunked(MAX_PURCHASES_PER_REQUEST).forEach { chunk ->
             try {
                 val syncContext = metadata.clientPurchaseContext(dateProviderMillis())
                 val response = backendClient.postGoogleSync(
                     AppActorGoogleSyncRequestDTO(
-                        appUserId = appUserId,
-                        obfuscatedAccountId = appActorGoogleObfuscatedAccountId(appUserId),
+                        appUserId = syncAppUserId,
+                        obfuscatedAccountId = appActorGoogleObfuscatedAccountId(syncAppUserId),
                         obfuscatedProfileId = null,
                         sourceIntent = metadata.sourceIntent,
                         source = metadata.source,
@@ -215,14 +214,15 @@ internal class AppActorRestoreSyncCoordinator(
                         clientPurchaseAttemptId = syncContext.clientPurchaseAttemptId,
                         sdkOriginated = syncContext.sdkOriginated,
                         sdkVersion = syncContext.sdkVersion,
-                        purchases = syncCandidates.map { it.toRestorePurchaseDTO() },
+                        purchases = chunk.map { it.toRestorePurchaseDTO() },
                     )
                 )
                 val body = requireNotNull(response.body) { "Google sync response body was null." }
                 val resolvedAppUserId = adoptResolvedAppUserId(
-                    requestedAppUserId = appUserId,
+                    requestedAppUserId = syncAppUserId,
                     resolvedAppUserId = body.appUserId,
                 )
+                syncAppUserId = resolvedAppUserId
                 customerManager.seedEnvelope(
                     appUserId = resolvedAppUserId,
                     envelope = AppActorCustomerEnvelopeDTO(
@@ -234,18 +234,18 @@ internal class AppActorRestoreSyncCoordinator(
                     verified = response.signatureVerified,
                 )
                 val successfulPurchaseKeys = successfulBatchPurchaseKeys(
-                    purchases = syncCandidates,
+                    purchases = chunk,
                     successCount = body.syncedCount,
                     results = body.results,
                 )
                 finalizeRestoredActivePurchases(
-                    purchases = syncCandidates.filter { purchase ->
+                    purchases = chunk.filter { purchase ->
                         successfulPurchaseKeys.contains(batchPurchaseKey(purchase))
                     },
                     appUserId = resolvedAppUserId,
                 )
                 enqueueFailedBatchPurchases(
-                    syncCandidates,
+                    chunk,
                     successfulPurchaseKeys,
                     productEntitlements,
                     resolvedAppUserId,
@@ -255,12 +255,12 @@ internal class AppActorRestoreSyncCoordinator(
                 report(customerManager.cachedInfo(resolvedAppUserId))
             } catch (throwable: Throwable) {
                 if (throwable is CancellationException) throw throwable
-                syncCandidates.forEach { purchase ->
+                chunk.forEach { purchase ->
                     report(
                         enqueueAndProcess(
                             purchase,
                             productEntitlements,
-                            appUserId,
+                            syncAppUserId,
                             metadata.sourceIntent,
                             metadata.clientPurchaseContext(dateProviderMillis()),
                         ).finishedCustomerInfo
@@ -269,14 +269,10 @@ internal class AppActorRestoreSyncCoordinator(
             }
         }
 
+        // A pending purchase resolves only through its own receipt: above when it posts, or in a
+        // drain. One whose post was queued or rejected stays pending, so it isn't reported as
+        // resolved with customer info from other purchases.
         report(receiptQueueDrainer.drainAllAssumingLocked(limit))
-
-        // Fire deferred purchase callbacks for any pending purchases that were resolved during sync
-        if (latestCustomer != null && pendingPurchaseRegistry.hasPendingTokens()) {
-            allProcessedPurchases.forEach { purchase ->
-                fireDeferredPurchaseCallbackIfNeeded(purchase, latestCustomer!!, true)
-            }
-        }
 
         return latestCustomer
     }
@@ -322,7 +318,7 @@ internal class AppActorRestoreSyncCoordinator(
             )
         }
 
-        val restoreBatches = restorePlan.bulkCandidates.chunked(batchSize)
+        val restoreBatches = restorePlan.bulkCandidates.chunked(minOf(batchSize, MAX_PURCHASES_PER_REQUEST))
         val shouldRunFollowUpSync = restorePlan.followUpSyncRequired
 
         var latestBatchCustomer: AppActorCustomerInfo? = null
@@ -686,6 +682,8 @@ internal class AppActorRestoreSyncCoordinator(
     )
 
     private companion object {
+        // GOOGLE_SYNC_MAX_PURCHASES_PER_REQUEST on the backend; a larger restore or sync gets a 400.
+        const val MAX_PURCHASES_PER_REQUEST = 20
         const val SOURCE_INTENT_RESTORE = "restore"
         const val SOURCE_INTENT_SYNC = "sync"
     }

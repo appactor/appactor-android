@@ -249,12 +249,15 @@ internal fun customerEnvelope(
 internal fun googleReceiptEnvelope(
     requestId: String,
     appUserId: String,
+    managementUrl: String? = null,
 ): String {
+    val managementUrlField = managementUrl?.let { "\"managementUrl\": \"$it\"," }.orEmpty()
     return """
         {
           "status": "ok",
           "requestId": "$requestId",
           "customer": {
+            $managementUrlField
             "entitlements": {},
             "subscriptions": {},
             "nonSubscriptions": {}

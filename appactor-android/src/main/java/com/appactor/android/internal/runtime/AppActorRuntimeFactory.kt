@@ -36,7 +36,7 @@ internal class AppActorRuntimeFactory(
     fun create(
         configuration: AppActorConfiguration,
         sessionId: Long,
-        callbackState: AppActorCallbackState,
+        callbackState: AppActorCallbackState = AppActorCallbackState(),
         onPipelineEvent: (AppActorReceiptPipelineEvent) -> Unit,
     ): AppActorRuntimeState {
         val identityStore = AppActorSharedPrefsIdentityStore(configuration.applicationContext)
@@ -76,18 +76,21 @@ internal class AppActorRuntimeFactory(
             offeringsManager = offeringsManager,
             offlineProductCatalogStore = offlineProductCatalogStore,
             storeAdapter = storeAdapter,
+            backgroundScope = scope,
         )
         val remoteConfigManager = AppActorRemoteConfigManager(
             backendClient = backendClient,
             cacheStore = remoteConfigsCacheStore,
             appVersionProvider = { appVersionProvider(configuration.applicationContext) },
             countryProvider = countryProvider,
+            backgroundScope = scope,
         )
         val experimentManager = AppActorExperimentManager(
             backendClient = backendClient,
             cacheStore = experimentCacheStore,
             appVersionProvider = { appVersionProvider(configuration.applicationContext) },
             countryProvider = countryProvider,
+            backgroundScope = scope,
         )
         val receiptQueueStore = AppActorAtomicJsonReceiptQueueStore(configuration.applicationContext)
         val postedLedgerStore = AppActorAtomicJsonPostedLedgerStore(configuration.applicationContext)

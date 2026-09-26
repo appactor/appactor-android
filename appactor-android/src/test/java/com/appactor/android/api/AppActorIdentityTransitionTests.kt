@@ -668,7 +668,15 @@ class AppActorIdentityTransitionTests {
                 }
                 "/v1/payment/receipts/google" -> {
                     receiptCalls.incrementAndGet()
-                    jsonResponse(googleReceiptEnvelope(requestId = "req_receipt_same_user_publish", appUserId = "user_a"))
+                    // Info that differs from the login's in more than its requestId, so the
+                    // listener, which already had the login's, is called again.
+                    jsonResponse(
+                        googleReceiptEnvelope(
+                            requestId = "req_receipt_same_user_publish",
+                            appUserId = "user_a",
+                            managementUrl = "https://play.google.com/store/account/subscriptions",
+                        )
+                    )
                 }
 
                 else -> jsonResponse("{}", 404)

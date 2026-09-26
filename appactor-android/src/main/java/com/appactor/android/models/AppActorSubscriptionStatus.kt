@@ -14,6 +14,8 @@ public enum class AppActorSubscriptionStatus(public val wireValue: String) {
 
     public companion object {
         public fun fromWireValue(value: String?): AppActorSubscriptionStatus {
+            // The backend sends "grace"; iOS reads both spellings too.
+            if (value == "grace") return GracePeriod
             return entries.firstOrNull { it.wireValue == value } ?: Unknown
         }
     }

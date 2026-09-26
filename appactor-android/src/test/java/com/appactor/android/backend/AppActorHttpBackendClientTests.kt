@@ -369,6 +369,61 @@ class AppActorHttpBackendClientTests {
     }
 
     @Test
+    fun `nonce requests ask for a request bound signature`() = runBlocking {
+        var binding: String? = null
+        val client = backendClient(
+            okHttpClient = OkHttpClient.Builder()
+                .addInterceptor { chain ->
+                    binding = chain.request().header("X-AppActor-Signature-Binding")
+                    response(
+                        chain = chain,
+                        code = 200,
+                        body = fixture("fixtures/backend/identify_android_sample.json"),
+                    )
+                }
+                .build(),
+            options = AppActorConfiguration.Options(
+                verifyResponseSignatures = false,
+                requireResponseSignatures = false,
+            ),
+        )
+
+        client.identify(AppActorIdentifyRequestDTO(appUserId = "user_android_123"))
+
+        assertEquals("request", binding)
+    }
+
+    @Test
+    fun `a 409 for a replayed nonce is sent again once with a fresh nonce`() = runBlocking {
+        val nonces = mutableListOf<String?>()
+        val client = backendClient(
+            okHttpClient = OkHttpClient.Builder()
+                .addInterceptor { chain ->
+                    nonces += chain.request().header("X-AppActor-Nonce")
+                    if (nonces.size == 1) {
+                        response(
+                            chain = chain,
+                            code = 409,
+                            body = """{"error":{"code":"CONFLICT","message":"Response signing nonce has already been used."}}""",
+                        )
+                    } else {
+                        response(chain = chain, code = 204, body = "")
+                    }
+                }
+                .build(),
+            options = AppActorConfiguration.Options(
+                verifyResponseSignatures = false,
+                requireResponseSignatures = false,
+            ),
+        )
+
+        client.deleteUserAttribute(appUserId = "user_android_123", key = "tier")
+
+        assertEquals(2, nonces.size)
+        assertTrue(nonces[0] != nonces[1])
+    }
+
+    @Test
     fun `attributes client patches attributes route with typed json body`() = runBlocking {
         var capturedMethod = ""
         var capturedPath = ""

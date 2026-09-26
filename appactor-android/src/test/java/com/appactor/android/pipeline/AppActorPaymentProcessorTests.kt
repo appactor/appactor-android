@@ -3081,8 +3081,9 @@ class AppActorPaymentProcessorTests {
         val info = dependencies.processor.restorePurchases()
 
         assertTrue(info.hasActiveEntitlement("premium"))
-        assertEquals(3, dependencies.restoreRequests.size)
-        assertEquals(listOf(500, 500, 1), dependencies.restoreRequests.map { it.purchases.size })
+        // The backend takes at most 20 purchases per restore request.
+        assertEquals(51, dependencies.restoreRequests.size)
+        assertEquals(List(50) { 20 } + 1, dependencies.restoreRequests.map { it.purchases.size })
         assertEquals(1001, dependencies.restoreRequests.sumOf { it.purchases.size })
         assertEquals("token_history_batch_0", dependencies.restoreRequests.first().purchases.first().purchaseToken)
         assertEquals("token_history_batch_1000", dependencies.restoreRequests.last().purchases.last().purchaseToken)
@@ -3163,7 +3164,7 @@ class AppActorPaymentProcessorTests {
 
         assertTrue(error is AppActorError.Network)
         assertEquals(2, dependencies.restoreRequests.size)
-        assertEquals(listOf(500, 500), dependencies.restoreRequests.map { it.purchases.size })
+        assertEquals(listOf(20, 20), dependencies.restoreRequests.map { it.purchases.size })
         assertEquals(1, dependencies.fetchedCustomers.size)
         assertTrue(dependencies.postedReceipts.isEmpty())
     }

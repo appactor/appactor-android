@@ -14,6 +14,9 @@ internal interface AppActorPostedLedgerStore {
     fun purgeExpired(olderThanMillis: Long)
     fun clear()
     fun snapshot(): Map<String, Long>
+
+    /** Deletes the ledger for good, for reset(): later writes through this instance are dropped. */
+    fun wipe()
 }
 
 internal class AppActorAtomicJsonPostedLedgerStore(
@@ -24,6 +27,7 @@ internal class AppActorAtomicJsonPostedLedgerStore(
     private val lock = ReentrantLock()
     private val file: File = File(directory, "posted_ledger.json")
     private var ledger: MutableMap<String, Long>? = null
+    private var wiped = false
 
     override fun isPosted(key: String): Boolean = lock.withLock {
         loadLedger().containsKey(key)
@@ -60,6 +64,14 @@ internal class AppActorAtomicJsonPostedLedgerStore(
     override fun clear() {
         lock.withLock {
             persist(linkedMapOf())
+        }
+    }
+
+    override fun wipe() {
+        lock.withLock {
+            wiped = true
+            ledger = linkedMapOf()
+            file.delete()
         }
     }
 
@@ -113,6 +125,7 @@ internal class AppActorAtomicJsonPostedLedgerStore(
     }
 
     private fun persist(entries: Map<String, Long>): Boolean {
+        if (wiped) return true
         val encoded = runCatching {
             AppActorBackendJson.instance.encodeToString(
                 PersistedLedgerState(entries = entries)
@@ -153,9 +166,5 @@ internal class AppActorAtomicJsonPostedLedgerStore(
         private const val TAG = "PostedLedgerStore"
         const val LEDGER_RETENTION_MILLIS: Long = 90L * 24 * 60 * 60 * 1_000
         const val MAX_LEDGER_ENTRIES: Int = 5_000
-        fun deletePersistedFile(context: Context) {
-            val file = File(File(context.filesDir, "appactor"), "posted_ledger.json")
-            file.delete()
-        }
     }
 }

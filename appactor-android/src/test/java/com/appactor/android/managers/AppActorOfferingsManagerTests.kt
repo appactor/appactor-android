@@ -946,10 +946,11 @@ class AppActorOfferingsManagerTests {
             storeAdapter = mockStoreAdapter,
         )
 
-        val fetch = async(Dispatchers.Default) { manager.getOfferings() }
+        val fetch = async(Dispatchers.Default) { runCatching { manager.getOfferings() } }
         queryStarted.await()
         manager.clearCache()
         releaseQuery.complete(Unit)
+        // The fetch now runs in the background and the cleared request fails its caller.
         fetch.await()
 
         assertNull(offlineCatalogStore.load())

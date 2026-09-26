@@ -5,6 +5,7 @@ import com.appactor.android.backend.client.AppActorBackendClient
 import com.appactor.android.backend.client.AppActorBackendException
 import com.appactor.android.backend.client.toAppActorError
 import com.appactor.android.backend.dto.AppActorAttributionRequestDTO
+import com.appactor.android.backend.dto.clippedToServerLimits
 import com.appactor.android.backend.dto.AppActorAttributesPatchRequestDTO
 import com.appactor.android.backend.dto.AppActorIntegrationIdentifierRequestDTO
 import com.appactor.android.internal.AppActorSDK
@@ -233,11 +234,6 @@ internal class AppActorAttributesManager(
         put(key, AppActorAttributeValue.string(normalized))
     }
 
-    private fun normalizeAlpha2Country(raw: String?): String? {
-        val normalized = raw?.trim()?.uppercase(Locale.US).orEmpty()
-        return normalized.takeIf { ALPHA_2_COUNTRY.matches(it) }
-    }
-
     suspend fun updateAttribution(
         appUserId: String,
         attribution: AppActorAttribution,
@@ -345,7 +341,7 @@ internal class AppActorAttributesManager(
                 flushed = flushed.copy(unsetIntegrationIdentifiers = flushed.unsetIntegrationIdentifiers + type)
             }
             pending.attribution?.let { request ->
-                attributionDelivered = deliver { backendClient.postAttribution(appUserId, request) }
+                attributionDelivered = deliver { backendClient.postAttribution(appUserId, request.clippedToServerLimits()) }
                 flushed = flushed.copy(attribution = request)
             }
             true
@@ -367,11 +363,9 @@ internal class AppActorAttributesManager(
 
     /** Sends one request. Returns `false` when the server rejected its payload for good. */
     private suspend fun deliver(send: suspend () -> Unit): Boolean {
-        var rejection = rejectionOf(send) ?: return true
-        // The server also answers 409 to a replayed signing nonce, which OkHttp sends when it
-        // silently retries a request after a connection failure (audit D11). A 409 is final only
-        // once a fresh request, with a new nonce, gets it too.
-        if (rejection.httpStatusCode == 409) rejection = rejectionOf(send) ?: return true
+        // A 409 for a replayed signing nonce never gets here: the backend client sends the
+        // request again with a fresh nonce.
+        val rejection = rejectionOf(send) ?: return true
         AppActorLogger.warn("Customer attribute mutation rejected by the server; dropping it: ${rejection.message}")
         return false
     }
@@ -669,8 +663,18 @@ internal class AppActorAttributesManager(
         private const val MAX_BUNDLE_ID_LENGTH = 255
         private const val MAX_LOCALE_LENGTH = 32
         private const val MAX_TIMEZONE_LENGTH = 80
-        private val ALPHA_2_COUNTRY = Regex("^[A-Z]{2}$")
     }
+}
+
+private val ALPHA_2_COUNTRY = Regex("^[A-Z]{2}$")
+
+/**
+ * The ISO 3166-1 alpha-2 code in [raw], or null. Locale can report a UN M.49 region such as
+ * "419", which the backend rejects.
+ */
+internal fun normalizeAlpha2Country(raw: String?): String? {
+    val normalized = raw?.trim()?.uppercase(Locale.US).orEmpty()
+    return normalized.takeIf { ALPHA_2_COUNTRY.matches(it) }
 }
 
 internal enum class AppActorCustomAttributionField {

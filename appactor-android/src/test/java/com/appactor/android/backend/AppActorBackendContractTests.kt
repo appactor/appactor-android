@@ -2,7 +2,9 @@ package com.appactor.android.backend
 
 import com.appactor.android.backend.client.buildAppActorUrl
 import com.appactor.android.backend.client.AppActorBackendJson
+import com.appactor.android.backend.dto.AppActorAttributionRequestDTO
 import com.appactor.android.backend.dto.AppActorCustomerEnvelopeDTO
+import com.appactor.android.backend.dto.clippedToServerLimits
 import com.appactor.android.backend.dto.AppActorEntitlementDTO
 import com.appactor.android.backend.dto.AppActorGoogleReceiptRequestDTO
 import com.appactor.android.backend.dto.AppActorOfferingDTO
@@ -16,6 +18,7 @@ import com.appactor.android.backend.mappers.toResult
 import com.appactor.android.models.AppActorPackageType
 import com.appactor.android.models.AppActorProductType
 import com.appactor.android.models.AppActorStore
+import com.appactor.android.models.AppActorSubscriptionStatus
 import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -268,13 +271,51 @@ class AppActorBackendContractTests {
         ).toModel("premium")
         assertFalse(cancelledButActive.willRenew)
 
+        // The backend's grace status is "grace".
+        val inGracePeriod = AppActorEntitlementDTO(
+            isActive = true,
+            status = "grace",
+            productId = "com.appactor.pro.monthly",
+            unsubscribeDetectedAt = null,
+        ).toModel("premium")
+        assertEquals(AppActorSubscriptionStatus.GracePeriod, inGracePeriod.subscriptionStatus)
+        assertTrue(inGracePeriod.willRenew)
+
         val cancelledInGracePeriod = AppActorEntitlementDTO(
             isActive = true,
-            status = "grace_period",
+            status = "grace",
             productId = "com.appactor.pro.monthly",
             unsubscribeDetectedAt = "2026-03-14T12:00:00.000Z",
         ).toModel("premium")
         assertFalse(cancelledInGracePeriod.willRenew)
+    }
+
+    @Test
+    fun `attribution fields are cut to the lengths the backend accepts`() {
+        val clipped = AppActorAttributionRequestDTO(
+            provider = "google_play_install_referrer",
+            network = "n".repeat(130),
+            campaign = "c".repeat(300),
+            clickId = " ${"k".repeat(254)}\uD83D\uDE00 ",
+        ).clippedToServerLimits()
+
+        assertEquals(64, clipped.source?.length)
+        assertEquals(120, clipped.network?.length)
+        assertEquals(255, clipped.campaign?.length)
+        // Trimmed first; the emoji's surrogate pair is not split.
+        assertEquals("k".repeat(254), clipped.clickId)
+    }
+
+    @Test
+    fun `an attribution too large for the backend drops the metadata it does not read`() {
+        val clipped = AppActorAttributionRequestDTO(
+            provider = "custom",
+            source = "facebook",
+            metadata = (1..20).associate { index -> "key_$index" to kotlinx.serialization.json.JsonPrimitive("v".repeat(1_000)) },
+        ).clippedToServerLimits()
+
+        assertTrue(clipped.metadata.isEmpty())
+        assertEquals("facebook", clipped.source)
     }
 
     @Test
