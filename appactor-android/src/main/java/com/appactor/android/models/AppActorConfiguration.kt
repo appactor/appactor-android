@@ -46,7 +46,10 @@ internal class AppActorConfiguration(
             require(apiKey.isNotBlank()) {
                 "AppActor apiKey must not be blank."
             }
-            appUserId?.let(AppActorValidation::validateAppUserId)
+            // A placeholder id means nobody is signed in; the identity store resolves it.
+            appUserId
+                ?.takeUnless(AppActorValidation::isPlaceholderAppUserId)
+                ?.let(AppActorValidation::validateAppUserId)
             require(baseUrl.isNotBlank()) {
                 "AppActor baseUrl must not be blank."
             }

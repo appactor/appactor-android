@@ -107,6 +107,29 @@ class GooglePlayStoreAdapterTests {
             get() = if (replacementModeSlot.isCaptured) replacementModeSlot.captured else null
     }
 
+    /** One base plan (monthly001) with a free-trial offer (trial7d) the user is eligible for. */
+    private fun monthlyWithTrialProductDetails() = AppActorBillingProductDetailsPayload(
+        productId = "com.appactor.pro.monthly",
+        productType = AppActorProductType.Subscription,
+        subscriptionOffers = listOf(
+            AppActorBillingSubscriptionOfferPayload(
+                basePlanId = "monthly001",
+                offerId = null,
+                offerToken = "base-plan-token",
+                pricingPhases = listOf(AppActorPricingPhase(priceAmountMicros = 9_990_000, currencyCode = "USD")),
+            ),
+            AppActorBillingSubscriptionOfferPayload(
+                basePlanId = "monthly001",
+                offerId = "trial7d",
+                offerToken = "trial-token",
+                pricingPhases = listOf(
+                    AppActorPricingPhase(billingPeriod = "P1W", priceAmountMicros = 0, currencyCode = "USD"),
+                    AppActorPricingPhase(priceAmountMicros = 9_990_000, currencyCode = "USD"),
+                ),
+            ),
+        ),
+    )
+
     @Test
     fun `query product details resolves matching base plan and offer`() = kotlinx.coroutines.runBlocking {
         val (billingClient, _) = createMockBillingClient(
@@ -559,6 +582,110 @@ class GooglePlayStoreAdapterTests {
     }
 
     @Test
+    fun `launch purchase labels a deferred change with the product play reports`() = kotlinx.coroutines.runBlocking {
+        val (billingClient, _) = createMockBillingClient(
+            productDetails = listOf(
+                AppActorBillingProductDetailsPayload(
+                    productId = "com.appactor.basic",
+                    productType = AppActorProductType.Subscription,
+                    subscriptionOffers = listOf(
+                        AppActorBillingSubscriptionOfferPayload(
+                            basePlanId = "monthly",
+                            offerId = null,
+                            offerToken = "basic-token",
+                            pricingPhases = listOf(AppActorPricingPhase(priceAmountMicros = 1_990_000, currencyCode = "USD")),
+                        )
+                    ),
+                )
+            ),
+            // Until the next renewal the new token still lists the product being replaced.
+            launchResult = AppActorBillingLaunchResult.Purchased(
+                purchases = listOf(
+                    AppActorBillingPurchasePayload(
+                        products = listOf("com.appactor.premium"),
+                        productType = AppActorProductType.Subscription,
+                        purchaseToken = "deferred_token",
+                        purchaseTimeMillis = 1_710_000_000_000,
+                        purchaseState = AppActorStorePurchaseState.Purchased,
+                        isAcknowledged = false,
+                    )
+                )
+            ),
+        )
+        val adapter = GooglePlayStoreAdapter(context, billingClient)
+        val request = AppActorStoreProductRequest(
+            productId = "com.appactor.basic",
+            productType = AppActorProductType.Subscription,
+            basePlanId = "monthly",
+            oldPurchaseToken = "premium_token",
+        )
+        adapter.queryProductDetails(listOf(request))
+
+        val purchase = (adapter.launchPurchase(Activity(), request) as AppActorStorePurchaseLaunchResult.Purchased)
+            .purchases
+            .single()
+
+        assertEquals("com.appactor.premium", purchase.productId)
+        assertEquals(AppActorProductType.Subscription, purchase.productType)
+        assertEquals("deferred_token", purchase.purchaseToken)
+        assertNull(purchase.basePlanId)
+        assertNull(purchase.priceAmountMicros)
+    }
+
+    @Test
+    fun `launch purchase sells the offer the package shows when requests share a base plan`() = kotlinx.coroutines.runBlocking {
+        val (billingClient, captures) = createMockBillingClient(
+            productDetails = listOf(monthlyWithTrialProductDetails()),
+        )
+        val adapter = GooglePlayStoreAdapter(context, billingClient)
+        val pinnedUnavailable = AppActorStoreProductRequest(
+            productId = "com.appactor.pro.monthly",
+            productType = AppActorProductType.Subscription,
+            basePlanId = "monthly001",
+            offerId = "intro7d",
+        )
+        val unpinned = pinnedUnavailable.copy(offerId = null)
+        val (degraded, autoSelected) = adapter.queryProductDetails(listOf(pinnedUnavailable, unpinned))
+        assertNull(degraded.offerId)
+        assertEquals(pinnedUnavailable, degraded.sourceRequest)
+        assertEquals("trial7d", autoSelected.offerId)
+        assertEquals(unpinned, autoSelected.sourceRequest)
+
+        // A package purchase names the offer the package shows (toResolvedPurchaseTarget).
+        adapter.launchPurchase(
+            Activity(),
+            AppActorStoreProductRequest(
+                productId = degraded.productId,
+                productType = degraded.productType,
+                basePlanId = degraded.basePlanId,
+                offerId = degraded.offerId,
+            ),
+        )
+
+        assertEquals("base-plan-token", captures.lastLaunchOfferToken)
+    }
+
+    @Test
+    fun `launch purchase on an empty cache launches the named base plan without auto-selection`() = kotlinx.coroutines.runBlocking {
+        val (billingClient, captures) = createMockBillingClient(
+            productDetails = listOf(monthlyWithTrialProductDetails()),
+        )
+        // A package kept across reset() reaches a new adapter whose cache is empty.
+        val adapter = GooglePlayStoreAdapter(context, billingClient)
+
+        adapter.launchPurchase(
+            Activity(),
+            AppActorStoreProductRequest(
+                productId = "com.appactor.pro.monthly",
+                productType = AppActorProductType.Subscription,
+                basePlanId = "monthly001",
+            ),
+        )
+
+        assertEquals("base-plan-token", captures.lastLaunchOfferToken)
+    }
+
+    @Test
     fun `launch purchase maps one time price snapshot onto purchase`() = kotlinx.coroutines.runBlocking {
         val (billingClient, _) = createMockBillingClient(
             productDetails = listOf(
@@ -710,6 +837,56 @@ class GooglePlayStoreAdapterTests {
 
         assertEquals(1, purchases.size)
         assertEquals(AppActorProductType.Consumable, purchases.first().productType)
+    }
+
+    @Test
+    fun `query active purchases sends a subscription without a cached base plan`() = kotlinx.coroutines.runBlocking {
+        val basePlan = { basePlanId: String, price: Long ->
+            AppActorBillingSubscriptionOfferPayload(
+                basePlanId = basePlanId,
+                offerId = null,
+                offerToken = "$basePlanId-token",
+                pricingPhases = listOf(AppActorPricingPhase(priceAmountMicros = price, currencyCode = "USD")),
+            )
+        }
+        val (billingClient, _) = createMockBillingClient(
+            productDetails = listOf(
+                AppActorBillingProductDetailsPayload(
+                    productId = "com.appactor.pro",
+                    productType = AppActorProductType.Subscription,
+                    subscriptionOffers = listOf(basePlan("monthly", 4_990_000), basePlan("annual", 39_990_000)),
+                )
+            ),
+            activePurchasesByType = mapOf(
+                AppActorProductType.Subscription to listOf(
+                    AppActorBillingPurchasePayload(
+                        products = listOf("com.appactor.pro"),
+                        productType = AppActorProductType.Subscription,
+                        purchaseToken = "annual_token",
+                        purchaseTimeMillis = 1_710_000_000_000,
+                        purchaseState = AppActorStorePurchaseState.Purchased,
+                        isAcknowledged = true,
+                    )
+                )
+            ),
+        )
+        val adapter = GooglePlayStoreAdapter(context, billingClient)
+        adapter.queryProductDetails(
+            listOf("monthly", "annual").map { basePlanId ->
+                AppActorStoreProductRequest(
+                    productId = "com.appactor.pro",
+                    productType = AppActorProductType.Subscription,
+                    basePlanId = basePlanId,
+                )
+            }
+        )
+
+        val purchase = adapter.queryActivePurchases().single()
+
+        assertEquals(AppActorProductType.Subscription, purchase.productType)
+        assertNull(purchase.basePlanId)
+        assertNull(purchase.offerId)
+        assertNull(purchase.priceAmountMicros)
     }
 
     @Test
@@ -1130,7 +1307,8 @@ class GooglePlayStoreAdapterTests {
         assertEquals("monthly001", products.single().basePlanId)
         assertEquals("trial7d", products.single().offerId)
 
-        adapter.launchPurchase(activity = Activity(), request = request)
+        // The package shows the auto-selected offer, so its purchase names it.
+        adapter.launchPurchase(activity = Activity(), request = request.copy(offerId = products.single().offerId))
 
         assertEquals("trial-token", captures.lastLaunchOfferToken)
     }

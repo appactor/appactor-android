@@ -111,6 +111,7 @@ class AppActorOfferingsManagerTests {
                         localizedPrice = "$9.99",
                         priceAmountMicros = 9_990_000,
                         currencyCode = "USD",
+                        sourceRequest = request,
                     )
                 } else {
                     pricedProducts()[requestKey(request)]
@@ -152,6 +153,7 @@ class AppActorOfferingsManagerTests {
                         localizedPrice = "$9.99",
                         priceAmountMicros = 9_990_000,
                         currencyCode = "USD",
+                        sourceRequest = request,
                     )
                 } else {
                     pricedProducts()[requestKey(request)]
@@ -172,6 +174,54 @@ class AppActorOfferingsManagerTests {
         assertEquals("monthly001", monthly?.basePlanId)
         assertNull(monthly?.offerId)
         assertEquals("$9.99", monthly?.localizedPriceString)
+    }
+
+    @Test
+    fun `get offerings shows each package what its own request resolved to on a shared base plan`() = runBlocking {
+        // pkg_pro_monthly pins intro7d, which Play does not return, so it degrades to the base
+        // plan; an unpinned package on the same base plan auto-selects trial7d. The degraded
+        // product's own key equals the unpinned request's key, so keying by product showed the
+        // base plan on the unpinned package.
+        val fixture = fixtureOfferings()
+        val current = requireNotNull(fixture.data.currentOffering)
+        val pinned = current.packages.single { it.id == "pkg_pro_monthly" }
+        val unpinned = pinned.copy(
+            id = "pkg_pro_monthly_unpinned",
+            products = pinned.products.map { productRef -> productRef.copy(offerId = null) },
+        )
+        val offering = current.copy(packages = current.packages + unpinned)
+        val dto = fixture.copy(data = fixture.data.copy(currentOffering = offering, offerings = listOf(offering)))
+        val mockClient = mockk<AppActorBackendClient>(relaxed = true)
+        coEvery { mockClient.getOfferings(any()) } returns freshOfferingsResponse(dto)
+        val mockStoreAdapter = mockk<AppActorStoreAdapter>(relaxed = true)
+        coEvery { mockStoreAdapter.queryProductDetails(any()) } answers {
+            val requests = firstArg<List<AppActorStoreProductRequest>>()
+            requests.mapNotNull { request ->
+                if (request.productId == "com.appactor.pro.monthly") {
+                    AppActorStoreProduct(
+                        productId = "com.appactor.pro.monthly",
+                        productType = AppActorProductType.Subscription,
+                        basePlanId = "monthly001",
+                        offerId = if (request.offerId == null) "trial7d" else null,
+                        localizedPrice = "$9.99",
+                        sourceRequest = request,
+                    )
+                } else {
+                    pricedProducts()[requestKey(request)]
+                }
+            }
+        }
+        val manager = AppActorOfferingsManager(
+            backendClient = mockClient,
+            cacheStore = offeringsCacheStore("offerings-shared-base-plan"),
+            offlineProductCatalogStore = offlineProductCatalogStore("offerings-shared-base-plan"),
+            storeAdapter = mockStoreAdapter,
+        )
+
+        val packages = manager.getOfferings().current?.packages.orEmpty().associateBy { it.id }
+
+        assertNull(packages["pkg_pro_monthly"]?.offerId)
+        assertEquals("trial7d", packages["pkg_pro_monthly_unpinned"]?.offerId)
     }
 
     @Test

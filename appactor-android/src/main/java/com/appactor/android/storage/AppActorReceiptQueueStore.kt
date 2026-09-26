@@ -49,6 +49,10 @@ internal data class AppActorReceiptQueueItem(
     val isAcknowledged: Boolean = false,
     val shouldAcknowledge: Boolean = false,
     val shouldConsume: Boolean = false,
+    /** A dead letter consumed or acknowledged on Play; a later post must not finish it again. */
+    val finishedOnDevice: Boolean = false,
+    /** When the item was first dead-lettered. */
+    val deadLetteredAtMillis: Long? = null,
     val retryCount: Int = 0,
     val nextRetryAtMillis: Long = 0L,
     val createdAtMillis: Long,
@@ -59,6 +63,10 @@ internal data class AppActorReceiptQueueItem(
     val offeringId: String? = null,
     val packageId: String? = null,
 ) {
+    /** Older versions did not stamp [deadLetteredAtMillis]; their last update is the closest. */
+    val deadLetterRetentionStartMillis: Long
+        get() = deadLetteredAtMillis ?: lastUpdatedAtMillis
+
     companion object {
         fun makeKey(
             purchaseToken: String,
@@ -221,6 +229,8 @@ internal class AppActorAtomicJsonReceiptQueueStore(
                     isAcknowledged = existing.isAcknowledged || item.isAcknowledged,
                     shouldAcknowledge = existing.shouldAcknowledge || item.shouldAcknowledge,
                     shouldConsume = existing.shouldConsume || item.shouldConsume,
+                    finishedOnDevice = existing.finishedOnDevice || item.finishedOnDevice,
+                    deadLetteredAtMillis = existing.deadLetteredAtMillis ?: item.deadLetteredAtMillis,
                     retryCount = existing.retryCount,
                     nextRetryAtMillis = existing.nextRetryAtMillis,
                     createdAtMillis = existing.createdAtMillis,
@@ -441,12 +451,14 @@ internal class AppActorAtomicJsonReceiptQueueStore(
         }
     }
 
+    // Every launch revives and re-posts dead letters, which refreshes lastUpdatedAtMillis, so
+    // retention counts from the first dead-lettering.
     private fun purgeExpiredDeadLetteredItems(
         source: LinkedHashMap<String, AppActorReceiptQueueItem>
     ): LinkedHashMap<String, AppActorReceiptQueueItem> {
         val cutoff = System.currentTimeMillis() - DEAD_LETTER_RETENTION_MILLIS
         val filtered = source.filterValues { item ->
-            item.phase != AppActorReceiptQueuePhase.DeadLettered || item.lastUpdatedAtMillis >= cutoff
+            item.phase != AppActorReceiptQueuePhase.DeadLettered || item.deadLetterRetentionStartMillis >= cutoff
         }
         return if (filtered.size == source.size) {
             source

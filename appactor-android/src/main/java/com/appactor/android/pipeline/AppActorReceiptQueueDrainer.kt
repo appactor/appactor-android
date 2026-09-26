@@ -230,7 +230,7 @@ internal class AppActorReceiptQueueDrainer(
             queueStore.update(normalizedItem)
         }
 
-        if (isPurchasePosted(normalizedItem)) {
+        if (isRecordedByBackend(normalizedItem)) {
             return finishAlreadyPostedItem(normalizedItem, productEntitlements)
         }
 
@@ -305,22 +305,29 @@ internal class AppActorReceiptQueueDrainer(
             }
         } catch (throwable: Throwable) {
             if (throwable is CancellationException) throw throwable
-            if (throwable is AppActorBackendException.Http && throwable.statusCode in 400..499) {
+            val httpError = throwable as? AppActorBackendException.Http
+            val isRateLimited = httpError?.statusCode == 429
+            // A 429 is the backend's rate limiter answering `retryable_error`, and a 408 its
+            // request timeout. Dead-lettering either would consume or acknowledge a purchase the
+            // backend never recorded.
+            val isTransient = isRateLimited || httpError?.statusCode == 408
+            if (httpError != null && httpError.statusCode in 400..499 && !isTransient) {
                 deadLetter(
                     item = normalizedItem,
-                    code = throwable.error?.code ?: throwable.statusCode.toString(),
-                    message = throwable.error?.message ?: throwable.message,
+                    code = httpError.error?.code ?: httpError.statusCode.toString(),
+                    message = httpError.error?.message ?: httpError.message,
                 )
                 ProcessingOutcome.PermanentFailure(
-                    code = throwable.error?.code,
-                    message = throwable.error?.message ?: throwable.message,
+                    code = httpError.error?.code,
+                    message = httpError.error?.message ?: httpError.message,
                 )
             } else {
                 scheduleRetryOrDeadLetter(
                     item = normalizedItem,
-                    retryAfterSeconds = null,
-                    errorCode = (throwable as? AppActorBackendException.Http)?.error?.code,
+                    retryAfterSeconds = httpError?.retryAfterSeconds,
+                    errorCode = httpError?.error?.code,
                     errorMessage = throwable.message,
+                    rateLimited = isRateLimited,
                 )
             }
         }
@@ -373,6 +380,7 @@ internal class AppActorReceiptQueueDrainer(
         retryAfterSeconds: Double?,
         errorCode: String?,
         errorMessage: String?,
+        rateLimited: Boolean = false,
     ): ProcessingOutcome {
         val now = dateProviderMillis()
         val nextRetryCount = item.retryCount + 1
@@ -382,14 +390,14 @@ internal class AppActorReceiptQueueDrainer(
             retryCount = nextRetryCount,
             retryAfterSeconds = retryAfterSeconds,
         )
-        if (errorCode == "RATE_LIMIT" || errorCode == "RATE_LIMIT_EXCEEDED") {
+        if (rateLimited || errorCode == "RATE_LIMIT" || errorCode == "RATE_LIMIT_EXCEEDED") {
             queueStore.setRateLimitCooldownMillis(nextRetryAt)
         }
         val updated = item.copy(
             retryCount = nextRetryCount,
             nextRetryAtMillis = nextRetryAt,
             claimedAtMillis = null,
-            phase = if (isPurchasePosted(item)) {
+            phase = if (isRecordedByBackend(item)) {
                 AppActorReceiptQueuePhase.NeedsFinish
             } else {
                 AppActorReceiptQueuePhase.NeedsPost
@@ -418,15 +426,17 @@ internal class AppActorReceiptQueueDrainer(
         code: String?,
         message: String?,
     ) {
+        // The posted ledger stays untouched: the backend never recorded this purchase, and the
+        // startup revival must post it again once the backend accepts it.
         val finalized = finalizeDeadLetteredPurchase(item)
-        if (finalized) {
-            markPurchasePosted(item)
-        }
+        val now = dateProviderMillis()
         val updated = item.copy(
+            finishedOnDevice = finalized,
+            deadLetteredAtMillis = item.deadLetteredAtMillis ?: now,
             phase = AppActorReceiptQueuePhase.DeadLettered,
             claimedAtMillis = null,
             nextRetryAtMillis = 0L,
-            lastUpdatedAtMillis = dateProviderMillis(),
+            lastUpdatedAtMillis = now,
             lastError = buildDeadLetterError(
                 code = code,
                 message = message,
@@ -458,7 +468,13 @@ internal class AppActorReceiptQueueDrainer(
         scheduleNextRetryWake()
     }
 
+    // A dead letter finished on Play was refused by the backend, so a posted-ledger entry for it
+    // (written by older versions) does not mean the backend recorded it.
+    private fun isRecordedByBackend(item: AppActorReceiptQueueItem): Boolean =
+        !item.finishedOnDevice && isPurchasePosted(item)
+
     private suspend fun finalizeDeadLetteredPurchase(item: AppActorReceiptQueueItem): Boolean {
+        if (item.finishedOnDevice) return true
         val shouldConsume = item.shouldConsume || item.productType == AppActorProductType.Consumable.wireValue
         val shouldAcknowledge = item.shouldAcknowledge ||
             (item.productType == AppActorProductType.Subscription.wireValue ||

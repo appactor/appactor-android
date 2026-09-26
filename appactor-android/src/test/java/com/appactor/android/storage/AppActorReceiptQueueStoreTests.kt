@@ -188,16 +188,15 @@ class AppActorReceiptQueueStoreTests {
     }
 
     @Test
-    fun `queue store purges expired dead lettered items on load`() {
+    fun `queue store purges items first dead lettered before the retention window on load`() {
         val directory = tempDirectory("queue-dead-letter-retention")
         val now = System.currentTimeMillis()
+        // Re-dead-lettered by today's launch revival, but first dead-lettered before the window.
         val oldDeadLetter = queueItem(
-            createdAtMillis = now - AppActorAtomicJsonReceiptQueueStore.DEAD_LETTER_RETENTION_MILLIS - 1_000,
+            createdAtMillis = now,
             phase = AppActorReceiptQueuePhase.DeadLettered,
             purchaseToken = "token_old",
-        ).copy(
-            lastUpdatedAtMillis = now - AppActorAtomicJsonReceiptQueueStore.DEAD_LETTER_RETENTION_MILLIS - 1_000,
-        )
+        ).copy(deadLetteredAtMillis = now - AppActorAtomicJsonReceiptQueueStore.DEAD_LETTER_RETENTION_MILLIS - 1_000)
         val freshPending = queueItem(
             createdAtMillis = now,
             phase = AppActorReceiptQueuePhase.NeedsPost,
@@ -212,6 +211,22 @@ class AppActorReceiptQueueStoreTests {
         assertEquals(listOf(freshPending.key), reloaded.snapshot().map { it.key })
         assertEquals(0, reloaded.deadLetteredCount())
         assertEquals(1, reloaded.pendingCount())
+    }
+
+    @Test
+    fun `queue store purges an older version's dead letter by its last update on load`() {
+        val directory = tempDirectory("queue-legacy-dead-letter-retention")
+        val now = System.currentTimeMillis()
+        val legacyDeadLetter = queueItem(
+            createdAtMillis = now,
+            phase = AppActorReceiptQueuePhase.DeadLettered,
+            purchaseToken = "token_legacy",
+        ).copy(lastUpdatedAtMillis = now - AppActorAtomicJsonReceiptQueueStore.DEAD_LETTER_RETENTION_MILLIS - 1_000)
+        AppActorAtomicJsonReceiptQueueStore(context, directory).upsert(legacyDeadLetter)
+
+        val reloaded = AppActorAtomicJsonReceiptQueueStore(context, directory)
+
+        assertEquals(0, reloaded.deadLetteredCount())
     }
 
     @Test

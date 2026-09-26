@@ -2,7 +2,13 @@ package com.appactor.android.storage
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.appactor.android.internal.logging.AppActorLogger
+import com.appactor.android.models.AppActorValidation
 import java.util.UUID
+
+private const val ANONYMOUS_APP_USER_ID_PREFIX: String = "appactor-anon-"
+
+internal fun isAnonymousAppUserId(appUserId: String): Boolean = appUserId.startsWith(ANONYMOUS_APP_USER_ID_PREFIX)
 
 internal interface AppActorIdentityStore {
     val currentAppUserId: String?
@@ -46,23 +52,38 @@ internal class AppActorSharedPrefsIdentityStore(
 
     override fun ensureAppUserId(): String {
         val existing = currentAppUserId
-        if (!existing.isNullOrBlank()) {
+        if (existing != null && AppActorValidation.isValidAppUserId(existing)) {
             return existing
         }
-        val generated = "appactor-anon-${UUID.randomUUID()}".lowercase()
-        setAppUserId(generated)
-        return generated
+        // Older versions stored ids the backend rejects (e.g. "null"). Every backend call for
+        // such an id fails, so it holds no server state worth keeping.
+        if (!existing.isNullOrBlank()) {
+            AppActorLogger.warn("[Identity] Replacing a stored appUserId the backend rejects with a new anonymous id.")
+        }
+        return newAnonymousAppUserId()
     }
 
     override fun resolveAppUserId(explicitAppUserId: String?): String {
         val normalizedExplicit = explicitAppUserId
             ?.takeIf { it.trim().isNotEmpty() }
+        if (normalizedExplicit != null && AppActorValidation.isPlaceholderAppUserId(normalizedExplicit)) {
+            // A placeholder such as "null" (e.g. `user?.id.toString()` while signed out) means
+            // nobody is signed in: keep an anonymous id, never the last signed-in user's.
+            AppActorLogger.warn("[Identity] appUserId '$normalizedExplicit' is a placeholder the backend rejects; using an anonymous id.")
+            return currentAppUserId?.takeIf(::isAnonymousAppUserId) ?: newAnonymousAppUserId()
+        }
         if (normalizedExplicit != null) {
-            com.appactor.android.models.AppActorValidation.validateAppUserId(normalizedExplicit)
+            AppActorValidation.validateAppUserId(normalizedExplicit)
             setAppUserId(normalizedExplicit)
             return normalizedExplicit
         }
         return ensureAppUserId()
+    }
+
+    private fun newAnonymousAppUserId(): String {
+        val generated = "$ANONYMOUS_APP_USER_ID_PREFIX${UUID.randomUUID()}".lowercase()
+        setAppUserId(generated)
+        return generated
     }
 
     override fun setAppUserId(appUserId: String?) {

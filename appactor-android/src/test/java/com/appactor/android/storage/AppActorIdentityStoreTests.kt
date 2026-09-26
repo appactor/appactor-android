@@ -2,6 +2,8 @@ package com.appactor.android.storage
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import com.appactor.android.models.AppActorConfiguration
+import com.appactor.android.models.AppActorError
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
@@ -58,6 +60,50 @@ class AppActorIdentityStoreTests {
 
         assertEquals(" user_android_123 ", resolved)
         assertEquals(" user_android_123 ", store.currentAppUserId)
+    }
+
+    @Test
+    fun `a configured placeholder id resolves to an anonymous user`() {
+        val store = AppActorSharedPrefsIdentityStore(context)
+        val configuration = AppActorConfiguration(context = context, apiKey = "pk_test_123", appUserId = "null")
+
+        val resolved = store.resolveAppUserId(configuration.appUserId)
+
+        assertTrue(resolved.startsWith("appactor-anon-"))
+        assertEquals(resolved, store.currentAppUserId)
+    }
+
+    @Test
+    fun `a placeholder id after a signed in session resolves to an anonymous user`() {
+        val store = AppActorSharedPrefsIdentityStore(context)
+        store.resolveAppUserId("alice")
+
+        val resolved = store.resolveAppUserId("null")
+
+        assertTrue(resolved.startsWith("appactor-anon-"))
+        assertEquals(resolved, store.currentAppUserId)
+        assertEquals(resolved, store.resolveAppUserId("undefined"))
+    }
+
+    @Test
+    fun `resolve app user id rejects a malformed id`() {
+        val store = AppActorSharedPrefsIdentityStore(context)
+
+        val error = runCatching { store.resolveAppUserId("tenant/user_1") }.exceptionOrNull()
+
+        assertTrue(error is AppActorError.InvalidConfiguration)
+        assertNull(store.currentAppUserId)
+    }
+
+    @Test
+    fun `ensure app user id replaces a stored id the backend rejects`() {
+        val store = AppActorSharedPrefsIdentityStore(context)
+        store.setAppUserId("undefined")
+
+        val resolved = store.ensureAppUserId()
+
+        assertTrue(resolved.startsWith("appactor-anon-"))
+        assertEquals(resolved, store.currentAppUserId)
     }
 
     @Test

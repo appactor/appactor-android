@@ -618,32 +618,10 @@ internal class AppActorOfferingsManager(
             }
             .distinctBy { it.cacheKey() }
 
-        val resolvedProductList = storeAdapter.queryProductDetails(productRequests)
-        val resolvedProducts = resolvedProductList.associateByTo(mutableMapOf()) { it.cacheKey() }
-        // The store adapter can resolve a request to a different offer than the backend named:
-        // offer auto-selection when no offerId is pinned, and the base-plan fallback when a
-        // pinned offer is unavailable to this user. Index those products under the
-        // request-derived key too so the package lookup below still matches instead of
-        // dropping the package.
-        productRequests.forEach { request ->
-            val requestKey = request.cacheKey()
-            if (request.basePlanId.isNullOrBlank() || resolvedProducts.containsKey(requestKey)) {
-                return@forEach
-            }
-            val samePlanProducts = resolvedProductList.filter { product ->
-                product.productId == request.productId && product.basePlanId == request.basePlanId
-            }
-            val fallbackMatch = if (request.offerId.isNullOrBlank()) {
-                samePlanProducts.firstOrNull()
-            } else {
-                // A pinned offer that is missing from the map means the adapter degraded the
-                // request to the base plan (never a different offer).
-                samePlanProducts.firstOrNull { product -> product.offerId.isNullOrBlank() }
-            }
-            if (fallbackMatch != null) {
-                resolvedProducts[requestKey] = fallbackMatch
-            }
-        }
+        // Key each product by the request it was resolved for (see sourceRequest), so every
+        // package shows what its own request resolved to.
+        val resolvedProducts = storeAdapter.queryProductDetails(productRequests)
+            .associateBy { product -> product.sourceRequest?.cacheKey() ?: product.cacheKey() }
         val droppedPackageRefs = linkedSetOf<String>()
 
         val offeringPairs = sourceOfferings.mapNotNull { offeringDTO ->

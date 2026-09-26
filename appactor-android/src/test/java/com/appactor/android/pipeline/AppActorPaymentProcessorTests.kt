@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.appactor.android.backend.client.AppActorBackendClient
+import com.appactor.android.backend.client.AppActorBackendException
 import com.appactor.android.backend.client.AppActorBackendHttpResponse
 import com.appactor.android.backend.client.AppActorBackendJson
 import com.appactor.android.backend.dto.AppActorCustomerEnvelopeDTO
@@ -370,7 +371,143 @@ class AppActorPaymentProcessorTests {
         assertEquals(com.appactor.android.storage.AppActorReceiptQueuePhase.DeadLettered, snapshot.single().phase)
         assertTrue(snapshot.single().lastError?.isNotBlank() == true)
         assertEquals(listOf("token_123"), dependencies.acknowledgedTokens)
-        assertTrue(dependencies.ledgerStore.isPosted("google:com.appactor.pro.monthly:monthly001:token_123"))
+        assertTrue(snapshot.single().finishedOnDevice)
+        assertFalse(dependencies.ledgerStore.isPosted("google:com.appactor.pro.monthly:monthly001:token_123"))
+    }
+
+    @Test
+    fun `retry dead lettered items reposts a dead letter finished on device without finishing it again`() = runBlocking {
+        val permanent = fixtureReceiptResponse("fixtures/backend/google_receipt_permanent.json")
+        val ok = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
+        val dependencies = createDependencies(
+            receiptResponse = AppActorBackendHttpResponse(
+                body = ok,
+                statusCode = 200,
+                requestId = ok.requestId,
+                signatureVerified = true,
+            ),
+            receiptResponses = listOf(
+                AppActorBackendHttpResponse(
+                    body = permanent,
+                    statusCode = 200,
+                    requestId = permanent.requestId,
+                    signatureVerified = true,
+                ),
+            ),
+        )
+        runCatching { dependencies.processor.purchase(Activity(), monthlyPackage()) }
+
+        val retried = dependencies.processor.retryDeadLetteredItems()
+
+        assertTrue(retried?.hasActiveEntitlement("premium") == true)
+        assertEquals(2, dependencies.postedReceipts.size)
+        assertEquals(listOf("token_123"), dependencies.acknowledgedTokens)
+        assertTrue(dependencies.queueStore.snapshot().isEmpty())
+        // A revived subscription is posted, and so recorded, without its base plan.
+        assertTrue(dependencies.ledgerStore.isPosted("google:com.appactor.pro.monthly:token_123"))
+    }
+
+    @Test
+    fun `rate limited receipt stays queued without finishing the purchase`() = runBlocking {
+        val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
+        val dependencies = createDependencies(
+            receiptResponse = AppActorBackendHttpResponse(
+                body = receiptResponse,
+                statusCode = 200,
+                requestId = receiptResponse.requestId,
+                signatureVerified = true,
+            )
+        )
+        coEvery { dependencies.backendClient.postGoogleReceipt(any()) } throws AppActorBackendException.Http(
+            statusCode = 429,
+            requestId = "req_rate_limited",
+            retryAfterSeconds = 30.0,
+        )
+
+        val result = dependencies.processor.purchase(Activity(), monthlyPackage())
+
+        assertTrue((result as AppActorPurchaseResult.Success).customerInfo.isComputedOffline)
+        val queued = dependencies.queueStore.snapshot().single()
+        assertEquals(com.appactor.android.storage.AppActorReceiptQueuePhase.NeedsPost, queued.phase)
+        assertTrue(dependencies.acknowledgedTokens.isEmpty())
+        assertTrue(dependencies.consumedTokens.isEmpty())
+        assertFalse(dependencies.ledgerStore.isPosted("google:com.appactor.pro.monthly:monthly001:token_123"))
+        assertTrue((dependencies.queueStore.getRateLimitCooldownMillis() ?: 0L) > System.currentTimeMillis())
+    }
+
+    @Test
+    fun `retry dead lettered items reposts a dead letter an older version marked posted`() = runBlocking {
+        val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
+        val dependencies = createDependencies(
+            receiptResponse = AppActorBackendHttpResponse(
+                body = receiptResponse,
+                statusCode = 200,
+                requestId = receiptResponse.requestId,
+                signatureVerified = true,
+            ),
+            identityStore = createMockIdentityStore(initialAppUserId = "appactor-anon-123"),
+        )
+        val deadLetter = legacyDeadLetterUnderPlaceholderId()
+        dependencies.queueStore.upsert(deadLetter)
+        // Older versions wrote the posted ledger when they finished a dead letter on Play.
+        dependencies.ledgerStore.markPosted(deadLetter.key)
+
+        dependencies.processor.retryDeadLetteredItems()
+
+        val posted = dependencies.postedReceipts.single()
+        assertEquals("appactor-anon-123", posted.appUserId)
+        // Older versions guessed a subscription's base plan outside the purchase flow.
+        assertNull(posted.basePlanId)
+        assertTrue(dependencies.acknowledgedTokens.isEmpty())
+        assertTrue(dependencies.queueStore.snapshot().isEmpty())
+    }
+
+    @Test
+    fun `request timeout on a receipt stays queued without finishing the purchase`() = runBlocking {
+        val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
+        val dependencies = createDependencies(
+            receiptResponse = AppActorBackendHttpResponse(
+                body = receiptResponse,
+                statusCode = 200,
+                requestId = receiptResponse.requestId,
+                signatureVerified = true,
+            )
+        )
+        coEvery { dependencies.backendClient.postGoogleReceipt(any()) } throws AppActorBackendException.Http(statusCode = 408)
+
+        dependencies.processor.purchase(Activity(), monthlyPackage())
+
+        assertEquals(
+            com.appactor.android.storage.AppActorReceiptQueuePhase.NeedsPost,
+            dependencies.queueStore.snapshot().single().phase,
+        )
+        assertTrue(dependencies.acknowledgedTokens.isEmpty())
+    }
+
+    @Test
+    fun `purchase update without a base plan joins the queued purchase flow item`() = runBlocking {
+        val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
+        val dependencies = createDependencies(
+            receiptResponse = AppActorBackendHttpResponse(
+                body = receiptResponse,
+                statusCode = 200,
+                requestId = receiptResponse.requestId,
+                signatureVerified = true,
+            )
+        )
+        coEvery { dependencies.backendClient.postGoogleReceipt(any()) } throws AppActorBackendException.Http(
+            statusCode = 429,
+            retryAfterSeconds = 30.0,
+        )
+        dependencies.processor.purchase(Activity(), monthlyPackage())
+        val queued = dependencies.queueStore.snapshot().single()
+
+        dependencies.processor.processPurchaseUpdates(
+            listOf(planlessMonthlyPurchase())
+        )
+
+        assertEquals(listOf(queued.key), dependencies.queueStore.snapshot().map { it.key })
+        assertEquals("monthly001", dependencies.queueStore.snapshot().single().basePlanId)
     }
 
     @Test
@@ -3465,6 +3602,41 @@ class AppActorPaymentProcessorTests {
     // endregion
 
     // region — Helpers
+
+    private fun legacyDeadLetterUnderPlaceholderId(): AppActorReceiptQueueItem {
+        val now = System.currentTimeMillis()
+        return AppActorReceiptQueueItem(
+            key = "google:com.appactor.pro.monthly:monthly001:token_legacy_dead",
+            appUserId = "null",
+            packageName = context.packageName,
+            environment = "production",
+            productId = "com.appactor.pro.monthly",
+            productType = AppActorProductType.Subscription.wireValue,
+            purchaseToken = "token_legacy_dead",
+            purchaseTime = "1710000000000",
+            purchaseState = "PURCHASED",
+            basePlanId = "monthly001",
+            idempotencyKey = "google:com.appactor.pro.monthly:monthly001:token_legacy_dead",
+            isAcknowledged = true,
+            createdAtMillis = now,
+            lastUpdatedAtMillis = now,
+            phase = com.appactor.android.storage.AppActorReceiptQueuePhase.DeadLettered,
+            lastError = "MALFORMED_PAYLOAD (finalized locally)",
+        )
+    }
+
+    private fun planlessMonthlyPurchase(): AppActorStorePurchase {
+        return AppActorStorePurchase(
+            productId = "com.appactor.pro.monthly",
+            productType = AppActorProductType.Subscription,
+            purchaseToken = "token_123",
+            orderId = "GPA.1234",
+            purchaseTimeMillis = 1_710_000_000_000,
+            purchaseState = com.appactor.android.billing.AppActorStorePurchaseState.Purchased,
+            isAcknowledged = false,
+            isAutoRenewing = true,
+        )
+    }
 
     private fun monthlyPackage(): AppActorPackage {
         return AppActorPackage(
