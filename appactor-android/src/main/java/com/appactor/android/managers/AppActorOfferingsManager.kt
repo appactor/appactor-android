@@ -27,8 +27,10 @@ import com.appactor.android.models.AppActorPackageType
 import com.appactor.android.models.AppActorProductType
 import com.appactor.android.models.AppActorStore
 import com.appactor.android.models.appActorStoreLookupProductId
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
@@ -96,20 +98,13 @@ internal class AppActorOfferingsManager(
 
                     loadCachedPayloadForImmediateReturnLocked()
                         ?.let { cachedValue ->
-                            val refreshRequest = if (inFlight == null) {
-                                CompletableDeferred<AppActorOfferings>().also { request ->
-                                    inFlight = request
-                                }
-                            } else {
-                                null
-                            }
+                            // inFlight is null here: an existing one returned Await just above.
                             return@withLock OfferingsAction.ReturnCachedPayload(
                                 payload = cachedValue.payload,
                                 cachedAtMillis = cachedValue.cachedAtMillis,
                                 verification = cachedValue.verification,
                                 generation = cacheGeneration,
-                                triggerBackgroundRefresh = true,
-                                refreshRequest = refreshRequest,
+                                refreshRequest = CompletableDeferred<AppActorOfferings>().also { inFlight = it },
                             )
                         }
                     }
@@ -127,7 +122,6 @@ internal class AppActorOfferingsManager(
                                 cachedAtMillis = cachedValue.cachedAtMillis,
                                 verification = cachedValue.verification,
                                 generation = cacheGeneration,
-                                triggerBackgroundRefresh = false,
                                 refreshRequest = null,
                             )
                         }
@@ -152,18 +146,19 @@ internal class AppActorOfferingsManager(
         return when (action) {
             is OfferingsAction.Await -> action.deferred.await()
             is OfferingsAction.Execute -> executeFetch(action.request, action.generation, forceRefresh = false)
-            is OfferingsAction.ReturnCachedPayload -> {
-                val offerings = decodeAndEnrich(
+            is OfferingsAction.ReturnCachedPayload -> try {
+                decodeAndEnrich(
                     payload = action.payload,
                     cachedAtMillis = action.cachedAtMillis,
                     generation = action.generation,
                     source = AppActorDiagnosticsDataSource.Cache,
                     verification = action.verification,
                 )
-                if (action.triggerBackgroundRefresh && action.refreshRequest != null) {
-                    launchBackgroundRefresh(action.refreshRequest, action.generation)
-                }
-                offerings
+            } finally {
+                // The refresh is the only code that completes and clears the inFlight request
+                // planted in phase 1, so it must start even when enrichment throws or the caller
+                // is cancelled; otherwise every later offerings call awaits that request forever.
+                action.refreshRequest?.let { launchBackgroundRefresh(it, action.generation) }
             }
         }
     }
@@ -515,18 +510,7 @@ internal class AppActorOfferingsManager(
         request: CompletableDeferred<AppActorOfferings>,
         generation: Long,
     ) {
-        backgroundScope.launch {
-            try {
-                val result = fetchOfferings(false, generation)
-                request.complete(result)
-            } catch (throwable: Throwable) {
-                request.completeExceptionally(throwable)
-            } finally {
-                stateMutex.withLock {
-                    if (inFlight === request) inFlight = null
-                }
-            }
-        }
+        launchRequest(request) { fetchOfferings(false, generation) }
     }
 
     private fun launchBootstrapEnrichment(
@@ -534,23 +518,38 @@ internal class AppActorOfferingsManager(
         seed: BootstrapSeed,
         generation: Long,
     ) {
-        backgroundScope.launch {
+        launchRequest(request) {
+            enrichAndCache(
+                dto = seed.dto,
+                cachedAtMillis = seed.cachedAtMillis,
+                generation = generation,
+                source = seed.source,
+                verification = seed.verification,
+            )
+        }
+    }
+
+    /**
+     * Runs [block] in the background, completes [request] with its outcome and clears it from
+     * inFlight. Started ATOMIC so this happens even when reset() cancelled the scope before the
+     * launch began; otherwise every caller awaiting [request] would wait forever.
+     */
+    private fun launchRequest(
+        request: CompletableDeferred<AppActorOfferings>,
+        block: suspend () -> AppActorOfferings,
+    ) {
+        backgroundScope.launch(start = CoroutineStart.ATOMIC) {
             try {
-                val offerings = enrichAndCache(
-                    dto = seed.dto,
-                    cachedAtMillis = seed.cachedAtMillis,
-                    generation = generation,
-                    source = seed.source,
-                    verification = seed.verification,
-                )
-                request.complete(offerings)
+                request.complete(block())
             } catch (throwable: Throwable) {
-                request.completeExceptionally(throwable)
+                // The callers awaiting the request were not cancelled themselves; a
+                // CancellationException would end them silently instead of failing them.
+                request.completeExceptionally(
+                    if (throwable is CancellationException) AppActorError.NotConfigured else throwable
+                )
             } finally {
                 stateMutex.withLock {
-                    if (inFlight === request) {
-                        inFlight = null
-                    }
+                    if (inFlight === request) inFlight = null
                 }
             }
         }
@@ -843,7 +842,7 @@ internal class AppActorOfferingsManager(
             val cachedAtMillis: Long,
             val verification: AppActorVerificationResult,
             val generation: Long,
-            val triggerBackgroundRefresh: Boolean,
+            /** The inFlight request a background refresh must complete; null for CacheOnly. */
             val refreshRequest: CompletableDeferred<AppActorOfferings>?,
         ) : OfferingsAction
     }

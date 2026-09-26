@@ -16,6 +16,7 @@ import com.android.billingclient.api.PendingPurchasesParams
 import com.android.billingclient.api.QueryProductDetailsParams
 import com.android.billingclient.api.QueryPurchasesParams
 import com.appactor.android.internal.logging.AppActorLogger
+import com.appactor.android.internal.runtime.appActorBackgroundExceptionHandler
 import com.appactor.android.models.AppActorError
 import com.appactor.android.models.AppActorPricingPhase
 import com.appactor.android.models.AppActorProductType
@@ -59,7 +60,7 @@ internal class GooglePlayBillingClientBridge(
     }
 
     private val applicationContext = context.applicationContext
-    private val bridgeScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val bridgeScope = CoroutineScope(SupervisorJob() + Dispatchers.IO + appActorBackgroundExceptionHandler)
     private val connectionMutex = Mutex()
     private val requestQueueMutex = Mutex()
     private val reconnectLock = Any()

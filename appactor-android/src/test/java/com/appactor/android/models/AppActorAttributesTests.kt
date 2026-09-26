@@ -31,6 +31,34 @@ class AppActorAttributesTests {
     }
 
     @Test
+    fun `attribute PATCH values state the type of number and boolean arrays`() {
+        // The backend would infer string_array for a bare [] and fix the key's definition to it.
+        assertEquals(
+            JsonObject(mapOf("value" to JsonArray(emptyList()), "valueType" to JsonPrimitive("number_array"))),
+            AppActorAttributeValue.numberArray(emptyList()).toAttributePatchElement(),
+        )
+        assertEquals(
+            JsonObject(mapOf("value" to JsonArray(emptyList()), "valueType" to JsonPrimitive("boolean_array"))),
+            AppActorAttributeValue.boolArray(emptyList()).toAttributePatchElement(),
+        )
+        assertEquals(
+            JsonObject(
+                mapOf(
+                    "value" to JsonArray(listOf(JsonPrimitive(1.5))),
+                    "valueType" to JsonPrimitive("number_array"),
+                ),
+            ),
+            AppActorAttributeValue.numberArray(listOf(1.5)).toAttributePatchElement(),
+        )
+        assertEquals(JsonPrimitive("a"), AppActorAttributeValue.string("a").toAttributePatchElement())
+        // Attribution metadata keeps the plain form.
+        assertEquals(
+            JsonArray(listOf(JsonPrimitive(true))),
+            AppActorAttributeValue.boolArray(listOf(true)).toJsonElement(),
+        )
+    }
+
+    @Test
     fun `custom keys reject reserved prefixes while helpers can use dollar keys`() {
         assertEquals("favorite_color", AppActorAttributesValidation.normalizeCustomKey(" favorite_color "))
         assertEquals("\$email", AppActorAttributesValidation.normalizeReservedKey("\$email"))

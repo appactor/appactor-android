@@ -65,6 +65,21 @@ class AppActorCustomerManagerTests {
     }
 
     @Test
+    fun `a null product id from the backend maps to an empty product identifier`() = runBlocking {
+        val mockClient = mockk<AppActorBackendClient>(relaxed = true)
+        coEvery { mockClient.getOfferings(any()) } returns freshOfferingsResponse(fixtureOfferings())
+        coEvery { mockClient.identify(any()) } returns freshCustomerResponse(
+            fixtureCustomer("fixtures/backend/customer_null_product_id.json")
+        )
+        val manager = createCustomerManager(mockClient)
+
+        val info = manager.identify()
+
+        assertEquals("", info.subscriptions["premium"]?.productIdentifier)
+        assertEquals("", info.nonSubscriptions["coins"]?.single()?.productIdentifier)
+    }
+
+    @Test
     fun `identify sends sdk version telemetry`() = runBlocking {
         val identifyRequestSlot = slot<AppActorIdentifyRequestDTO>()
         val mockClient = mockk<AppActorBackendClient>(relaxed = true)

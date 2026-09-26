@@ -1,7 +1,9 @@
 package com.appactor.android.internal.logging
 
 import android.util.Log
+import com.appactor.android.models.AppActorIso8601
 import com.appactor.android.models.AppActorLogLevel
+import java.util.Date
 import java.util.Locale
 
 internal object AppActorLogger {
@@ -70,7 +72,7 @@ internal object AppActorLogger {
     }
 
     private fun dispatchToHandler(level: String, message: String, category: String = "sdk") {
-        logHandler?.invoke(level, message, category, java.time.Instant.now().toString())
+        logHandler?.invoke(level, message, category, AppActorIso8601.format(Date()))
     }
 
     private fun shouldLog(messageLevel: AppActorLogLevel): Boolean {

@@ -554,6 +554,76 @@ class AppActorIdentityTransitionTests {
     }
 
     @Test
+    fun `login is not blocked by an attribute write that keeps failing`() = runBlocking {
+        val loginCalls = AtomicInteger(0)
+        withUserAWhoseAttributeWritesFail(loginCalls) {
+            val info = withTimeout(5_000L) { AppActor.logIn("user_b") }
+
+            assertEquals("user_b", info.appUserId)
+            assertEquals("user_b", AppActor.appUserId)
+            assertEquals(1, loginCalls.get())
+        }
+    }
+
+    @Test
+    fun `logout is not blocked by an attribute write that keeps failing`() = runBlocking {
+        withUserAWhoseAttributeWritesFail {
+            assertTrue(withTimeout(5_000L) { AppActor.logOut() })
+
+            assertTrue(AppActor.appUserId != "user_a")
+        }
+    }
+
+    /**
+     * Configures user_a, makes one attribute write the backend refuses with a 403 (not a rejected
+     * payload, so it stays queued), then runs [transition]. Login answers as user_b.
+     */
+    private suspend fun withUserAWhoseAttributeWritesFail(
+        loginCalls: AtomicInteger = AtomicInteger(0),
+        transition: suspend () -> Unit,
+    ) {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        AppActor.storeAdapterFactory = { FakeStoreAdapter() }
+
+        TestBackendServer { request ->
+            val path = request.path?.substringBefore("?") ?: ""
+            when (path) {
+                "/v1/payment/identify" -> {
+                    val userId = identifyAppUserId(request, "user_a")
+                    jsonResponse(customerEnvelope(requestId = "req_identify_failing_flush", appUserId = userId))
+                }
+                "/v1/payment/offerings" -> jsonResponse("""{"requestId":"req_off","data":{"offerings":[],"productEntitlements":{}}}""")
+                "/v1/payment/users/user_a/attributes" -> jsonResponse(
+                    """{"error":{"code":"FORBIDDEN","message":"Forbidden"}}""",
+                    403,
+                )
+                "/v1/payment/login" -> {
+                    loginCalls.incrementAndGet()
+                    jsonResponse(loginEnvelope(requestId = "req_login_failing_flush", appUserId = "user_b"))
+                }
+
+                else -> jsonResponse("{}", 404)
+            }
+        }.use { backend ->
+            AppActor.configure(
+                com.appactor.android.models.AppActorConfiguration(
+                    context = context,
+                    apiKey = "pk_test_123",
+                    appUserId = "user_a",
+                    baseUrl = backend.baseUrl,
+                    options = testOptionsForLocalBackend(),
+                )
+            )
+            val writeFailure = runCatching {
+                AppActor.setAttribute("tier", com.appactor.android.models.AppActorAttributeValue.string("gold"))
+            }.exceptionOrNull()
+            assertTrue(writeFailure != null)
+
+            transition()
+        }
+    }
+
+    @Test
     fun `same user login publishes buffered purchase update for current identity`() = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val purchaseUpdates = MutableSharedFlow<List<AppActorStorePurchase>>(extraBufferCapacity = 1)

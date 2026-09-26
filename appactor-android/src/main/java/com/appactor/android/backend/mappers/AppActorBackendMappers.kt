@@ -172,7 +172,8 @@ internal fun AppActorEntitlementDTO.toModel(identifier: String): AppActorEntitle
 internal fun AppActorSubscriptionDTO.toModel(subscriptionKey: String): AppActorSubscriptionInfo {
     return AppActorSubscriptionInfo(
         subscriptionKey = subscriptionKey,
-        productIdentifier = productId,
+        // The backend sends null once the product row is gone (e.g. its app was deleted).
+        productIdentifier = productId.orEmpty(),
         store = AppActorStore.fromWireValue(store),
         basePlanId = basePlanId,
         offerId = offerId,
@@ -197,7 +198,7 @@ internal fun AppActorSubscriptionDTO.toModel(subscriptionKey: String): AppActorS
 
 internal fun AppActorNonSubscriptionDTO.toModel(): AppActorNonSubscription {
     return AppActorNonSubscription(
-        productIdentifier = productId,
+        productIdentifier = productId.orEmpty(),
         store = AppActorStore.fromWireValue(store),
         basePlanId = basePlanId,
         offerId = offerId,
