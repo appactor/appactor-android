@@ -489,10 +489,9 @@ class AppActorAttributesManagerTests {
             ),
         )
 
-        // [a, bad, c] -> [a, bad] + [c] -> [a] + [bad]: only the bad key is lost. A 409 is final
-        // only once a fresh request gets it too, so [bad] is sent twice.
+        // [a, bad, c] -> [a, bad] + [c] -> [a] + [bad]: only the bad key is lost.
         assertEquals(setOf("a", "c"), backend.patchRequests.flatMap { it.second.attributes.keys }.toSet())
-        assertEquals(6, backend.patchAttempts)
+        assertEquals(5, backend.patchAttempts)
         assertNull(store.load("user_a"))
 
         manager.setAttribute("user_a", "tier", AppActorAttributeValue.string("gold"))
@@ -636,19 +635,6 @@ class AppActorAttributesManagerTests {
         assertNotNull(failure)
         assertEquals("user_b was not tried", attemptsBefore + 1, backend.patchAttempts)
         assertNotNull(store.load("user_b"))
-    }
-
-    @Test
-    fun `a 409 for a replayed nonce is retried with a fresh request`() = runBlocking {
-        val backend = FakeAttributesBackendClient().apply { attributionFailures += 409 }
-        val store = InMemoryAttributeQueueStore()
-        val manager = manager(backend, store)
-
-        manager.updateAttribution("user_a", AppActorAttribution(provider = "custom", source = "facebook"))
-
-        assertEquals("facebook", backend.attributionRequests.single().second.source)
-        assertNull(store.load("user_a"))
-        assertEquals("facebook", store.loadAttributionSnapshot("user_a")?.source)
     }
 
     @Test

@@ -363,11 +363,9 @@ internal class AppActorAttributesManager(
 
     /** Sends one request. Returns `false` when the server rejected its payload for good. */
     private suspend fun deliver(send: suspend () -> Unit): Boolean {
-        var rejection = rejectionOf(send) ?: return true
-        // The server also answers 409 to a replayed signing nonce, which OkHttp sends when it
-        // silently retries a request after a connection failure (audit D11). A 409 is final only
-        // once a fresh request, with a new nonce, gets it too.
-        if (rejection.httpStatusCode == 409) rejection = rejectionOf(send) ?: return true
+        // A 409 for a replayed signing nonce never gets here: the backend client sends the
+        // request again with a fresh nonce.
+        val rejection = rejectionOf(send) ?: return true
         AppActorLogger.warn("Customer attribute mutation rejected by the server; dropping it: ${rejection.message}")
         return false
     }

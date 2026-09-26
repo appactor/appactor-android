@@ -29,6 +29,10 @@ internal object AppActorResponseSignatureVerifier {
         IntermediateKeyExpired,
     }
 
+    /**
+     * [requestBinding] is the request's [requestBinding] when it sent
+     * `X-AppActor-Signature-Binding: request`, and null when it didn't.
+     */
     internal fun verify(
         headers: AppActorResponseSignatureHeaders?,
         body: String,
@@ -36,6 +40,7 @@ internal object AppActorResponseSignatureVerifier {
         apiKey: String,
         requestPath: String,
         eTag: String,
+        requestBinding: String?,
     ): VerificationResult {
         return verify(
             headers = headers,
@@ -44,6 +49,7 @@ internal object AppActorResponseSignatureVerifier {
             apiKey = apiKey,
             requestPath = requestPath,
             eTag = eTag,
+            requestBinding = requestBinding,
             v1PublicKey = decodeKey(v1PublicKeyBase64),
             rootPublicKey = decodeKey(rootPublicKeyBase64),
             nowEpochSeconds = System.currentTimeMillis() / 1000.0,
@@ -60,9 +66,10 @@ internal object AppActorResponseSignatureVerifier {
         v1PublicKey: ByteArray?,
         rootPublicKey: ByteArray?,
         nowEpochSeconds: Double,
+        requestBinding: String? = null,
     ): VerificationResult {
         if (sentNonce != null) {
-            return verifyNonceBased(headers, body, sentNonce, v1PublicKey, rootPublicKey, nowEpochSeconds)
+            return verifyNonceBased(headers, body, sentNonce, requestBinding, v1PublicKey, rootPublicKey, nowEpochSeconds)
         }
         return verifySaltBased(headers, body, apiKey, requestPath, eTag, v1PublicKey, rootPublicKey, nowEpochSeconds)
     }
@@ -73,6 +80,7 @@ internal object AppActorResponseSignatureVerifier {
         headers: AppActorResponseSignatureHeaders?,
         body: String,
         sentNonce: String,
+        requestBinding: String?,
         v1PublicKey: ByteArray?,
         rootPublicKey: ByteArray?,
         nowEpochSeconds: Double,
@@ -85,7 +93,7 @@ internal object AppActorResponseSignatureVerifier {
             return VerificationResult.NonceMismatch
         }
 
-        val payload = noncePayloadBytes(sentNonce, timestamp, body)
+        val payload = noncePayloadBytes(sentNonce, timestamp, requestBinding, body)
         return validateTimestampAndDispatch(signatureBase64, timestamp, payload, v1PublicKey, rootPublicKey, nowEpochSeconds)
     }
 
@@ -210,9 +218,22 @@ internal object AppActorResponseSignatureVerifier {
     private fun noncePayloadBytes(
         sentNonce: String,
         timestamp: String,
+        requestBinding: String?,
         body: String,
     ): ByteArray {
-        return "$sentNonce\n$timestamp\n$body".toByteArray(Charsets.UTF_8)
+        val bound = requestBinding?.let { "$it\n" }.orEmpty()
+        return "$sentNonce\n$timestamp\n$bound$body".toByteArray(Charsets.UTF_8)
+    }
+
+    /**
+     * What the backend signs next to the nonce for a request bound with
+     * `X-AppActor-Signature-Binding: request`: the method, path + query, and the lowercase hex
+     * SHA-256 of the body (of no bytes when there is none). As on iOS.
+     */
+    internal fun requestBinding(method: String, target: String, body: ByteArray): String {
+        val digest = java.security.MessageDigest.getInstance("SHA-256").digest(body)
+        val hex = digest.joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
+        return "$method\n$target\n$hex"
     }
 
     private fun saltPayloadBytes(

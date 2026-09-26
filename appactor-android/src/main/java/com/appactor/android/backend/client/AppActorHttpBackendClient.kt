@@ -27,6 +27,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import okio.Buffer
 import java.io.IOException
 import kotlin.math.min
 import kotlin.math.pow
@@ -343,7 +344,18 @@ internal class AppActorHttpBackendClient(
             )
 
             try {
-                val rawResponse = executeRaw(request)
+                val rawResponse = executeRaw(request).let { response ->
+                    // OkHttp silently re-sends a request whose connection failed after the backend
+                    // had it, nonce included, and the backend answers the replayed nonce with a
+                    // 409. The request went through, so send it again, once, with a fresh nonce.
+                    if (!response.isReplayedNonce()) {
+                        response
+                    } else {
+                        executeRaw(requestForAttempt(initialRequest, attempt = attempt + 1)).also { resent ->
+                            if (resent.isReplayedNonce()) throw IOException("Response signing nonce was replayed twice.")
+                        }
+                    }
+                }
                 val errorEnvelope = parseErrorEnvelope(rawResponse.rawBody)
                 val resolvedRequestId = errorEnvelope?.requestId ?: rawResponse.requestId
 
@@ -528,6 +540,12 @@ internal class AppActorHttpBackendClient(
                 val retryAfterHeader = response.header("Retry-After")
                 val sentNonce: String? = request.header("X-AppActor-Nonce")
                 val requestPath = signatureRequestTarget(request)
+                val requestBinding = request
+                    .takeIf {
+                        it.header(AppActorAuthHeaderProvider.SIGNATURE_BINDING_HEADER) ==
+                            AppActorAuthHeaderProvider.SIGNATURE_BINDING_REQUEST
+                    }
+                    ?.let(::signatureRequestBinding)
                 val remoteConfigRequiresUserContext = parseBooleanHeader(
                     response.header(remoteConfigRequiresUserContextHeader),
                 )
@@ -537,6 +555,7 @@ internal class AppActorHttpBackendClient(
                     rawBody = rawBody.orEmpty(),
                     sentNonce = sentNonce,
                     requestPath = requestPath,
+                    requestBinding = requestBinding,
                     eTag = eTag,
                     requestId = requestId,
                 )
@@ -570,6 +589,7 @@ internal class AppActorHttpBackendClient(
         rawBody: String,
         sentNonce: String?,
         requestPath: String,
+        requestBinding: String?,
         eTag: String?,
         requestId: String?,
     ): Boolean {
@@ -585,6 +605,7 @@ internal class AppActorHttpBackendClient(
                 apiKey = configuration.apiKey,
                 requestPath = requestPath,
                 eTag = eTag.orEmpty(),
+                requestBinding = requestBinding,
             )
         ) {
             AppActorResponseSignatureVerifier.VerificationResult.Success -> true
@@ -614,6 +635,19 @@ internal class AppActorHttpBackendClient(
         val query = request.url.encodedQuery
         return if (query.isNullOrBlank()) path else "$path?$query"
     }
+
+    // The target is the path + query as sent: the backend reads it back from the URL it received.
+    private fun signatureRequestBinding(request: Request): String {
+        val body = Buffer().also { buffer -> request.body?.writeTo(buffer) }.readByteArray()
+        val path = request.url.encodedPath
+        val query = request.url.encodedQuery
+        val target = if (query.isNullOrEmpty()) path else "$path?$query"
+        return AppActorResponseSignatureVerifier.requestBinding(request.method, target, body)
+    }
+
+    private fun RawBackendResponse.isReplayedNonce(): Boolean =
+        statusCode == 409 &&
+            parseErrorEnvelope(rawBody)?.error?.message?.contains("nonce has already been used", ignoreCase = true) == true
 
     private fun parseBooleanHeader(value: String?): Boolean? {
         return when (value?.trim()?.lowercase()) {

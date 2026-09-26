@@ -335,6 +335,47 @@ class AppActorResponseSignatureVerifierTests {
         assertEquals(AppActorResponseSignatureVerifier.VerificationResult.SigningNotSupported, result)
     }
 
+    @Test
+    fun `nonce signature bound to the request verifies only for that request`() {
+        val privateKey = Ed25519PrivateKeyParameters(SecureRandom())
+        val publicKey = privateKey.generatePublicKey().encoded
+        val nonce = "nonce_123"
+        val timestamp = "1710000000"
+        val body = """{"customer":{}}"""
+        val binding = AppActorResponseSignatureVerifier.requestBinding(
+            method = "GET",
+            target = "/v1/customers/user_b",
+            body = ByteArray(0),
+        )
+        // The backend's sha256 of no bytes.
+        assertEquals(
+            "GET\n/v1/customers/user_b\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            binding,
+        )
+        val signature = signPayload(privateKey, "$nonce\n$timestamp\n$binding\n$body".toByteArray(Charsets.UTF_8))
+
+        fun verifyFor(target: String) = AppActorResponseSignatureVerifier.verify(
+            headers = AppActorResponseSignatureHeaders(
+                requestNonce = nonce,
+                signature = Base64.toBase64String(signature),
+                signatureTimestamp = timestamp,
+            ),
+            body = body,
+            sentNonce = nonce,
+            apiKey = "pk_test_123",
+            requestPath = target,
+            eTag = "",
+            v1PublicKey = publicKey,
+            rootPublicKey = null,
+            nowEpochSeconds = timestamp.toDouble(),
+            requestBinding = AppActorResponseSignatureVerifier.requestBinding("GET", target, ByteArray(0)),
+        )
+
+        assertEquals(AppActorResponseSignatureVerifier.VerificationResult.Success, verifyFor("/v1/customers/user_b"))
+        // User B's signed response relayed onto user A's request.
+        assertEquals(AppActorResponseSignatureVerifier.VerificationResult.SignatureInvalid, verifyFor("/v1/customers/user_a"))
+    }
+
     // ── Helper ──
 
     private fun signPayload(privateKey: Ed25519PrivateKeyParameters, payload: ByteArray): ByteArray {
