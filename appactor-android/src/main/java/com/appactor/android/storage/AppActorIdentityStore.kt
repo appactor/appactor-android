@@ -60,20 +60,30 @@ internal class AppActorSharedPrefsIdentityStore(
         if (!existing.isNullOrBlank()) {
             AppActorLogger.warn("[Identity] Replacing a stored appUserId the backend rejects with a new anonymous id.")
         }
-        val generated = "$ANONYMOUS_APP_USER_ID_PREFIX${UUID.randomUUID()}".lowercase()
-        setAppUserId(generated)
-        return generated
+        return newAnonymousAppUserId()
     }
 
     override fun resolveAppUserId(explicitAppUserId: String?): String {
         val normalizedExplicit = explicitAppUserId
             ?.takeIf { it.trim().isNotEmpty() }
+        if (normalizedExplicit != null && AppActorValidation.isPlaceholderAppUserId(normalizedExplicit)) {
+            // A placeholder such as "null" (e.g. `user?.id.toString()` while signed out) means
+            // nobody is signed in: keep an anonymous id, never the last signed-in user's.
+            AppActorLogger.warn("[Identity] appUserId '$normalizedExplicit' is a placeholder the backend rejects; using an anonymous id.")
+            return currentAppUserId?.takeIf(::isAnonymousAppUserId) ?: newAnonymousAppUserId()
+        }
         if (normalizedExplicit != null) {
             AppActorValidation.validateAppUserId(normalizedExplicit)
             setAppUserId(normalizedExplicit)
             return normalizedExplicit
         }
         return ensureAppUserId()
+    }
+
+    private fun newAnonymousAppUserId(): String {
+        val generated = "$ANONYMOUS_APP_USER_ID_PREFIX${UUID.randomUUID()}".lowercase()
+        setAppUserId(generated)
+        return generated
     }
 
     override fun setAppUserId(appUserId: String?) {

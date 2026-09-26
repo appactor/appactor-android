@@ -74,6 +74,18 @@ class AppActorIdentityStoreTests {
     }
 
     @Test
+    fun `a placeholder id after a signed in session resolves to an anonymous user`() {
+        val store = AppActorSharedPrefsIdentityStore(context)
+        store.resolveAppUserId("alice")
+
+        val resolved = store.resolveAppUserId("null")
+
+        assertTrue(resolved.startsWith("appactor-anon-"))
+        assertEquals(resolved, store.currentAppUserId)
+        assertEquals(resolved, store.resolveAppUserId("undefined"))
+    }
+
+    @Test
     fun `resolve app user id rejects a malformed id`() {
         val store = AppActorSharedPrefsIdentityStore(context)
 

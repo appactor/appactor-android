@@ -37,9 +37,6 @@ internal object AppActorValidation {
     /** A "no user" stand-in such as "null", "guest" or "0". */
     fun isPlaceholderAppUserId(appUserId: String): Boolean = appUserId.backendTrim().lowercase() in BLOCKED_APP_USER_IDS
 
-    /** A blank id or a placeholder. */
-    fun meansNoUser(appUserId: String): Boolean = appUserId.backendTrim().isEmpty() || isPlaceholderAppUserId(appUserId)
-
     // JavaScript's trim() also strips U+FEFF, which Kotlin's whitespace test does not.
     private fun String.backendTrim(): String = trim { it.isWhitespace() || it == '\uFEFF' }
 
