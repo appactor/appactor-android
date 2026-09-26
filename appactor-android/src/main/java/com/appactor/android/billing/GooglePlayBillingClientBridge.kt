@@ -44,6 +44,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
 import kotlin.math.min
 
@@ -98,6 +99,12 @@ internal class GooglePlayBillingClientBridge(
     @Volatile
     private var activeConnectionAttempt: CompletableDeferred<Unit>? = null
 
+    // Whether startConnection() last reported a working setup. With automatic service
+    // reconnection billingClient.isReady is always true, so it can't tell a device whose Play
+    // billing is unavailable, or a service connection that died, from a working one.
+    @Volatile
+    private var isSetUp: Boolean = false
+
     @Volatile
     private var reconnectJob: Job? = null
 
@@ -130,7 +137,7 @@ internal class GooglePlayBillingClientBridge(
     }
 
 	override suspend fun connect() {
-        if (billingClient.isReady) {
+        if (isSetUp) {
             refreshConnectedState()
             return
         }
@@ -138,6 +145,7 @@ internal class GooglePlayBillingClientBridge(
     }
 
     override fun shutdown() {
+        isSetUp = false
         purchaseContinuation = null
         pendingPurchaseProductType = null
         storefront = null
@@ -158,7 +166,7 @@ internal class GooglePlayBillingClientBridge(
         billingClient.endConnection()
     }
 
-    override fun isConnected(): Boolean = billingClient.isReady
+    override fun isConnected(): Boolean = isSetUp
 
     override fun currentStorefront(): AppActorStorefront? = storefront
 
@@ -266,6 +274,11 @@ internal class GooglePlayBillingClientBridge(
                 }
             }
             val launchResult = billingClient.launchBillingFlow(activity, paramsBuilder.build())
+            if (launchResult.responseCode == BillingResponseCode.SERVICE_DISCONNECTED) {
+                // Below API 29 the library doesn't wait for its reconnect here; the next
+                // connect() starts the connection again before the next launch.
+                isSetUp = false
+            }
             if (launchResult.responseCode != BillingResponseCode.OK) {
                 purchaseContinuation = null
                 pendingPurchaseProductType = null
@@ -396,7 +409,7 @@ internal class GooglePlayBillingClientBridge(
     }
 
     private fun resolveCapabilities(): Set<AppActorStoreCapability> {
-        if (!billingClient.isReady) {
+        if (!isSetUp) {
             return emptySet()
         }
         return linkedSetOf<AppActorStoreCapability>().apply {
@@ -418,13 +431,13 @@ internal class GooglePlayBillingClientBridge(
     private suspend fun awaitConnected(
         scheduleReconnectOnFailure: Boolean,
     ) {
-        if (billingClient.isReady) {
+        if (isSetUp) {
             refreshConnectedState()
             return
         }
 
         val connectionAttempt = connectionMutex.withLock {
-            if (billingClient.isReady) {
+            if (isSetUp) {
                 null
             } else {
                 activeConnectionAttempt?.takeIf { !it.isCancelled } ?: CompletableDeferred<Unit>().also { deferred ->
@@ -454,13 +467,15 @@ internal class GooglePlayBillingClientBridge(
     }
 
     private suspend fun establishConnection() {
-        withTimeout(BILLING_CONNECT_TIMEOUT_MS) {
+        // A timeout must not surface as a CancellationException: the caller was not cancelled.
+        withTimeoutOrNull(BILLING_CONNECT_TIMEOUT_MS) {
             suspendCancellableCoroutine<Unit> { continuation ->
                 billingClient.startConnection(
                     object : com.android.billingclient.api.BillingClientStateListener {
                         override fun onBillingSetupFinished(billingResult: BillingResult) {
+                            isSetUp = billingResult.responseCode == BillingResponseCode.OK
                             if (!continuation.isActive) return
-                            if (billingResult.responseCode == BillingResponseCode.OK) {
+                            if (isSetUp) {
                                 continuation.resume(Unit)
                             } else {
                                 continuation.resumeWith(
@@ -472,6 +487,7 @@ internal class GooglePlayBillingClientBridge(
                         }
 
                         override fun onBillingServiceDisconnected() {
+                            isSetUp = false
                             capabilities = emptySet()
                             storefront = null
                             if (continuation.isActive) {
@@ -487,13 +503,13 @@ internal class GooglePlayBillingClientBridge(
                     }
                 )
             }
-        }
+        } ?: throw AppActorError.Network("Billing setup timed out.")
 
         refreshConnectedState()
     }
 
     private fun warmConnectionInBackground() {
-        if (billingClient.isReady) return
+        if (isSetUp) return
         bridgeScope.launch {
             runCatching {
                 awaitConnected(scheduleReconnectOnFailure = true)
@@ -503,13 +519,13 @@ internal class GooglePlayBillingClientBridge(
 
     private fun scheduleReconnect() {
         synchronized(reconnectLock) {
-            if (reconnectJob?.isActive == true || billingClient.isReady) {
+            if (reconnectJob?.isActive == true || isSetUp) {
                 return
             }
             reconnectJob = bridgeScope.launch {
                 var currentDelayMs = reconnectDelayMs
                 try {
-                    while (isActive && !billingClient.isReady) {
+                    while (isActive && !isSetUp) {
                         delay(currentDelayMs)
                         val connected = runCatching {
                             awaitConnected(scheduleReconnectOnFailure = false)
@@ -735,11 +751,21 @@ private fun Purchase.toPayload(productType: AppActorProductType): AppActorBillin
     )
 }
 
-private fun BillingResult.toLaunchResult(
+internal fun BillingResult.toLaunchResult(
     productType: AppActorProductType,
     purchases: List<Purchase> = emptyList(),
 ): AppActorBillingLaunchResult {
+    // A pending top-up or change of a prepaid plan comes back as the old subscription's Purchase
+    // carrying a PendingPurchaseUpdate. What this flow bought is that update, under its own token,
+    // and it stays pending until paid; the old purchase is unchanged.
+    val pendingUpdates = purchases.mapNotNull { purchase ->
+        purchase.pendingPurchaseUpdate?.let { update -> purchase.toPendingUpdatePayload(update, productType) }
+    }
     return when {
+        responseCode == BillingResponseCode.OK && pendingUpdates.isNotEmpty() -> {
+            AppActorBillingLaunchResult.Pending(pendingUpdates)
+        }
+
         responseCode == BillingResponseCode.OK && purchases.any { it.purchaseState == Purchase.PurchaseState.PURCHASED } -> {
             AppActorBillingLaunchResult.Purchased(purchases.map { it.toPayload(productType) })
         }
@@ -754,6 +780,20 @@ private fun BillingResult.toLaunchResult(
             error = toBillingError("Billing flow failed.")
         )
     }
+}
+
+private fun Purchase.toPendingUpdatePayload(
+    update: Purchase.PendingPurchaseUpdate,
+    productType: AppActorProductType,
+): AppActorBillingPurchasePayload? {
+    val token = update.purchaseToken?.takeIf { it.isNotBlank() } ?: return null
+    return toPayload(productType).copy(
+        products = update.products.orEmpty(),
+        purchaseToken = token,
+        orderId = null,
+        purchaseState = AppActorStorePurchaseState.Pending,
+        isAcknowledged = false,
+    )
 }
 
 private fun BillingResult.toBillingError(defaultMessage: String): AppActorError {
