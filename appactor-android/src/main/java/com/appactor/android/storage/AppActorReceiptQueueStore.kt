@@ -51,7 +51,7 @@ internal data class AppActorReceiptQueueItem(
     val shouldConsume: Boolean = false,
     /** A dead letter consumed or acknowledged on Play; a later post must not finish it again. */
     val finishedOnDevice: Boolean = false,
-    /** When the item was first dead-lettered; the launch revival re-posts it until retention ends. */
+    /** When the item was first dead-lettered; retention counts from here. */
     val deadLetteredAtMillis: Long? = null,
     val retryCount: Int = 0,
     val nextRetryAtMillis: Long = 0L,

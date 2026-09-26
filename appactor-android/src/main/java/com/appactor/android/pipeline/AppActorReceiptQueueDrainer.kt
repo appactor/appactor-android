@@ -258,8 +258,8 @@ internal class AppActorReceiptQueueDrainer(
                     val customerInfo = customerManager.cachedInfo(normalizedItem.appUserId)
                         ?: throw IllegalStateException("Receipt response success was missing customer info.")
                     val finishItem = normalizedItem.copy(
-                        shouldAcknowledge = result.acknowledgePurchase && !normalizedItem.finishedOnDevice,
-                        shouldConsume = result.consumePurchase && !normalizedItem.finishedOnDevice,
+                        shouldAcknowledge = result.acknowledgePurchase,
+                        shouldConsume = result.consumePurchase,
                         phase = AppActorReceiptQueuePhase.NeedsFinish,
                         claimedAtMillis = null,
                         lastUpdatedAtMillis = dateProviderMillis(),
@@ -325,8 +325,9 @@ internal class AppActorReceiptQueueDrainer(
                 scheduleRetryOrDeadLetter(
                     item = normalizedItem,
                     retryAfterSeconds = httpError?.retryAfterSeconds,
-                    errorCode = httpError?.error?.code ?: if (isRateLimited) RATE_LIMIT_EXCEEDED else null,
+                    errorCode = httpError?.error?.code,
                     errorMessage = throwable.message,
+                    rateLimited = isRateLimited,
                 )
             }
         }
@@ -379,6 +380,7 @@ internal class AppActorReceiptQueueDrainer(
         retryAfterSeconds: Double?,
         errorCode: String?,
         errorMessage: String?,
+        rateLimited: Boolean = false,
     ): ProcessingOutcome {
         val now = dateProviderMillis()
         val nextRetryCount = item.retryCount + 1
@@ -388,7 +390,7 @@ internal class AppActorReceiptQueueDrainer(
             retryCount = nextRetryCount,
             retryAfterSeconds = retryAfterSeconds,
         )
-        if (errorCode == "RATE_LIMIT" || errorCode == RATE_LIMIT_EXCEEDED) {
+        if (rateLimited || errorCode == "RATE_LIMIT" || errorCode == "RATE_LIMIT_EXCEEDED") {
             queueStore.setRateLimitCooldownMillis(nextRetryAt)
         }
         val updated = item.copy(
@@ -547,6 +549,5 @@ internal class AppActorReceiptQueueDrainer(
         const val SOURCE_INTENT_RESTORE = "restore"
         const val SOURCE_INTENT_SYNC = "sync"
         const val SOURCE_INTENT_QUEUE = "queue"
-        const val RATE_LIMIT_EXCEEDED = "RATE_LIMIT_EXCEEDED"
     }
 }

@@ -60,7 +60,7 @@ import com.appactor.android.models.AppActorStoreCapability
 import com.appactor.android.models.AppActorStorefront
 import com.appactor.android.models.AppActorValidation
 import com.appactor.android.pipeline.AppActorPurchaseUpdateProcessingResult
-import com.appactor.android.storage.ANONYMOUS_APP_USER_ID_PREFIX
+import com.appactor.android.storage.isAnonymousAppUserId
 import com.appactor.android.storage.AppActorAtomicJsonPostedLedgerStore
 import com.appactor.android.storage.AppActorAtomicJsonReceiptQueueStore
 import kotlinx.coroutines.CoroutineScope
@@ -278,7 +278,7 @@ public object AppActor {
         get() = currentRuntimeSnapshot()?.identityStore?.currentAppUserId
 
     public val isAnonymous: Boolean
-        get() = appUserId?.startsWith(ANONYMOUS_APP_USER_ID_PREFIX) ?: true
+        get() = appUserId?.let(::isAnonymousAppUserId) ?: true
 
     public val customerInfo: AppActorCustomerInfo
         get() = currentRuntimeSnapshot()?.lastCustomerInfo ?: AppActorCustomerInfo.empty
@@ -565,7 +565,7 @@ public object AppActor {
             val currentRuntime = requireConfiguredRuntime()
             val currentAppUserId = currentRuntime.identityStore.currentAppUserId
                 ?: currentRuntime.identityStore.ensureAppUserId()
-            if (currentAppUserId.startsWith(ANONYMOUS_APP_USER_ID_PREFIX)) {
+            if (isAnonymousAppUserId(currentAppUserId)) {
                 throw AppActorError.InvalidConfiguration(
                     "logOut() called on an anonymous user. Use logIn() to switch identity."
                 )

@@ -1,6 +1,7 @@
 package com.appactor.android.models
 
 import android.content.Context
+import com.appactor.android.internal.logging.AppActorLogger
 
 internal class AppActorConfiguration(
     context: Context,
@@ -11,9 +12,14 @@ internal class AppActorConfiguration(
     val environment: AppActorEnvironment = AppActorEnvironment.Production,
     val options: Options = Options(),
 ) {
-    val appUserId: String? = appUserId?.takeIf { it.trim().isNotEmpty() }
+    // A placeholder such as "null" (e.g. `user?.id.toString()` while signed out) means no user,
+    // like a blank id, so configure() must not fail for it.
+    val appUserId: String? = appUserId?.takeUnless(AppActorValidation::meansNoUser)
 
     init {
+        if (appUserId != null && AppActorValidation.isPlaceholderAppUserId(appUserId)) {
+            AppActorLogger.warn("[Identity] appUserId '$appUserId' is a placeholder the backend rejects; treating it as no user.")
+        }
         validateConfiguration(
             apiKey = apiKey,
             appUserId = this.appUserId,
@@ -46,9 +52,7 @@ internal class AppActorConfiguration(
             require(apiKey.isNotBlank()) {
                 "AppActor apiKey must not be blank."
             }
-            appUserId
-                ?.takeUnless(AppActorValidation::meansNoUser)
-                ?.let(AppActorValidation::validateAppUserId)
+            appUserId?.let(AppActorValidation::validateAppUserId)
             require(baseUrl.isNotBlank()) {
                 "AppActor baseUrl must not be blank."
             }

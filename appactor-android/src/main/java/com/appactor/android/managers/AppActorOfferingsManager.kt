@@ -618,10 +618,8 @@ internal class AppActorOfferingsManager(
             }
             .distinctBy { it.cacheKey() }
 
-        // The store adapter can resolve a request to a different offer than the backend named:
-        // offer auto-selection when no offerId is pinned, and the base-plan fallback when a
-        // pinned offer is unavailable to this user. Key each product by the request it was
-        // resolved for, so every package shows what its own request resolved to.
+        // Key each product by the request it was resolved for (see sourceRequest), so every
+        // package shows what its own request resolved to.
         val resolvedProducts = storeAdapter.queryProductDetails(productRequests)
             .associateBy { product -> product.sourceRequest?.cacheKey() ?: product.cacheKey() }
         val droppedPackageRefs = linkedSetOf<String>()

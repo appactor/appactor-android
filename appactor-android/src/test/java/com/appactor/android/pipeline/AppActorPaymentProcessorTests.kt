@@ -447,7 +447,7 @@ class AppActorPaymentProcessorTests {
             ),
             identityStore = createMockIdentityStore(initialAppUserId = "appactor-anon-123"),
         )
-        val deadLetter = legacyDeadLetter(appUserId = "null")
+        val deadLetter = legacyDeadLetterUnderPlaceholderId()
         dependencies.queueStore.upsert(deadLetter)
         // Older versions wrote the posted ledger when they finished a dead letter on Play.
         dependencies.ledgerStore.markPosted(deadLetter.key)
@@ -503,7 +503,7 @@ class AppActorPaymentProcessorTests {
         val queued = dependencies.queueStore.snapshot().single()
 
         dependencies.processor.processPurchaseUpdates(
-            listOf(runtimeStylePurchase(basePlanId = null, offerId = null))
+            listOf(planlessMonthlyPurchase())
         )
 
         assertEquals(listOf(queued.key), dependencies.queueStore.snapshot().map { it.key })
@@ -3603,11 +3603,11 @@ class AppActorPaymentProcessorTests {
 
     // region — Helpers
 
-    private fun legacyDeadLetter(appUserId: String): AppActorReceiptQueueItem {
+    private fun legacyDeadLetterUnderPlaceholderId(): AppActorReceiptQueueItem {
         val now = System.currentTimeMillis()
         return AppActorReceiptQueueItem(
             key = "google:com.appactor.pro.monthly:monthly001:token_legacy_dead",
-            appUserId = appUserId,
+            appUserId = "null",
             packageName = context.packageName,
             environment = "production",
             productId = "com.appactor.pro.monthly",
@@ -3625,7 +3625,7 @@ class AppActorPaymentProcessorTests {
         )
     }
 
-    private fun runtimeStylePurchase(basePlanId: String?, offerId: String?): AppActorStorePurchase {
+    private fun planlessMonthlyPurchase(): AppActorStorePurchase {
         return AppActorStorePurchase(
             productId = "com.appactor.pro.monthly",
             productType = AppActorProductType.Subscription,
@@ -3633,8 +3633,6 @@ class AppActorPaymentProcessorTests {
             orderId = "GPA.1234",
             purchaseTimeMillis = 1_710_000_000_000,
             purchaseState = com.appactor.android.billing.AppActorStorePurchaseState.Purchased,
-            basePlanId = basePlanId,
-            offerId = offerId,
             isAcknowledged = false,
             isAutoRenewing = true,
         )

@@ -2,6 +2,7 @@ package com.appactor.android.storage
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import com.appactor.android.models.AppActorConfiguration
 import com.appactor.android.models.AppActorError
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
@@ -62,10 +63,11 @@ class AppActorIdentityStoreTests {
     }
 
     @Test
-    fun `resolve app user id treats a placeholder id as no user`() {
+    fun `a configured placeholder id resolves to an anonymous user`() {
         val store = AppActorSharedPrefsIdentityStore(context)
+        val configuration = AppActorConfiguration(context = context, apiKey = "pk_test_123", appUserId = "null")
 
-        val resolved = store.resolveAppUserId("null")
+        val resolved = store.resolveAppUserId(configuration.appUserId)
 
         assertTrue(resolved.startsWith("appactor-anon-"))
         assertEquals(resolved, store.currentAppUserId)

@@ -8,6 +8,9 @@ import java.util.UUID
 
 internal const val ANONYMOUS_APP_USER_ID_PREFIX: String = "appactor-anon-"
 
+internal fun isAnonymousAppUserId(appUserId: String?): Boolean =
+    appUserId?.startsWith(ANONYMOUS_APP_USER_ID_PREFIX) == true
+
 internal interface AppActorIdentityStore {
     val currentAppUserId: String?
     val installId: String
@@ -50,12 +53,12 @@ internal class AppActorSharedPrefsIdentityStore(
 
     override fun ensureAppUserId(): String {
         val existing = currentAppUserId
+        if (existing != null && AppActorValidation.isValidAppUserId(existing)) {
+            return existing
+        }
+        // Older versions stored ids the backend rejects (e.g. "null"). Every backend call for
+        // such an id fails, so it holds no server state worth keeping.
         if (!existing.isNullOrBlank()) {
-            // Older versions stored ids the backend rejects (e.g. "null"). Every backend call
-            // for such an id fails, so it holds no server state worth keeping.
-            if (AppActorValidation.isValidAppUserId(existing)) {
-                return existing
-            }
             AppActorLogger.warn("[Identity] Replacing a stored appUserId the backend rejects with a new anonymous id.")
         }
         val generated = "$ANONYMOUS_APP_USER_ID_PREFIX${UUID.randomUUID()}".lowercase()
@@ -64,12 +67,8 @@ internal class AppActorSharedPrefsIdentityStore(
     }
 
     override fun resolveAppUserId(explicitAppUserId: String?): String {
-        // A placeholder such as "null" (e.g. `user?.id.toString()` while signed out) means no
-        // user, like a blank id; configure() must not fail for it.
-        if (explicitAppUserId != null && AppActorValidation.isPlaceholderAppUserId(explicitAppUserId)) {
-            AppActorLogger.warn("[Identity] appUserId '$explicitAppUserId' is a placeholder the backend rejects; treating it as no user.")
-        }
-        val normalizedExplicit = explicitAppUserId?.takeUnless(AppActorValidation::meansNoUser)
+        val normalizedExplicit = explicitAppUserId
+            ?.takeIf { it.trim().isNotEmpty() }
         if (normalizedExplicit != null) {
             AppActorValidation.validateAppUserId(normalizedExplicit)
             setAppUserId(normalizedExplicit)

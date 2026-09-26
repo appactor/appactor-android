@@ -25,7 +25,7 @@ import com.appactor.android.models.AppActorStore
 import com.appactor.android.models.AppActorValidation
 import com.appactor.android.models.toResolvedPurchaseTarget
 import com.appactor.android.storage.AppActorIdentityStore
-import com.appactor.android.storage.ANONYMOUS_APP_USER_ID_PREFIX
+import com.appactor.android.storage.isAnonymousAppUserId
 import com.appactor.android.storage.AppActorAtomicJsonReceiptQueueStore
 import com.appactor.android.storage.AppActorPostedLedgerStore
 import com.appactor.android.storage.AppActorReceiptQueueItem
@@ -569,8 +569,6 @@ internal class AppActorPaymentProcessor(
      * giving them a fresh retry cycle. Called once per session at startup so
      * that transient backend failures from a previous session get another chance
      * when conditions may have changed (network restored, backend fixed, etc.).
-     * A dead letter is re-posted at every launch until the backend accepts it or
-     * its retention ends.
      */
     suspend fun retryDeadLetteredItems(
         limit: Int = 20,
@@ -578,23 +576,12 @@ internal class AppActorPaymentProcessor(
         val items = queueStore.consumeDeadLettered()
         if (items.isEmpty()) return null
         val now = dateProviderMillis()
-        val currentAppUserId = identityStore.currentAppUserId
         val revived = items.map { item ->
             item.withoutGuessedSubscriptionPlan().copy(
                 // Older versions wrote a dead letter they finished on Play into the
                 // posted ledger instead of flagging it, and did not stamp when it was dead-lettered.
                 finishedOnDevice = item.finishedOnDevice || isPurchasePosted(item),
                 deadLetteredAtMillis = item.deadLetteredAtMillis ?: item.lastUpdatedAtMillis,
-                // A purchase made while signed out under an id the backend rejects (e.g. "null")
-                // belongs to the signed-out user, whose id is anonymous now.
-                appUserId = if (
-                    !AppActorValidation.isValidAppUserId(item.appUserId) &&
-                    currentAppUserId?.startsWith(ANONYMOUS_APP_USER_ID_PREFIX) == true
-                ) {
-                    currentAppUserId
-                } else {
-                    item.appUserId
-                },
                 phase = AppActorReceiptQueuePhase.NeedsPost,
                 retryCount = 0,
                 nextRetryAtMillis = now,
@@ -697,6 +684,7 @@ internal class AppActorPaymentProcessor(
     }
 
     private suspend fun finalizePostedPurchase(item: AppActorReceiptQueueItem): Boolean {
+        if (item.finishedOnDevice) return true
         return runCatching {
             if (item.shouldConsume) {
                 storeAdapter.consumePurchase(item.purchaseToken)
@@ -790,9 +778,10 @@ internal class AppActorPaymentProcessor(
     }
 
     private suspend fun normalizeQueueItemForPosting(
-        item: AppActorReceiptQueueItem,
+        queuedItem: AppActorReceiptQueueItem,
         productEntitlements: Map<String, List<String>>,
     ): AppActorReceiptQueueItem {
+        val item = queuedItem.withCreditableAppUserId()
         if (item.productType != AppActorProductType.Unknown.wireValue) {
             return item
         }
@@ -810,6 +799,14 @@ internal class AppActorPaymentProcessor(
             obfuscatedAccountId = resolvedPurchase.obfuscatedAccountId ?: item.obfuscatedAccountId,
             isAcknowledged = resolvedPurchase.isAcknowledged,
         )
+    }
+
+    // A purchase queued under an id the backend rejects (e.g. "null", stored by older versions)
+    // was made signed out, so it can only be credited to the signed-out user, anonymous now.
+    private fun AppActorReceiptQueueItem.withCreditableAppUserId(): AppActorReceiptQueueItem {
+        if (AppActorValidation.isValidAppUserId(appUserId)) return this
+        val anonymousAppUserId = identityStore.currentAppUserId?.takeIf(::isAnonymousAppUserId) ?: return this
+        return copy(appUserId = anonymousAppUserId)
     }
 
     private suspend fun resolveUnknownOneTimePurchase(
@@ -998,15 +995,7 @@ internal class AppActorPaymentProcessor(
         return item.key == legacyQueueKey(item)
     }
 
-    private fun postedLedgerKey(item: AppActorReceiptQueueItem): String {
-        return AppActorReceiptQueueItem.makeKey(
-            purchaseToken = item.purchaseToken,
-            productId = item.productId,
-            basePlanId = item.basePlanId,
-            orderId = item.orderId,
-            purchaseTime = item.purchaseTime,
-        )
-    }
+    private fun postedLedgerKey(item: AppActorReceiptQueueItem): String = item.keyFromFields()
 
     sealed interface ReceiptPipelineStatus {
         val requestId: String?
@@ -1119,23 +1108,23 @@ internal fun AppActorStorePurchase.purchaseDateString(): String =
 private fun googleReceiptIdempotencyKey(productId: String, basePlanId: String?, purchaseToken: String): String =
     "google:$productId:${basePlanId.orEmpty()}:$purchaseToken"
 
+private fun AppActorReceiptQueueItem.keyFromFields(): String = AppActorReceiptQueueItem.makeKey(
+    purchaseToken = purchaseToken,
+    productId = productId,
+    basePlanId = basePlanId,
+    orderId = orderId,
+    purchaseTime = purchaseTime,
+)
+
 // Older versions labelled a subscription seen outside the purchase flow with a base plan guessed
 // from the catalog, which the backend rejects when it is wrong. The backend accepts a subscription
 // without one and reads it from Google, so a revived subscription is posted without it, under the
 // key a base-plan-less sighting of the same purchase gets.
 private fun AppActorReceiptQueueItem.withoutGuessedSubscriptionPlan(): AppActorReceiptQueueItem {
     if (productType != AppActorProductType.Subscription.wireValue || basePlanId == null) return this
-    return copy(
-        key = AppActorReceiptQueueItem.makeKey(
-            purchaseToken = purchaseToken,
-            productId = productId,
-            orderId = orderId,
-            purchaseTime = purchaseTime,
-        ),
+    val planless = copy(basePlanId = null, offerId = null, priceAmountMicros = null, currencyCode = null)
+    return planless.copy(
+        key = planless.keyFromFields(),
         idempotencyKey = googleReceiptIdempotencyKey(productId, basePlanId = null, purchaseToken = purchaseToken),
-        basePlanId = null,
-        offerId = null,
-        priceAmountMicros = null,
-        currencyCode = null,
     )
 }

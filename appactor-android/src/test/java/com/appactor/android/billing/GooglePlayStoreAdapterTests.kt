@@ -107,6 +107,29 @@ class GooglePlayStoreAdapterTests {
             get() = if (replacementModeSlot.isCaptured) replacementModeSlot.captured else null
     }
 
+    /** One base plan (monthly001) with a free-trial offer (trial7d) the user is eligible for. */
+    private fun monthlyWithTrialProductDetails() = AppActorBillingProductDetailsPayload(
+        productId = "com.appactor.pro.monthly",
+        productType = AppActorProductType.Subscription,
+        subscriptionOffers = listOf(
+            AppActorBillingSubscriptionOfferPayload(
+                basePlanId = "monthly001",
+                offerId = null,
+                offerToken = "base-plan-token",
+                pricingPhases = listOf(AppActorPricingPhase(priceAmountMicros = 9_990_000, currencyCode = "USD")),
+            ),
+            AppActorBillingSubscriptionOfferPayload(
+                basePlanId = "monthly001",
+                offerId = "trial7d",
+                offerToken = "trial-token",
+                pricingPhases = listOf(
+                    AppActorPricingPhase(billingPeriod = "P1W", priceAmountMicros = 0, currencyCode = "USD"),
+                    AppActorPricingPhase(priceAmountMicros = 9_990_000, currencyCode = "USD"),
+                ),
+            ),
+        ),
+    )
+
     @Test
     fun `query product details resolves matching base plan and offer`() = kotlinx.coroutines.runBlocking {
         val (billingClient, _) = createMockBillingClient(
@@ -612,29 +635,7 @@ class GooglePlayStoreAdapterTests {
     @Test
     fun `launch purchase sells the offer the package shows when requests share a base plan`() = kotlinx.coroutines.runBlocking {
         val (billingClient, captures) = createMockBillingClient(
-            productDetails = listOf(
-                AppActorBillingProductDetailsPayload(
-                    productId = "com.appactor.pro.monthly",
-                    productType = AppActorProductType.Subscription,
-                    subscriptionOffers = listOf(
-                        AppActorBillingSubscriptionOfferPayload(
-                            basePlanId = "monthly001",
-                            offerId = null,
-                            offerToken = "base-plan-token",
-                            pricingPhases = listOf(AppActorPricingPhase(priceAmountMicros = 9_990_000, currencyCode = "USD")),
-                        ),
-                        AppActorBillingSubscriptionOfferPayload(
-                            basePlanId = "monthly001",
-                            offerId = "trial7d",
-                            offerToken = "trial-token",
-                            pricingPhases = listOf(
-                                AppActorPricingPhase(billingPeriod = "P1W", priceAmountMicros = 0, currencyCode = "USD"),
-                                AppActorPricingPhase(priceAmountMicros = 9_990_000, currencyCode = "USD"),
-                            ),
-                        ),
-                    ),
-                )
-            ),
+            productDetails = listOf(monthlyWithTrialProductDetails()),
         )
         val adapter = GooglePlayStoreAdapter(context, billingClient)
         val pinnedUnavailable = AppActorStoreProductRequest(
@@ -667,29 +668,7 @@ class GooglePlayStoreAdapterTests {
     @Test
     fun `launch purchase on an empty cache launches the named base plan without auto-selection`() = kotlinx.coroutines.runBlocking {
         val (billingClient, captures) = createMockBillingClient(
-            productDetails = listOf(
-                AppActorBillingProductDetailsPayload(
-                    productId = "com.appactor.pro.monthly",
-                    productType = AppActorProductType.Subscription,
-                    subscriptionOffers = listOf(
-                        AppActorBillingSubscriptionOfferPayload(
-                            basePlanId = "monthly001",
-                            offerId = null,
-                            offerToken = "base-plan-token",
-                            pricingPhases = listOf(AppActorPricingPhase(priceAmountMicros = 9_990_000, currencyCode = "USD")),
-                        ),
-                        AppActorBillingSubscriptionOfferPayload(
-                            basePlanId = "monthly001",
-                            offerId = "trial7d",
-                            offerToken = "trial-token",
-                            pricingPhases = listOf(
-                                AppActorPricingPhase(billingPeriod = "P1W", priceAmountMicros = 0, currencyCode = "USD"),
-                                AppActorPricingPhase(priceAmountMicros = 9_990_000, currencyCode = "USD"),
-                            ),
-                        ),
-                    ),
-                )
-            ),
+            productDetails = listOf(monthlyWithTrialProductDetails()),
         )
         // A package kept across reset() reaches a new adapter whose cache is empty.
         val adapter = GooglePlayStoreAdapter(context, billingClient)

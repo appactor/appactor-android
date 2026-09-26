@@ -123,33 +123,22 @@ internal class GooglePlayStoreAdapter(
             } else {
                 update.purchases.flatMap { payload ->
                     payload.products.map { productId ->
-                        if (payload.productType == AppActorProductType.Subscription) {
-                            return@map payload.toStorePurchase(
-                                AppActorStoreProductRequest(
-                                    productId = productId,
-                                    productType = AppActorProductType.Subscription,
-                                    obfuscatedAccountId = payload.obfuscatedAccountId,
-                                )
-                            )
-                        }
-                        val resolvedRequest = runCatching {
-                            resolveDirectPurchaseRequest(
-                                AppActorStoreProductRequest(
-                                    productId = productId,
-                                    productType = payload.productType,
-                                    obfuscatedAccountId = payload.obfuscatedAccountId,
-                                )
-                            )
-                        }.getOrElse {
-                            resolvedProductsByKey.entries
-                                .firstOrNull { (_, resolved) -> resolved.product.productId == productId }
-                                ?.value
-                                ?.toRequest(obfuscatedAccountId = payload.obfuscatedAccountId)
-                        } ?: AppActorStoreProductRequest(
+                        val payloadRequest = AppActorStoreProductRequest(
                             productId = productId,
                             productType = payload.productType,
                             obfuscatedAccountId = payload.obfuscatedAccountId,
                         )
+                        // The catalog cannot tell which base plan a subscription is on.
+                        if (payload.productType == AppActorProductType.Subscription) {
+                            return@map payload.toStorePurchase(payloadRequest)
+                        }
+                        val resolvedRequest = runCatching {
+                            resolveDirectPurchaseRequest(payloadRequest)
+                        }.getOrElse {
+                            resolvedProductsByKey.values
+                                .firstOrNull { resolved -> resolved.product.productId == productId }
+                                ?.toRequest(obfuscatedAccountId = payload.obfuscatedAccountId)
+                        } ?: payloadRequest
                         payload.toStorePurchase(resolvedRequest.withoutSubscriptionPlan())
                     }
                 }
@@ -649,13 +638,6 @@ private fun AppActorStoreProductRequest.resolutionKind(): ProductResolutionKind 
 
 private fun AppActorStoreProductRequest.cacheKey(): String {
     return listOf(productType.name, productId, basePlanId.orEmpty(), offerId.orEmpty()).joinToString("|")
-}
-
-private fun AppActorStoreProductRequest.fallbackRequestKey(): String {
-    return AppActorStoreProductRequest(
-        productId = productId,
-        productType = productType,
-    ).cacheKey()
 }
 
 /**
