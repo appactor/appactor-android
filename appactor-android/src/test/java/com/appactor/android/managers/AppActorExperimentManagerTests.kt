@@ -103,6 +103,20 @@ class AppActorExperimentManagerTests {
     }
 
     @Test
+    fun `a later session's fetch keeps assignments stored by an earlier one`() = runBlocking {
+        val cacheStore = createCacheStore("experiment-merge")
+        val firstSession = createManager(mockClient(response = successResponse()), cacheStore = cacheStore)
+        firstSession.getAssignment("paywall_copy", "user_android_A")
+        firstSession.getAssignment("home_layout", "user_android_A")
+
+        val secondSession = createManager(mockClient(response = successResponse()), cacheStore = cacheStore)
+        secondSession.getAssignment("home_layout", "user_android_A")
+
+        val offlineSession = createManager(mockClient(throwable = IOException("offline")), cacheStore = cacheStore)
+        assertEquals("variant_b", offlineSession.getAssignment("paywall_copy", "user_android_A")?.variantKey)
+    }
+
+    @Test
     fun `experiment clear cache cancels in flight request and prevents stale repopulation`() = runBlocking {
         val started = CompletableDeferred<Unit>()
         val unblock = CompletableDeferred<Unit>()

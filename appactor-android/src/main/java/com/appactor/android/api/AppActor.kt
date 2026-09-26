@@ -330,16 +330,7 @@ public object AppActor {
         set(value) {
             synchronized(this) {
                 preconfiguredCallbacks = preconfiguredCallbacks.copy(onDeferredPurchaseResolved = value)
-                val currentRuntime = runtime
-                currentRuntime?.paymentProcessor?.onDeferredPurchaseResolved = value?.let { callback ->
-                    val runtimeSessionId = currentRuntime.sessionId
-                    { productId, customerInfo ->
-                        deliverOnMainIfCurrent(runtimeSessionId) {
-                            callback(productId, customerInfo)
-                        }
-                    }
-                }
-                runtime = currentRuntime?.copy(onDeferredPurchaseResolved = value)
+                runtime?.let(::installRuntimeLocked)
             }
         }
 
@@ -418,20 +409,22 @@ public object AppActor {
         appUserId: String? = null,
         options: AppActorOptions = AppActorOptions(),
     ) {
-        val startupRuntime = transitionMutex.withLock {
-            if (resetWipe != null || runtime != null) {
-                return@withLock null
+        val startupRuntime = throwingPublicErrors("Failed to configure AppActor.") {
+            transitionMutex.withLock {
+                if (resetWipe != null || runtime != null) {
+                    return@withLock null
+                }
+                bumpIdentityEpochLocked()
+                configureInternal(
+                    configuration = AppActorConfiguration(
+                        context = context,
+                        apiKey = apiKey,
+                        appUserId = appUserId,
+                        options = options.toLegacyOptions(),
+                    ),
+                )
+                runtime
             }
-            bumpIdentityEpochLocked()
-            configureInternal(
-                configuration = AppActorConfiguration(
-                    context = context,
-                    apiKey = apiKey,
-                    appUserId = appUserId,
-                    options = options.toLegacyOptions(),
-                ),
-            )
-            runtime
         }
         if (startupRuntime != null) {
             awaitStartupIfNeeded(startupRuntime)
@@ -522,7 +515,7 @@ public object AppActor {
 
     public suspend fun logIn(newAppUserId: String): AppActorCustomerInfo {
         awaitStartupBeforeTransition()
-        val (info, callbacks, profileContextTarget) = transitionMutex.withLock {
+        val (info, callbacks, profileContextTarget) = throwingPublicErrors("Failed to log in.") { transitionMutex.withLock {
             bumpIdentityEpochLocked()
             val currentRuntime = requireConfiguredRuntime()
             AppActorValidation.validateAppUserId(newAppUserId)
@@ -534,21 +527,24 @@ public object AppActor {
             val info = try {
                 currentRuntime.paymentProcessor.drainAll()
                 flushOutgoingUserAttributes(currentRuntime, currentAppUserId)
-                if (currentAppUserId != newAppUserId) {
-                    currentRuntime.customerManager.clearCache(currentAppUserId)
-                }
-                currentRuntime.remoteConfigManager.clearCache(currentAppUserId)
-                currentRuntime.experimentManager.clearCache(currentAppUserId)
                 val info = currentRuntime.customerManager.logIn(
                     currentAppUserId = currentAppUserId,
                     newAppUserId = newAppUserId,
                 )
+                val source = currentRuntime.customerManager.lastLoadSource()
+                // Only once the login has succeeded: a failed one leaves the user as they were,
+                // caches included.
+                if (currentAppUserId != currentRuntime.identityStore.currentAppUserId) {
+                    currentRuntime.customerManager.clearCache(currentAppUserId)
+                }
+                currentRuntime.remoteConfigManager.clearCache(currentAppUserId)
+                currentRuntime.experimentManager.clearCache(currentAppUserId)
                 persistCustomerInfoLocked(currentRuntime, info)
                 callbacks += Triple(
                     publishCustomerInfoLocked(
                         currentRuntime = currentRuntime,
                         info = info,
-                        source = currentRuntime.customerManager.lastLoadSource(),
+                        source = source,
                     ),
                     info,
                     identityEpoch,
@@ -564,7 +560,7 @@ public object AppActor {
                 ?: info.appUserId
                 ?: newAppUserId
             Triple(info, callbacks, currentRuntime to targetAppUserId)
-        }
+        } }
         callbacks.forEach { (callback, callbackInfo, epoch) ->
             deliverOnMainIfCurrent(profileContextTarget.first.sessionId, epoch) {
                 callback?.invoke(callbackInfo)
@@ -686,8 +682,11 @@ public object AppActor {
      * Can be called before or after [configure].
      */
     public fun setFallbackOfferings(jsonData: ByteArray) {
-        val dto = AppActorBackendJson.instance
-            .decodeFromString<AppActorOfferingsEnvelopeDTO>(jsonData.decodeToString())
+        val dto = try {
+            AppActorBackendJson.instance.decodeFromString<AppActorOfferingsEnvelopeDTO>(jsonData.decodeToString())
+        } catch (error: Exception) {
+            throw AppActorError.Decoding(error.message ?: "Invalid fallback offerings JSON", error)
+        }
         synchronized(this) {
             runtime?.offeringsManager?.setFallbackOfferings(dto)
                 ?: run { preconfiguredFallbackOfferingsDTO = dto }
@@ -1173,35 +1172,24 @@ public object AppActor {
             return
         }
 
-        val callbackState = synchronized(this) {
-            preconfiguredCallbacks
-        }
-
         AppActorLogger.applyOverride(configuration.options.logLevel)
         val runtimeSessionId = nextRuntimeSessionId()
-        var newRuntime = runtimeFactory.create(
-            configuration = configuration,
-            sessionId = runtimeSessionId,
-            callbackState = callbackState,
-            onPipelineEvent = { event -> publishReceiptPipelineEvent(runtimeSessionId, event) },
+        var newRuntime = installRuntime(
+            runtimeFactory.create(
+                configuration = configuration,
+                sessionId = runtimeSessionId,
+                callbackState = AppActorCallbackState(),
+                onPipelineEvent = { event -> publishReceiptPipelineEvent(runtimeSessionId, event) },
+            )
         )
-        runtime = newRuntime
         customerInfoStateFlow.value = newRuntime.lastCustomerInfo
         preconfiguredFallbackOfferingsDTO?.let { dto ->
             newRuntime.offeringsManager.setFallbackOfferings(dto)
             preconfiguredFallbackOfferingsDTO = null
         }
-        callbackState.onDeferredPurchaseResolved?.let { callback ->
-            newRuntime.paymentProcessor.onDeferredPurchaseResolved = { productId, customerInfo ->
-                deliverOnMainIfCurrent(runtimeSessionId) {
-                    callback(productId, customerInfo)
-                }
-            }
-        }
         val lifecycleCallbacks = lifecycleCoordinator.registerLifecycleCallbacksIfNeeded(newRuntime)
         if (lifecycleCallbacks != null) {
-            newRuntime = newRuntime.copy(lifecycleCallbacks = lifecycleCallbacks)
-            runtime = newRuntime
+            newRuntime = installRuntime(newRuntime.copy(lifecycleCallbacks = lifecycleCallbacks))
         }
         emitDebugEvent(
             runtimeSessionId = runtimeSessionId,
@@ -1218,12 +1206,12 @@ public object AppActor {
         )
 
         val startupHandles = startupCoordinator.start(newRuntime)
-        newRuntime = newRuntime.copy(
-            bootstrapCompletionJob = startupHandles.bootstrapCompletionJob,
-            purchaseUpdatesJob = startupHandles.purchaseUpdatesJob,
+        val flushRuntime = installRuntime(
+            newRuntime.copy(
+                bootstrapCompletionJob = startupHandles.bootstrapCompletionJob,
+                purchaseUpdatesJob = startupHandles.purchaseUpdatesJob,
+            )
         )
-        runtime = newRuntime
-        val flushRuntime = newRuntime
         flushRuntime.scope.launch {
             // After bootstrap, whose profile-context phase flushes the current user: run first,
             // this would hold that user's flush lock and hold the startup chain back.
@@ -1233,6 +1221,30 @@ public object AppActor {
                 flushRuntime.attributesManager.flushPendingForAllUsers()
             }
         }
+    }
+
+    /**
+     * Makes [newRuntime] current, with the listeners as they are now. Under the lock the listener
+     * setters take, so a listener set while configure() builds the runtime is not lost.
+     */
+    private fun installRuntime(newRuntime: AppActorRuntimeState): AppActorRuntimeState =
+        synchronized(this) { installRuntimeLocked(newRuntime) }
+
+    private fun installRuntimeLocked(newRuntime: AppActorRuntimeState): AppActorRuntimeState {
+        val callbacks = preconfiguredCallbacks
+        val sessionId = newRuntime.sessionId
+        newRuntime.paymentProcessor.onDeferredPurchaseResolved = callbacks.onDeferredPurchaseResolved?.let { callback ->
+            { productId, customerInfo ->
+                deliverOnMainIfCurrent(sessionId) {
+                    callback(productId, customerInfo)
+                }
+            }
+        }
+        return newRuntime.copy(
+            onCustomerInfoChanged = callbacks.onCustomerInfoChanged,
+            onReceiptPipelineEvent = callbacks.onReceiptPipelineEvent,
+            onDeferredPurchaseResolved = callbacks.onDeferredPurchaseResolved,
+        ).also { runtime = it }
     }
 
     /**
@@ -1350,15 +1362,26 @@ public object AppActor {
             if (latestRuntime?.sessionId != currentRuntime.sessionId) {
                 return@synchronized null
             }
+            // A 304 refresh brings the same info with only a new requestId. As on iOS that is no
+            // change: the flow keeps its value, and the callback, once it has had this info,
+            // stays quiet; a listener that re-fetches would otherwise loop.
+            val unchanged = latestRuntime.lastCustomerInfo.isSameInfoAs(info)
+            val alreadyNotified = latestRuntime.notifiedCustomerInfo?.isSameInfoAs(info) == true
             val updatedRuntime = latestRuntime.copy(
-                lastCustomerInfo = info,
+                lastCustomerInfo = if (unchanged) latestRuntime.lastCustomerInfo else info,
                 lastCustomerInfoSource = source ?: latestRuntime.lastCustomerInfoSource,
+                notifiedCustomerInfo = info,
             )
             runtime = updatedRuntime
-            customerInfoStateFlow.value = info
-            updatedRuntime.onCustomerInfoChanged
+            if (!unchanged) {
+                customerInfoStateFlow.value = info
+            }
+            updatedRuntime.onCustomerInfoChanged.takeUnless { alreadyNotified }
         }
     }
+
+    private fun AppActorCustomerInfo.isSameInfoAs(other: AppActorCustomerInfo): Boolean =
+        copy(requestId = other.requestId) == other
 
     private fun publishReceiptPipelineEvent(
         runtimeSessionId: Long,
@@ -1438,7 +1461,8 @@ public object AppActor {
                         description = "State changed while performing the operation. Please retry.",
                     )
                 }
-                throw throwable
+                throwIfCancellation(throwable)
+                throw throwable.toPublicAppActorError()
             }
             if (isSnapshotCurrent(snapshot)) {
                 return result
@@ -1456,6 +1480,19 @@ public object AppActor {
     // identity change, which would copy that user's data onto the next one.
     private suspend fun <T> executeWrite(operation: suspend (AppActorOperationSnapshot) -> T): T =
         operation(captureOperationSnapshot(resolveAppUserId = true))
+
+    /**
+     * Runs [block], turning what it throws into a public [AppActorError], as the Bridge and the
+     * plugin already do; the SDK's internal exception types never reach the app.
+     */
+    private inline fun <T> throwingPublicErrors(defaultMessage: String, block: () -> T): T {
+        return try {
+            block()
+        } catch (throwable: Throwable) {
+            throwIfCancellation(throwable)
+            throw throwable.toPublicAppActorError(defaultMessage)
+        }
+    }
 
     private suspend fun isSnapshotCurrent(snapshot: AppActorOperationSnapshot): Boolean {
         return transitionMutex.withLock { runtimeIfCurrentLocked(snapshot) != null }

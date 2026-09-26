@@ -52,6 +52,8 @@ internal data class AppActorRuntimeState(
     val onReceiptPipelineEvent: ((AppActorReceiptPipelineEvent) -> Unit)? = null,
     val onDeferredPurchaseResolved: ((productId: String, customerInfo: AppActorCustomerInfo) -> Unit)? = null,
     val lastCustomerInfo: AppActorCustomerInfo = AppActorCustomerInfo.empty,
+    // The last info published to onCustomerInfoChanged in this session; null until the first.
+    val notifiedCustomerInfo: AppActorCustomerInfo? = null,
     val lastCustomerInfoSource: AppActorDiagnosticsDataSource? = null,
     val lastOfferingsSource: AppActorDiagnosticsDataSource? = null,
     val lastRemoteConfigSource: AppActorDiagnosticsDataSource? = null,

@@ -241,7 +241,7 @@ internal class AppActorPaymentProcessor(
         placement: String? = null,
     ): AppActorPurchaseResult {
         if (!purchaseMutex.tryLock()) {
-            throw AppActorError.InvalidConfiguration("Only one purchase can be in-flight at a time.")
+            throw AppActorError.PurchaseAlreadyInProgress
         }
 
         try {
@@ -270,7 +270,7 @@ internal class AppActorPaymentProcessor(
         placement: String? = null,
     ): AppActorPurchaseResult {
         if (!purchaseMutex.tryLock()) {
-            throw AppActorError.InvalidConfiguration("Only one purchase can be in-flight at a time.")
+            throw AppActorError.PurchaseAlreadyInProgress
         }
         try {
             val appUserId = appUserIdOverride
@@ -459,18 +459,21 @@ internal class AppActorPaymentProcessor(
                             )
 
                             is ProcessingOutcome.Queued -> {
+                                // On top of the cached customer, so the user's other entitlements stay.
+                                val cached = customerManager.cachedInfo(appUserId)
                                 val offline = offlineCustomerInfoBuilder.buildOfflineCustomerInfo(
                                     purchase = primaryPurchase,
                                     appUserId = appUserId,
                                     productEntitlements = productEntitlements,
-                                ) ?: customerManager.cachedInfo(appUserId)
+                                    baseCustomer = cached,
+                                ) ?: cached
                                 if (offline != null) {
                                     AppActorPurchaseResult.Success(
                                         customerInfo = offline,
                                         purchaseInfo = primaryPurchase.toPurchaseInfo(configuration),
                                     )
                                 } else {
-                                    throw AppActorError.Network(
+                                    throw AppActorError.ReceiptQueuedForRetry(
                                         description = "Purchase succeeded but receipt is queued for retry.",
                                     )
                                 }

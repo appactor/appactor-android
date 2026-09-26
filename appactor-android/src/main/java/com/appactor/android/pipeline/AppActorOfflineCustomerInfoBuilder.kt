@@ -23,15 +23,21 @@ internal class AppActorOfflineCustomerInfoBuilder(
     private val configuration: AppActorConfiguration,
 ) {
 
+    /**
+     * The purchase's entitlements laid over [baseCustomer] (the cached server state), so the
+     * user's other entitlements, subscriptions and balances stay. Null when the purchase maps to
+     * no entitlement.
+     */
     fun buildOfflineCustomerInfo(
         purchase: AppActorStorePurchase,
         appUserId: String,
         productEntitlements: Map<String, List<String>>,
+        baseCustomer: AppActorCustomerInfo? = null,
     ): AppActorCustomerInfo? {
         val keys = entitlementKeysForPurchase(purchase, productEntitlements)
         if (keys.isEmpty()) return null
 
-        val entitlements = linkedMapOf<String, AppActorEntitlementInfo>().apply {
+        val entitlements = LinkedHashMap(baseCustomer?.entitlements.orEmpty()).apply {
             keys.forEach { key ->
                 put(
                     key,
@@ -57,7 +63,8 @@ internal class AppActorOfflineCustomerInfoBuilder(
             }
         }
 
-        return AppActorCustomerInfo(
+        val base = baseCustomer ?: AppActorCustomerInfo.empty
+        return base.copy(
             entitlements = entitlements,
             appUserId = appUserId,
             snapshotDate = purchase.purchaseDateString(),

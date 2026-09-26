@@ -34,6 +34,9 @@ internal class AppActorExperimentManager(
     private var cacheGeneration: Long = 0
     @Volatile
     private var lastCacheUserId: String? = null
+    // The user whose disk file has been merged into memory; until then a persist would drop the
+    // assignments earlier sessions stored.
+    private var diskMergedUserId: String? = null
 
     suspend fun getAssignment(
         experimentKey: String,
@@ -80,6 +83,7 @@ internal class AppActorExperimentManager(
             inFlight.clear()
             lastRequestId = null
             lastCacheUserId = null
+            diskMergedUserId = null
             current
         }
         cancelled.forEach { it.cancel(CancellationException("Experiment cache cleared.")) }
@@ -146,18 +150,23 @@ internal class AppActorExperimentManager(
         appUserId: String,
         requestGeneration: Long,
     ) {
-        val cachedValue = cacheStore.load(appUserId) ?: return
-        val decoded = runCatching {
+        val decoded = diskAssignments(appUserId) ?: return
+        stateLock.withLock {
+            ensureGenerationLocked(requestGeneration)
+            cachedAssignments.putAll(decoded)
+            lastCacheUserId = appUserId
+            diskMergedUserId = appUserId
+        }
+    }
+
+    private fun diskAssignments(appUserId: String): Map<String, CachedAssignment>? {
+        val cachedValue = cacheStore.load(appUserId) ?: return null
+        return runCatching {
             AppActorBackendJson.instance.decodeFromString(
                 CachedAssignmentMap.serializer(),
                 cachedValue.payload,
-            )
-        }.getOrNull() ?: return
-        stateLock.withLock {
-            ensureGenerationLocked(requestGeneration)
-            cachedAssignments.putAll(decoded.entries)
-            lastCacheUserId = appUserId
-        }
+            ).entries
+        }.getOrNull()
     }
 
     private fun persistCache(
@@ -185,6 +194,10 @@ internal class AppActorExperimentManager(
     ): AppActorExperimentAssignment? {
         return stateLock.withLock {
             ensureGenerationLocked(requestGeneration)
+            if (diskMergedUserId != appUserId) {
+                diskAssignments(appUserId)?.forEach { (key, value) -> cachedAssignments.putIfAbsent(key, value) }
+                diskMergedUserId = appUserId
+            }
             lastRequestId = requestId
             cachedAssignments[experimentKey] = cached
             lastCacheUserId = appUserId
