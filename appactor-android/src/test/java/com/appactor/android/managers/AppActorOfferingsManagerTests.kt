@@ -29,6 +29,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
@@ -957,29 +958,7 @@ class AppActorOfferingsManagerTests {
 
     @Test
     fun `a failed enrichment of the cached payload does not leave later offerings calls waiting`() = runBlocking {
-        val dto = fixtureOfferings()
-        val cacheStore = offeringsCacheStore("offerings-cached-enrich-failure")
-        cacheStore.save(
-            payload = AppActorBackendJson.instance.encodeToString(dto),
-            eTag = "\"etag_123\"",
-            verified = true,
-        )
-        val mockClient = mockk<AppActorBackendClient>(relaxed = true)
-        coEvery { mockClient.getOfferings(any()) } returns freshOfferingsResponse(dto)
-        val productQueries = AtomicInteger(0)
-        val mockStoreAdapter = mockk<AppActorStoreAdapter>(relaxed = true)
-        coEvery { mockStoreAdapter.queryProductDetails(any()) } answers {
-            // Play is unavailable for the first query only, e.g. BILLING_UNAVAILABLE.
-            if (productQueries.getAndIncrement() == 0) throw IllegalStateException("Billing unavailable")
-            val requests = firstArg<List<AppActorStoreProductRequest>>()
-            requests.mapNotNull { request -> pricedProducts()[requestKey(request)] }
-        }
-        val manager = AppActorOfferingsManager(
-            backendClient = mockClient,
-            cacheStore = cacheStore,
-            offlineProductCatalogStore = offlineProductCatalogStore("offerings-cached-enrich-failure"),
-            storeAdapter = mockStoreAdapter,
-        )
+        val manager = cachedPayloadManagerFailingFirstProductQuery("offerings-cached-enrich-failure")
 
         val cachedFailure = runCatching {
             manager.getOfferings(fetchPolicy = AppActorOfferingsFetchPolicy.ReturnCachedThenRefresh)
@@ -993,8 +972,30 @@ class AppActorOfferingsManagerTests {
 
     @Test
     fun `a refresh launched after reset cancelled the scope still releases waiting callers`() = runBlocking {
+        // reset() cancels the runtime scope, which is the manager's background scope.
+        val manager = cachedPayloadManagerFailingFirstProductQuery(
+            name = "offerings-cancelled-scope",
+            backgroundScope = CoroutineScope(Job().apply { cancel() }),
+        )
+        runCatching { manager.getOfferings(fetchPolicy = AppActorOfferingsFetchPolicy.ReturnCachedThenRefresh) }
+
+        val waiting = runCatching { withTimeout(5_000L) { manager.getOfferings() } }
+
+        // The next caller either awaits the refresh and gets its error, or starts its own fetch once
+        // the refresh has finished. It must never hang (a timeout) or end as if itself cancelled.
+        assertFalse(waiting.exceptionOrNull() is CancellationException)
+    }
+
+    /**
+     * A manager with offerings cached on disk only, whose first Play product query fails (as with
+     * BILLING_UNAVAILABLE), so serving the cached payload fails and leaves the refresh to run.
+     */
+    private fun cachedPayloadManagerFailingFirstProductQuery(
+        name: String,
+        backgroundScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+    ): AppActorOfferingsManager {
         val dto = fixtureOfferings()
-        val cacheStore = offeringsCacheStore("offerings-cancelled-scope")
+        val cacheStore = offeringsCacheStore(name)
         cacheStore.save(
             payload = AppActorBackendJson.instance.encodeToString(dto),
             eTag = "\"etag_123\"",
@@ -1010,22 +1011,13 @@ class AppActorOfferingsManagerTests {
             val requests = firstArg<List<AppActorStoreProductRequest>>()
             requests.mapNotNull { request -> pricedProducts()[requestKey(request)] }
         }
-        // reset() cancels the runtime scope, which is the manager's background scope.
-        val cancelledScope = CoroutineScope(Job().apply { cancel() })
-        val manager = AppActorOfferingsManager(
+        return AppActorOfferingsManager(
             backendClient = mockClient,
             cacheStore = cacheStore,
-            offlineProductCatalogStore = offlineProductCatalogStore("offerings-cancelled-scope"),
+            offlineProductCatalogStore = offlineProductCatalogStore(name),
             storeAdapter = mockStoreAdapter,
-            backgroundScope = cancelledScope,
+            backgroundScope = backgroundScope,
         )
-        runCatching { manager.getOfferings(fetchPolicy = AppActorOfferingsFetchPolicy.ReturnCachedThenRefresh) }
-
-        val waiting = runCatching { withTimeout(5_000L) { manager.getOfferings() } }
-
-        // The next caller either awaits the refresh and gets its error, or starts its own fetch once
-        // the refresh has finished. It must never hang (a timeout) or end as if itself cancelled.
-        assertFalse(waiting.exceptionOrNull() is CancellationException)
     }
 
     private fun freshOfferingsResponse(dto: AppActorOfferingsEnvelopeDTO): AppActorBackendHttpResponse<AppActorOfferingsEnvelopeDTO> {

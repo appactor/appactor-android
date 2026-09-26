@@ -155,9 +155,7 @@ internal class AppActorAttributesManager(
             // Persist the fingerprint only once nothing is left to send, so a transient failure
             // re-sends. A context key the server rejected was dropped and would only fail again.
             if (flushPending(appUserId)) {
-                queueMutex.withLock {
-                    if (!isCleared) queueStore.saveProfileContextFingerprint(appUserId, fingerprint)
-                }
+                withOpenQueue { queueStore.saveProfileContextFingerprint(appUserId, fingerprint) }
             }
         } catch (throwable: Throwable) {
             if (throwable is CancellationException) throw throwable
@@ -302,7 +300,7 @@ internal class AppActorAttributesManager(
 
     private suspend fun flushLocked(appUserId: String): Boolean {
         // A manager from before a reset() must not send what the next session queued.
-        val pending = queueMutex.withLock { queueStore.load(appUserId).takeUnless { isCleared } } ?: return true
+        val pending = withOpenQueue { queueStore.load(appUserId) } ?: return true
         if (pending.isEmpty()) {
             queueMutex.withLock { queueStore.save(appUserId, null) }
             return true
@@ -369,26 +367,23 @@ internal class AppActorAttributesManager(
 
     /** Sends one request. Returns `false` when the server rejected its payload for good. */
     private suspend fun deliver(send: suspend () -> Unit): Boolean {
-        try {
-            send()
-            return true
-        } catch (throwable: Throwable) {
-            if (!throwable.isRejectedPayload) throw throwable
-            if (throwable.httpStatusCode != 409) {
-                logRejection(throwable)
-                return false
-            }
-        }
+        var rejection = rejectionOf(send) ?: return true
         // The server also answers 409 to a replayed signing nonce, which OkHttp sends when it
         // silently retries a request after a connection failure (audit D11). A 409 is final only
         // once a fresh request, with a new nonce, gets it too.
-        try {
+        if (rejection.httpStatusCode == 409) rejection = rejectionOf(send) ?: return true
+        AppActorLogger.warn("Customer attribute mutation rejected by the server; dropping it: ${rejection.message}")
+        return false
+    }
+
+    /** Sends one request. Returns the failure if the server rejected its payload for good. */
+    private suspend fun rejectionOf(send: suspend () -> Unit): Throwable? {
+        return try {
             send()
-            return true
+            null
         } catch (throwable: Throwable) {
             if (!throwable.isRejectedPayload) throw throwable
-            logRejection(throwable)
-            return false
+            throwable
         }
     }
 
@@ -415,23 +410,14 @@ internal class AppActorAttributesManager(
         }
         if (attributes.size == 1) {
             deliver(send)
-            onDone(attributes)
-            return
-        }
-        try {
-            send()
-            onDone(attributes)
-        } catch (throwable: Throwable) {
-            if (!throwable.isRejectedPayload) throw throwable
+        } else if (rejectionOf(send) != null) {
             val keys = attributes.keys.sorted()
             keys.chunked((keys.size + 1) / 2).forEach { half ->
                 patchIsolatingRejections(appUserId, attributes.filterKeys { it in half }, onDone)
             }
+            return
         }
-    }
-
-    private fun logRejection(throwable: Throwable) {
-        AppActorLogger.warn("Customer attribute mutation rejected by the server; dropping it: ${throwable.message}")
+        onDone(attributes)
     }
 
     private suspend fun removeFlushed(
@@ -440,13 +426,12 @@ internal class AppActorAttributesManager(
         attributionDelivered: Boolean,
     ) {
         if (flushed.isEmpty()) return
-        queueMutex.withLock {
-            if (isCleared) return@withLock
+        withOpenQueue {
             queueStore.save(appUserId, queueStore.load(appUserId)?.removeFlushed(flushed))
             // The server replaces the whole attribution on every post, so the helpers merge over
             // the last one it accepted. A rejected one must not stay that base; an install from
             // before this change may have saved it there when it was queued.
-            val attribution = flushed.attribution ?: return@withLock
+            val attribution = flushed.attribution ?: return@withOpenQueue
             if (attributionDelivered) {
                 queueStore.saveAttributionSnapshot(appUserId, attribution)
             } else if (queueStore.loadAttributionSnapshot(appUserId) == attribution) {
@@ -474,6 +459,10 @@ internal class AppActorAttributesManager(
         firstFailure?.let { throw it }
     }
 
+    /** Runs [block] under the queue lock, unless reset() cleared this manager: then it does nothing. */
+    private suspend inline fun <T> withOpenQueue(block: () -> T): T? =
+        queueMutex.withLock { if (isCleared) null else block() }
+
     suspend fun clearQueue() {
         queueMutex.withLock {
             isCleared = true
@@ -485,8 +474,7 @@ internal class AppActorAttributesManager(
         appUserId: String,
         transform: (AppActorQueuedAttributeMutation) -> AppActorQueuedAttributeMutation,
     ) {
-        queueMutex.withLock {
-            if (isCleared) return@withLock
+        withOpenQueue {
             val existing = queueStore.load(appUserId) ?: AppActorQueuedAttributeMutation()
             val updated = transform(existing)
             queueStore.save(appUserId, updated.takeBounded())
@@ -521,9 +509,8 @@ internal class AppActorAttributesManager(
         attributes: Map<String, JsonElement>,
     ) {
         if (attributes.isEmpty()) return
-        queueMutex.withLock {
-            if (isCleared) return@withLock
-            val current = queueStore.load(appUserId) ?: return@withLock
+        withOpenQueue {
+            val current = queueStore.load(appUserId) ?: return@withOpenQueue
             queueStore.save(
                 appUserId,
                 current.copy(

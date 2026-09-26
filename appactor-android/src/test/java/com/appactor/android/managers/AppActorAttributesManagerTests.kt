@@ -537,11 +537,10 @@ class AppActorAttributesManagerTests {
             "user_a",
             AppActorAttribution(provider = "custom", providerName = "facebook", network = "facebook", source = "facebook"),
         )
-        backend.attributionStatus = 400
+        backend.attributionFailures += 400
         manager.updateCustomAttribution("user_a", AppActorAttribution(provider = "custom", adName = "rejected_ad"))
         assertNull(store.load("user_a"))
 
-        backend.attributionStatus = null
         manager.updateCustomAttribution(
             "user_a",
             AppActorAttribution(provider = "custom", campaignName = "spring_sale", campaign = "spring_sale"),
@@ -555,7 +554,7 @@ class AppActorAttributesManagerTests {
 
     @Test
     fun `a rejected attribution saved as the merge base before this version is cleared`() = runBlocking {
-        val backend = FakeAttributesBackendClient(attributionStatus = 400)
+        val backend = FakeAttributesBackendClient().apply { attributionFailures += 400 }
         val store = InMemoryAttributeQueueStore()
         // Older versions saved the snapshot when an attribution was queued, not when delivered.
         val rejected = AppActorAttributionRequestDTO(provider = "custom", adName = "rejected_ad")
@@ -564,7 +563,6 @@ class AppActorAttributesManagerTests {
         val manager = manager(backend, store)
 
         manager.flushPending("user_a")
-        backend.attributionStatus = null
         manager.updateCustomAttribution(
             "user_a",
             AppActorAttribution(provider = "custom", campaignName = "spring_sale", campaign = "spring_sale"),
@@ -642,7 +640,7 @@ class AppActorAttributesManagerTests {
 
     @Test
     fun `a 409 for a replayed nonce is retried with a fresh request`() = runBlocking {
-        val backend = FakeAttributesBackendClient(nextAttributionStatus = 409)
+        val backend = FakeAttributesBackendClient().apply { attributionFailures += 409 }
         val store = InMemoryAttributeQueueStore()
         val manager = manager(backend, store)
 
@@ -735,15 +733,14 @@ class AppActorAttributesManagerTests {
         var permanentMutationStatus: Int? = null,
         /** PATCHes carrying any of these keys fail with a 409, as a type conflict does. */
         var rejectedAttributeKeys: Set<String> = emptySet(),
-        var attributionStatus: Int? = null,
         var deleteAttributeStatus: Int? = null,
         /** PATCHes for these users fail with the given status. */
         var failingUsers: Map<String, Int> = emptyMap(),
-        /** The next attribution post fails with this status, the one after it succeeds. */
-        var nextAttributionStatus: Int? = null,
         var onAttributionPosted: suspend () -> Unit = {},
     ) : AppActorBackendClient {
         var patchAttempts = 0
+        /** Each attribution post takes the next status here and fails with it, while any are left. */
+        val attributionFailures = ArrayDeque<Int>()
         val patchRequests = mutableListOf<Pair<String, AppActorAttributesPatchRequestDTO>>()
         val deleteRequests = mutableListOf<Pair<String, String>>()
         val integrationRequests = mutableListOf<Pair<String, AppActorIntegrationIdentifierRequestDTO>>()
@@ -795,11 +792,7 @@ class AppActorAttributesManagerTests {
             appUserId: String,
             request: AppActorAttributionRequestDTO,
         ): AppActorBackendHttpResponse<Unit> {
-            attributionStatus?.let { throw AppActorBackendException.Http(statusCode = it) }
-            nextAttributionStatus?.let {
-                nextAttributionStatus = null
-                throw AppActorBackendException.Http(statusCode = it)
-            }
+            attributionFailures.removeFirstOrNull()?.let { throw AppActorBackendException.Http(statusCode = it) }
             return mutation { attributionRequests += appUserId to request }.also { onAttributionPosted() }
         }
 
