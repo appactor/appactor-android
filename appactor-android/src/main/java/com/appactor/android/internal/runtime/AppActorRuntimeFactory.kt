@@ -36,7 +36,7 @@ internal class AppActorRuntimeFactory(
     fun create(
         configuration: AppActorConfiguration,
         sessionId: Long,
-        callbackState: AppActorCallbackState,
+        callbackState: AppActorCallbackState = AppActorCallbackState(),
         onPipelineEvent: (AppActorReceiptPipelineEvent) -> Unit,
     ): AppActorRuntimeState {
         val identityStore = AppActorSharedPrefsIdentityStore(configuration.applicationContext)

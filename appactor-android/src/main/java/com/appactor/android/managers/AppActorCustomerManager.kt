@@ -18,12 +18,11 @@ import com.appactor.android.models.AppActorConfiguration
 import com.appactor.android.models.AppActorCustomerInfo
 import com.appactor.android.models.AppActorDiagnosticsDataSource
 import com.appactor.android.models.AppActorVerificationResult
+import com.appactor.android.internal.runtime.appActorBackgroundScope
 import com.appactor.android.internal.runtime.launchSharedRequest
 import com.appactor.android.internal.runtime.throwIfCancellation
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.IOException
@@ -38,7 +37,7 @@ internal class AppActorCustomerManager(
     private val offlineProductCatalogStore: AppActorOfflineProductCatalogStore,
     private val storeAdapter: AppActorStoreAdapter,
     private val dateProviderMillis: () -> Long = { System.currentTimeMillis() },
-    private val backgroundScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+    private val backgroundScope: CoroutineScope = appActorBackgroundScope(),
 ) {
 
     private val inflightMutex = Mutex()

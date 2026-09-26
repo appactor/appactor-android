@@ -14,12 +14,11 @@ import java.io.IOException
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 import kotlinx.coroutines.CancellationException
+import com.appactor.android.internal.runtime.appActorBackgroundScope
 import com.appactor.android.internal.runtime.launchSharedRequest
 import com.appactor.android.internal.runtime.throwIfCancellation
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.serialization.Serializable
 
 internal class AppActorExperimentManager(
@@ -28,7 +27,7 @@ internal class AppActorExperimentManager(
     private val appVersionProvider: () -> String?,
     private val countryProvider: () -> String?,
     private val dateProviderMillis: () -> Long = { System.currentTimeMillis() },
-    private val backgroundScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+    private val backgroundScope: CoroutineScope = appActorBackgroundScope(),
 ) {
 
     private val stateLock = ReentrantLock()
@@ -38,38 +37,42 @@ internal class AppActorExperimentManager(
     private var lastRequestId: String? = null
     @Volatile
     private var cacheGeneration: Long = 0
+    // The user whose assignments memory holds; their disk file is merged in before memory is
+    // first persisted over it, which would otherwise drop what earlier sessions stored.
     @Volatile
     private var lastCacheUserId: String? = null
-    // The user whose disk file has been merged into memory; until then a persist would drop the
-    // assignments earlier sessions stored.
-    private var diskMergedUserId: String? = null
 
     suspend fun getAssignment(
         experimentKey: String,
         appUserId: String,
     ): AppActorExperimentAssignment? {
-        val request = CompletableDeferred<AppActorExperimentAssignment?>()
-        return when (val requestState = prepareRequest(appUserId, experimentKey, request)) {
-            is ExperimentRequestState.Cached -> requestState.assignment
-            is ExperimentRequestState.Await -> requestState.deferred.await()
-            is ExperimentRequestState.Execute -> {
-                backgroundScope.launchSharedRequest(
-                    request = request,
-                    cleanup = {
-                        stateLock.withLock {
-                            if (inFlight[experimentKey] === request) inFlight.remove(experimentKey)
-                        }
-                    },
-                    block = {
-                        fetchAssignment(
-                            experimentKey = experimentKey,
-                            appUserId = appUserId,
-                            requestGeneration = requestState.generation,
-                        )
-                    },
-                )
-                request.await()
+        val request = stateLock.withLock {
+            val cached = cachedAssignments[experimentKey]
+            if (cached != null && isFresh(cached.cachedAtMillis) && lastCacheUserId == appUserId) {
+                return cached.assignment?.toPublic()
             }
+            inFlight[experimentKey] ?: startFetchLocked(experimentKey, appUserId)
+        }
+        return request.await()
+    }
+
+    /** Starts a fetch every caller of [experimentKey] shares, as its inFlight request. Under stateLock. */
+    private fun startFetchLocked(
+        experimentKey: String,
+        appUserId: String,
+    ): CompletableDeferred<AppActorExperimentAssignment?> {
+        val generation = cacheGeneration
+        return CompletableDeferred<AppActorExperimentAssignment?>().also { request ->
+            inFlight[experimentKey] = request
+            backgroundScope.launchSharedRequest(
+                request = request,
+                cleanup = {
+                    stateLock.withLock {
+                        if (inFlight[experimentKey] === request) inFlight.remove(experimentKey)
+                    }
+                },
+                block = { fetchAssignment(experimentKey, appUserId, generation) },
+            )
         }
     }
 
@@ -87,29 +90,10 @@ internal class AppActorExperimentManager(
             inFlight.clear()
             lastRequestId = null
             lastCacheUserId = null
-            diskMergedUserId = null
             current
         }
         cancelled.forEach { it.cancel(CancellationException("Experiment cache cleared.")) }
         appUserId?.let(cacheStore::clear)
-    }
-
-    private fun prepareRequest(
-        appUserId: String,
-        experimentKey: String,
-        request: CompletableDeferred<AppActorExperimentAssignment?>,
-    ): ExperimentRequestState {
-        return stateLock.withLock {
-            val cached = cachedAssignments[experimentKey]
-            if (cached != null && isFresh(cached.cachedAtMillis) && lastCacheUserId == appUserId) {
-                return@withLock ExperimentRequestState.Cached(cached.assignment?.toPublic())
-            }
-            inFlight[experimentKey]?.let { existing ->
-                return@withLock ExperimentRequestState.Await(existing)
-            }
-            inFlight[experimentKey] = request
-            ExperimentRequestState.Execute(cacheGeneration)
-        }
     }
 
     private suspend fun fetchAssignment(
@@ -160,7 +144,6 @@ internal class AppActorExperimentManager(
             ensureGenerationLocked(requestGeneration)
             cachedAssignments.putAll(decoded)
             lastCacheUserId = appUserId
-            diskMergedUserId = appUserId
         }
     }
 
@@ -199,9 +182,8 @@ internal class AppActorExperimentManager(
     ): AppActorExperimentAssignment? {
         return stateLock.withLock {
             ensureGenerationLocked(requestGeneration)
-            if (diskMergedUserId != appUserId) {
+            if (lastCacheUserId != appUserId) {
                 diskAssignments(appUserId)?.forEach { (key, value) -> cachedAssignments.putIfAbsent(key, value) }
-                diskMergedUserId = appUserId
             }
             lastRequestId = requestId
             cachedAssignments[experimentKey] = cached
@@ -289,19 +271,5 @@ internal class AppActorExperimentManager(
 
     private companion object {
         const val CACHE_TTL_MILLIS: Long = 5 * 60 * 1_000
-    }
-
-    private sealed interface ExperimentRequestState {
-        data class Cached(
-            val assignment: AppActorExperimentAssignment?,
-        ) : ExperimentRequestState
-
-        data class Await(
-            val deferred: CompletableDeferred<AppActorExperimentAssignment?>,
-        ) : ExperimentRequestState
-
-        data class Execute(
-            val generation: Long,
-        ) : ExperimentRequestState
     }
 }

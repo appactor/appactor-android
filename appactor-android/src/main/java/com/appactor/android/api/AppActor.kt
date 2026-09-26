@@ -204,7 +204,7 @@ public object AppActor {
                     runtimeState: AppActorRuntimeState,
                     result: AppActorPurchaseUpdateProcessingResult,
                 ): Boolean {
-                    return this@AppActor.publishPurchaseUpdateIfCurrent(runtimeState, result)
+                    return this@AppActor.publishPurchaseUpdateIfCurrent(runtimeState.sessionId, result)
                 }
 
                 override fun deliverOnMain(block: () -> Unit) {
@@ -246,7 +246,7 @@ public object AppActor {
                 }
 
                 override suspend fun drainReceipts(runtimeState: AppActorRuntimeState) {
-                    publishDrainedCustomerInfo(runtimeState, runtimeState.paymentProcessor.drainAll())
+                    publishDrainedCustomerInfo(runtimeState.sessionId, runtimeState.paymentProcessor.drainAll())
                 }
 
                 override suspend fun flushPendingAttributes(runtimeState: AppActorRuntimeState) {
@@ -297,31 +297,22 @@ public object AppActor {
     public val cachedRemoteConfigs: AppActorRemoteConfigs?
         get() = currentRuntimeSnapshot()?.remoteConfigManager?.cached()
 
+    // The listeners live in preconfiguredCallbacks; installRuntimeLocked copies them into the runtime.
     public var onCustomerInfoChanged: ((AppActorCustomerInfo) -> Unit)?
-        get() = synchronized(this) {
-            runtime?.onCustomerInfoChanged ?: preconfiguredCallbacks.onCustomerInfoChanged
-        }
+        get() = synchronized(this) { preconfiguredCallbacks.onCustomerInfoChanged }
         set(value) {
             synchronized(this) {
                 preconfiguredCallbacks = preconfiguredCallbacks.copy(onCustomerInfoChanged = value)
-                // A new listener hasn't had any info yet.
-                runtime = runtime?.let { current ->
-                    current.copy(
-                        onCustomerInfoChanged = value,
-                        notifiedCustomerInfo = current.notifiedCustomerInfo.takeIf { value === current.onCustomerInfoChanged },
-                    )
-                }
+                runtime?.let(::installRuntimeLocked)
             }
         }
 
     public var onReceiptPipelineEvent: ((AppActorReceiptPipelineEvent) -> Unit)?
-        get() = synchronized(this) {
-            runtime?.onReceiptPipelineEvent ?: preconfiguredCallbacks.onReceiptPipelineEvent
-        }
+        get() = synchronized(this) { preconfiguredCallbacks.onReceiptPipelineEvent }
         set(value) {
             synchronized(this) {
                 preconfiguredCallbacks = preconfiguredCallbacks.copy(onReceiptPipelineEvent = value)
-                runtime = runtime?.copy(onReceiptPipelineEvent = value)
+                runtime?.let(::installRuntimeLocked)
             }
         }
 
@@ -330,9 +321,7 @@ public object AppActor {
      * Provides the product ID and updated customer info.
      */
     public var onDeferredPurchaseResolved: ((productId: String, customerInfo: AppActorCustomerInfo) -> Unit)?
-        get() = synchronized(this) {
-            runtime?.onDeferredPurchaseResolved ?: preconfiguredCallbacks.onDeferredPurchaseResolved
-        }
+        get() = synchronized(this) { preconfiguredCallbacks.onDeferredPurchaseResolved }
         set(value) {
             synchronized(this) {
                 preconfiguredCallbacks = preconfiguredCallbacks.copy(onDeferredPurchaseResolved = value)
@@ -415,22 +404,20 @@ public object AppActor {
         appUserId: String? = null,
         options: AppActorOptions = AppActorOptions(),
     ) {
-        val startupRuntime = throwingPublicErrors("Failed to configure AppActor.") {
-            transitionMutex.withLock {
-                if (resetWipe != null || runtime != null) {
-                    return@withLock null
-                }
-                bumpIdentityEpochLocked()
-                configureInternal(
-                    configuration = AppActorConfiguration(
-                        context = context,
-                        apiKey = apiKey,
-                        appUserId = appUserId,
-                        options = options.toLegacyOptions(),
-                    ),
-                )
-                runtime
+        val startupRuntime = lockedTransition("Failed to configure AppActor.") {
+            if (resetWipe != null || runtime != null) {
+                return@lockedTransition null
             }
+            bumpIdentityEpochLocked()
+            configureInternal(
+                configuration = AppActorConfiguration(
+                    context = context,
+                    apiKey = apiKey,
+                    appUserId = appUserId,
+                    options = options.toLegacyOptions(),
+                ),
+            )
+            runtime
         }
         if (startupRuntime != null) {
             awaitStartupIfNeeded(startupRuntime)
@@ -522,7 +509,7 @@ public object AppActor {
 
     public suspend fun logIn(newAppUserId: String): AppActorCustomerInfo {
         awaitStartupBeforeTransition()
-        val (info, callbacks, profileContextTarget) = throwingPublicErrors("Failed to log in.") { transitionMutex.withLock {
+        val (info, callbacks, profileContextTarget) = lockedTransition("Failed to log in.") {
             bumpIdentityEpochLocked()
             val currentRuntime = requireConfiguredRuntime()
             AppActorValidation.validateAppUserId(newAppUserId)
@@ -567,7 +554,7 @@ public object AppActor {
                 ?: info.appUserId
                 ?: newAppUserId
             Triple(info, callbacks, currentRuntime to targetAppUserId)
-        } }
+        }
         callbacks.forEach { (callback, callbackInfo, epoch) ->
             deliverOnMainIfCurrent(profileContextTarget.first.sessionId, epoch) {
                 callback?.invoke(callbackInfo)
@@ -1185,13 +1172,11 @@ public object AppActor {
             runtimeFactory.create(
                 configuration = configuration,
                 sessionId = runtimeSessionId,
-                callbackState = AppActorCallbackState(),
                 onPipelineEvent = { event -> publishReceiptPipelineEvent(runtimeSessionId, event) },
             )
         )
         customerInfoStateFlow.value = newRuntime.lastCustomerInfo
-        val drainRuntime = newRuntime
-        newRuntime.paymentProcessor.onRetryWakeDrained = { info -> publishDrainedCustomerInfo(drainRuntime, info) }
+        newRuntime.paymentProcessor.onRetryWakeDrained = { info -> publishDrainedCustomerInfo(runtimeSessionId, info) }
         preconfiguredFallbackOfferingsDTO?.let { dto ->
             newRuntime.offeringsManager.setFallbackOfferings(dto)
             preconfiguredFallbackOfferingsDTO = null
@@ -1253,6 +1238,9 @@ public object AppActor {
             onCustomerInfoChanged = callbacks.onCustomerInfoChanged,
             onReceiptPipelineEvent = callbacks.onReceiptPipelineEvent,
             onDeferredPurchaseResolved = callbacks.onDeferredPurchaseResolved,
+            // A new listener hasn't had any info yet.
+            notifiedCustomerInfo = newRuntime.notifiedCustomerInfo
+                .takeIf { callbacks.onCustomerInfoChanged === newRuntime.onCustomerInfoChanged },
         ).also { runtime = it }
     }
 
@@ -1375,20 +1363,17 @@ public object AppActor {
             // change: the flow keeps its value, and a listener that has already been called with
             // this info isn't called again; one that re-fetches would otherwise loop.
             val unchanged = latestRuntime.lastCustomerInfo.isSameInfoAs(info)
-            val updatedRuntime = latestRuntime.copy(
+            // Recorded only for a listener that is there to be called.
+            val listener = latestRuntime.onCustomerInfoChanged
+                ?.takeUnless { latestRuntime.notifiedCustomerInfo?.isSameInfoAs(info) == true }
+            runtime = latestRuntime.copy(
                 lastCustomerInfo = if (unchanged) latestRuntime.lastCustomerInfo else info,
                 lastCustomerInfoSource = source ?: latestRuntime.lastCustomerInfoSource,
+                notifiedCustomerInfo = if (listener != null) info else latestRuntime.notifiedCustomerInfo,
             )
-            runtime = updatedRuntime
             if (!unchanged) {
                 customerInfoStateFlow.value = info
             }
-            // Recorded only for a listener that is there to be called.
-            val listener = updatedRuntime.onCustomerInfoChanged ?: return@synchronized null
-            if (updatedRuntime.notifiedCustomerInfo?.isSameInfoAs(info) == true) {
-                return@synchronized null
-            }
-            runtime = updatedRuntime.copy(notifiedCustomerInfo = info)
             listener
         }
     }
@@ -1510,6 +1495,10 @@ public object AppActor {
         }
     }
 
+    /** An identity transition, under transitionMutex, whose failure reaches the app as a public error. */
+    private suspend inline fun <T> lockedTransition(defaultMessage: String, block: () -> T): T =
+        throwingPublicErrors(defaultMessage) { transitionMutex.withLock(action = block) }
+
     private suspend fun isSnapshotCurrent(snapshot: AppActorOperationSnapshot): Boolean {
         return transitionMutex.withLock { runtimeIfCurrentLocked(snapshot) != null }
     }
@@ -1566,19 +1555,19 @@ public object AppActor {
     }
 
     private suspend fun publishPurchaseUpdateIfCurrent(
-        runtimeState: AppActorRuntimeState,
+        runtimeSessionId: Long,
         result: AppActorPurchaseUpdateProcessingResult,
         source: AppActorDiagnosticsDataSource = AppActorDiagnosticsDataSource.Network,
     ): Boolean {
         val callbackAndInfo = transitionMutex.withLock {
             val currentRuntime = runtime ?: return@withLock null
-            if (currentRuntime.sessionId != runtimeState.sessionId) {
+            if (currentRuntime.sessionId != runtimeSessionId) {
                 return@withLock null
             }
             purchaseUpdatePublishCallbackIfCurrentLocked(currentRuntime, result, source)
         } ?: return false
         val (callback, info, epoch) = callbackAndInfo
-        deliverOnMainIfCurrent(runtimeState.sessionId, epoch) {
+        deliverOnMainIfCurrent(runtimeSessionId, epoch) {
             callback?.invoke(info)
         }
         return callback != null
@@ -1589,12 +1578,12 @@ public object AppActor {
      * user. It seeds the customer cache, so the next refresh would wait for that to go stale.
      */
     private suspend fun publishDrainedCustomerInfo(
-        runtimeState: AppActorRuntimeState,
+        runtimeSessionId: Long,
         info: AppActorCustomerInfo?,
     ) {
         val appUserId = info?.appUserId ?: return
         publishPurchaseUpdateIfCurrent(
-            runtimeState = runtimeState,
+            runtimeSessionId = runtimeSessionId,
             result = AppActorPurchaseUpdateProcessingResult(customerInfo = info, appUserId = appUserId),
         )
     }

@@ -34,6 +34,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okio.Buffer
 import java.io.IOException
@@ -353,18 +354,7 @@ internal class AppActorHttpBackendClient(
             )
 
             try {
-                val rawResponse = executeRaw(request).let { response ->
-                    // OkHttp silently re-sends a request whose connection failed after the backend
-                    // had it, nonce included, and the backend answers the replayed nonce with a
-                    // 409. The request went through, so send it again, once, with a fresh nonce.
-                    if (!response.isReplayedNonce()) {
-                        response
-                    } else {
-                        executeRaw(requestForAttempt(initialRequest, attempt = attempt + 1)).also { resent ->
-                            if (resent.isReplayedNonce()) throw IOException("Response signing nonce was replayed twice.")
-                        }
-                    }
-                }
+                val rawResponse = executeResendingReplayedNonce(request, initialRequest)
                 val errorEnvelope = parseErrorEnvelope(rawResponse.rawBody)
                 val resolvedRequestId = errorEnvelope?.requestId ?: rawResponse.requestId
 
@@ -475,14 +465,27 @@ internal class AppActorHttpBackendClient(
     private fun requestForAttempt(
         initialRequest: Request,
         attempt: Int,
-    ): Request {
-        if (attempt == 0) return initialRequest
+    ): Request = if (attempt == 0) initialRequest else resigned(initialRequest)
 
-        val path = initialRequest.url.encodedPath
+    // A fresh nonce and auth headers, without If-None-Match.
+    private fun resigned(initialRequest: Request): Request {
         val builder = initialRequest.newBuilder()
             .removeHeader("If-None-Match")
-        AppActorAuthHeaderProvider.apply(builder, configuration, path)
+        AppActorAuthHeaderProvider.apply(builder, configuration, initialRequest.url.encodedPath)
         return builder.build()
+    }
+
+    /**
+     * OkHttp silently re-sends a request whose connection failed after the backend had it, nonce
+     * included, and the backend answers the replayed nonce with a 409. The request went through,
+     * so it is sent again, once, with a fresh nonce. Not inline, unlike its caller.
+     */
+    private suspend fun executeResendingReplayedNonce(request: Request, initialRequest: Request): RawBackendResponse {
+        val response = executeRaw(request)
+        if (!response.isReplayedNonce()) return response
+        val resent = executeRaw(resigned(initialRequest))
+        if (resent.isReplayedNonce()) throw IOException("Response signing nonce was replayed twice.")
+        return resent
     }
 
     private fun parseErrorEnvelope(rawBody: String?): AppActorBackendErrorEnvelopeDTO? {
@@ -570,24 +573,14 @@ internal class AppActorHttpBackendClient(
                 val eTag = response.header("ETag")
                 val signatureHeaders = AppActorResponseSignatureHeaders.fromHeaders(response.headers)
                 val retryAfterHeader = response.header("Retry-After")
-                val sentNonce: String? = request.header("X-AppActor-Nonce")
-                val requestPath = signatureRequestTarget(request)
-                val requestBinding = request
-                    .takeIf {
-                        it.header(AppActorAuthHeaderProvider.SIGNATURE_BINDING_HEADER) ==
-                            AppActorAuthHeaderProvider.SIGNATURE_BINDING_REQUEST
-                    }
-                    ?.let(::signatureRequestBinding)
                 val remoteConfigRequiresUserContext = parseBooleanHeader(
                     response.header(remoteConfigRequiresUserContextHeader),
                 )
                 val signatureVerified = verifyResponseSignature(
+                    request = request,
                     statusCode = statusCode,
                     signatureHeaders = signatureHeaders,
                     rawBody = rawBody.orEmpty(),
-                    sentNonce = sentNonce,
-                    requestPath = requestPath,
-                    requestBinding = requestBinding,
                     eTag = eTag,
                     requestId = requestId,
                 )
@@ -616,18 +609,23 @@ internal class AppActorHttpBackendClient(
     }
 
     private fun verifyResponseSignature(
+        request: Request,
         statusCode: Int,
         signatureHeaders: AppActorResponseSignatureHeaders?,
         rawBody: String,
-        sentNonce: String?,
-        requestPath: String,
-        requestBinding: String?,
         eTag: String?,
         requestId: String?,
     ): Boolean {
         if ((statusCode !in 200..299 && statusCode != 304) || !configuration.options.verifyResponseSignatures) {
             return false
         }
+        val sentNonce: String? = request.header("X-AppActor-Nonce")
+        val requestBinding = request
+            .takeIf {
+                it.header(AppActorAuthHeaderProvider.SIGNATURE_BINDING_HEADER) ==
+                    AppActorAuthHeaderProvider.SIGNATURE_BINDING_REQUEST
+            }
+            ?.let(::signatureRequestBinding)
 
         return when (
             val result = AppActorResponseSignatureVerifier.verify(
@@ -635,7 +633,7 @@ internal class AppActorHttpBackendClient(
                 body = rawBody,
                 sentNonce = sentNonce,
                 apiKey = configuration.apiKey,
-                requestPath = requestPath,
+                requestPath = signatureRequestTarget(request),
                 eTag = eTag.orEmpty(),
                 requestBinding = requestBinding,
             )
@@ -660,21 +658,21 @@ internal class AppActorHttpBackendClient(
     }
 
     private fun signatureRequestTarget(request: Request): String {
-        val path = request.url.encodedPath
         if (request.header("X-AppActor-Signature-Target") != signatureTargetPathQuery) {
-            return path
+            return request.url.encodedPath
         }
-        val query = request.url.encodedQuery
-        return if (query.isNullOrBlank()) path else "$path?$query"
+        return request.url.pathAndQuery()
     }
 
     // The target is the path + query as sent: the backend reads it back from the URL it received.
     private fun signatureRequestBinding(request: Request): String {
         val body = Buffer().also { buffer -> request.body?.writeTo(buffer) }.readByteArray()
-        val path = request.url.encodedPath
-        val query = request.url.encodedQuery
-        val target = if (query.isNullOrEmpty()) path else "$path?$query"
-        return AppActorResponseSignatureVerifier.requestBinding(request.method, target, body)
+        return AppActorResponseSignatureVerifier.requestBinding(request.method, request.url.pathAndQuery(), body)
+    }
+
+    private fun HttpUrl.pathAndQuery(): String {
+        val query = encodedQuery
+        return if (query.isNullOrEmpty()) encodedPath else "$encodedPath?$query"
     }
 
     private fun RawBackendResponse.isReplayedNonce(): Boolean =

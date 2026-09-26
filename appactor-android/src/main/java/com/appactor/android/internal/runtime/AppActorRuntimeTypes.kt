@@ -30,7 +30,9 @@ import kotlinx.coroutines.completeWith
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -109,7 +111,7 @@ internal fun <T> CoroutineScope.launchSharedRequest(
         val result = try {
             Result.success(block())
         } catch (throwable: Throwable) {
-            Result.failure(if (throwable is CancellationException) AppActorError.NotConfigured else throwable)
+            Result.failure(throwable.forSharedAwaiters())
         }
         // Cleaned up first, so a caller that calls again once this returns starts a new request.
         try {
@@ -119,6 +121,16 @@ internal fun <T> CoroutineScope.launchSharedRequest(
         }
     }
 }
+
+/**
+ * What callers awaiting a shared request get when it fails: they were not cancelled themselves,
+ * so a cancellation of the request (its scope cancelled by reset()) reaches them as NotConfigured.
+ */
+internal fun Throwable.forSharedAwaiters(): Throwable =
+    if (this is CancellationException) AppActorError.NotConfigured else this
+
+/** The scope a manager runs its shared fetches in when none is given (tests). */
+internal fun appActorBackgroundScope(): CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
 internal fun throwIfCancellation(throwable: Throwable) {
     if (throwable is kotlinx.coroutines.CancellationException) {

@@ -81,12 +81,13 @@ internal data class AppActorAttributionRequestDTO(
  * sent as the source too, cut to the source's limit. It also answers 400 to a body over 16 KiB
  * (sdk-attribution-parser.ts); metadata and identifiers, which it doesn't read, go first.
  */
-internal fun AppActorAttributionRequestDTO.clippedToServerLimits(): AppActorAttributionRequestDTO =
-    clippedFields().let { clipped ->
-        if (clipped.encodedSize() <= BODY_LIMIT_BYTES) return@let clipped
-        val withoutMetadata = clipped.copy(metadata = emptyMap())
-        if (withoutMetadata.encodedSize() <= BODY_LIMIT_BYTES) withoutMetadata else withoutMetadata.copy(identifiers = emptyMap())
-    }
+internal fun AppActorAttributionRequestDTO.clippedToServerLimits(): AppActorAttributionRequestDTO {
+    val clipped = clippedFields()
+    if (clipped.encodedSize() <= BODY_LIMIT_BYTES) return clipped
+    val withoutMetadata = clipped.copy(metadata = emptyMap())
+    if (withoutMetadata.encodedSize() <= BODY_LIMIT_BYTES) return withoutMetadata
+    return withoutMetadata.copy(identifiers = emptyMap())
+}
 
 private fun AppActorAttributionRequestDTO.encodedSize(): Int =
     AppActorBackendJson.instance.encodeToString(this).toByteArray(Charsets.UTF_8).size

@@ -162,11 +162,9 @@ internal class GooglePlayBillingClientBridge(
 
     override fun shutdown() {
         isShutDown = true
-        isSetUp = false
+        markDisconnected()
         purchaseContinuation = null
         pendingPurchaseProductType = null
-        storefront = null
-        capabilities = emptySet()
         synchronized(requestDrainLock) {
             requestDrainJob?.cancel()
             requestDrainJob = null
@@ -176,7 +174,7 @@ internal class GooglePlayBillingClientBridge(
             reconnectJob = null
         }
         // Failed rather than cancelled: whoever awaits it was not cancelled.
-        activeConnectionAttempt?.completeExceptionally(AppActorError.Unknown("Billing bridge was shut down."))
+        activeConnectionAttempt?.completeExceptionally(shutDownError())
         activeConnectionAttempt = null
         failPendingRequests(AppActorError.Unknown("Billing bridge was shut down before pending requests completed."))
         purchaseUpdatesChannel.close()
@@ -300,13 +298,9 @@ internal class GooglePlayBillingClientBridge(
                     // Below API 29 the library doesn't wait for its reconnect here. Connect again
                     // for the next launch, and report a device without Play billing as such, not
                     // as a network error.
-                    isSetUp = false
-                    capabilities = emptySet()
-                    storefront = null
+                    markDisconnected()
                     scheduleReconnect()
-                    lastSetupResult
-                        ?.takeIf { it.responseCode == BillingResponseCode.BILLING_UNAVAILABLE }
-                        ?.let { failure = it }
+                    lastSetupResult?.takeIf { isBillingUnavailable() }?.let { failure = it }
                 }
                 continuation.resume(failure.toLaunchResult(productType = productType))
             }
@@ -458,14 +452,14 @@ internal class GooglePlayBillingClientBridge(
         scheduleReconnectOnFailure: Boolean,
     ) {
         // Its scope is cancelled, so an attempt launched now would never complete.
-        if (isShutDown) throw AppActorError.Unknown("Billing bridge was shut down.")
+        if (isShutDown) throw shutDownError()
         if (isSetUp) {
             refreshConnectedState()
             return
         }
 
         val connectionAttempt = connectionMutex.withLock {
-            if (isShutDown) throw AppActorError.Unknown("Billing bridge was shut down.")
+            if (isShutDown) throw shutDownError()
             if (isSetUp) {
                 null
             } else {
@@ -489,7 +483,7 @@ internal class GooglePlayBillingClientBridge(
                         }
                     }.invokeOnCompletion { cause ->
                         // A shutdown can cancel the scope before this launch even starts.
-                        if (cause != null) deferred.completeExceptionally(AppActorError.Unknown("Billing bridge was shut down."))
+                        if (cause != null) deferred.completeExceptionally(shutDownError())
                     }
                 }
             }
@@ -525,9 +519,7 @@ internal class GooglePlayBillingClientBridge(
                         }
 
                         override fun onBillingServiceDisconnected() {
-                            isSetUp = false
-                            capabilities = emptySet()
-                            storefront = null
+                            markDisconnected()
                             if (continuation.isActive) {
                                 continuation.resumeWith(
                                     Result.failure(
@@ -585,6 +577,14 @@ internal class GooglePlayBillingClientBridge(
             }
         }
     }
+
+    private fun markDisconnected() {
+        isSetUp = false
+        capabilities = emptySet()
+        storefront = null
+    }
+
+    private fun shutDownError(): AppActorError = AppActorError.Unknown("Billing bridge was shut down.")
 
     private fun isBillingUnavailable(): Boolean =
         lastSetupResult?.responseCode == BillingResponseCode.BILLING_UNAVAILABLE

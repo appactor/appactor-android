@@ -3,6 +3,7 @@ package com.appactor.android.pipeline
 import android.app.Activity
 import com.appactor.android.backend.client.AppActorBackendClient
 import com.appactor.android.internal.logging.AppActorLogger
+import com.appactor.android.internal.runtime.appActorBackgroundScope
 import com.appactor.android.backend.dto.AppActorGoogleReceiptResponseDTO
 import com.appactor.android.billing.AppActorStoreAdapter
 import com.appactor.android.billing.AppActorStorePurchase
@@ -36,9 +37,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.CoroutineStart
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
@@ -67,7 +66,7 @@ internal class AppActorPaymentProcessor(
     private val packageName: String,
     private val onPipelineEvent: (AppActorReceiptPipelineEvent) -> Unit = {},
     private val dateProviderMillis: () -> Long = { System.currentTimeMillis() },
-    private val backgroundScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+    private val backgroundScope: CoroutineScope = appActorBackgroundScope(),
 ) {
 
     private val purchaseMutex = Mutex()
