@@ -62,8 +62,6 @@ import com.appactor.android.models.AppActorStorefront
 import com.appactor.android.models.AppActorValidation
 import com.appactor.android.pipeline.AppActorPurchaseUpdateProcessingResult
 import com.appactor.android.storage.isAnonymousAppUserId
-import com.appactor.android.storage.AppActorAtomicJsonPostedLedgerStore
-import com.appactor.android.storage.AppActorAtomicJsonReceiptQueueStore
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
@@ -475,13 +473,14 @@ public object AppActor {
             currentRuntime.experimentManager.clearCache(currentAppUserId)
             currentRuntime.attributesManager.clearQueue()
             currentRuntime.identityStore.clearIdentity()
-            currentRuntime.eTagManager.clearAll()
+            // Through the session's own stores, which drop every later write: a restore, sync or
+            // purchase of this session still running in a caller's scope would otherwise write the
+            // previous user's receipts, ledger, customer cache and pending entries back.
+            currentRuntime.eTagManager.wipe()
             installReferrerEnabled.set(false)
-            AppActorAtomicJsonReceiptQueueStore.deletePersistedFile(currentRuntime.configuration.applicationContext)
-            AppActorAtomicJsonPostedLedgerStore.deletePersistedFile(currentRuntime.configuration.applicationContext)
-            currentRuntime.configuration.applicationContext
-                .getSharedPreferences("com.appactor.android.pending_purchases", android.content.Context.MODE_PRIVATE)
-                .edit().clear().apply()
+            currentRuntime.receiptQueueStore.wipe()
+            currentRuntime.postedLedgerStore.wipe()
+            currentRuntime.paymentProcessor.wipePendingPurchases()
         } catch (throwable: Throwable) {
             // A reset waiting on this one must not report a wipe that did not happen.
             wipe.completeExceptionally(throwable)

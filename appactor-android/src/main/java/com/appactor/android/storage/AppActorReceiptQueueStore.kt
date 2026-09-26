@@ -132,6 +132,12 @@ internal interface AppActorReceiptQueueStore {
     fun consumeDeadLettered(): List<AppActorReceiptQueueItem>
     fun getRateLimitCooldownMillis(): Long?
     fun setRateLimitCooldownMillis(value: Long?)
+
+    /**
+     * Deletes the queue for good, for reset(): later writes through this instance are dropped, so
+     * an operation of the ended session still running can't bring its receipts back.
+     */
+    fun wipe()
 }
 
 internal class AppActorAtomicJsonReceiptQueueStore(
@@ -150,14 +156,6 @@ internal class AppActorAtomicJsonReceiptQueueStore(
             "restore" to 2,
             "purchase" to 3,
         )
-
-        fun deletePersistedFile(context: Context) {
-            val file = File(File(context.filesDir, "appactor"), "receipt_queue.json")
-            file.delete()
-            // Also purge the quarantined sidecar so a logout/reset fully wipes
-            // queued (paid) receipt data (android-7).
-            File(file.parentFile, file.name + CORRUPT_SIDECAR_SUFFIX).delete()
-        }
 
         private fun mergeSourceIntent(
             existing: AppActorReceiptQueueItem,
@@ -198,6 +196,7 @@ internal class AppActorAtomicJsonReceiptQueueStore(
     private val file: File = File(directory, "receipt_queue.json")
     private val corruptSidecarFile: File get() = File(file.parentFile, file.name + CORRUPT_SIDECAR_SUFFIX)
     private var items: MutableMap<String, AppActorReceiptQueueItem>? = null
+    private var wiped = false
     private var rateLimitCooldownMillis: Long? = null
     private var cooldownLoaded: Boolean = false
 
@@ -377,6 +376,18 @@ internal class AppActorAtomicJsonReceiptQueueStore(
         consumable
     }
 
+    override fun wipe() {
+        lock.withLock {
+            wiped = true
+            items = linkedMapOf()
+            rateLimitCooldownMillis = null
+            cooldownLoaded = true
+            file.delete()
+            // The quarantined sidecar too, so no queued (paid) receipt data is left (android-7).
+            corruptSidecarFile.delete()
+        }
+    }
+
     override fun getRateLimitCooldownMillis(): Long? = lock.withLock {
         if (!cooldownLoaded) {
             loadState()
@@ -482,6 +493,7 @@ internal class AppActorAtomicJsonReceiptQueueStore(
         map: Map<String, AppActorReceiptQueueItem>,
         cooldownMillis: Long?,
     ): Boolean {
+        if (wiped) return true
         val state = PersistedQueueState(
             items = map.values.toList(),
             rateLimitCooldownMillis = cooldownMillis,

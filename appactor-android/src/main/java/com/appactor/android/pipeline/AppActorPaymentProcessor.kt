@@ -544,6 +544,11 @@ internal class AppActorPaymentProcessor(
         return result
     }
 
+    /** For reset(): see [AppActorPendingPurchaseRegistry.wipe]. */
+    fun wipePendingPurchases() {
+        pendingPurchaseRegistry.wipe()
+    }
+
     suspend fun drainReadyQueue(limit: Int = 20): AppActorCustomerInfo? {
         val result = pipelineMutex.withLock {
             receiptQueueDrainer.drainReadyQueueAssumingLocked(limit)

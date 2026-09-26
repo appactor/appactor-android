@@ -49,11 +49,26 @@ internal class AppActorPendingPurchaseRegistry(
         pendingPurchaseTokens[purchaseToken] = entry
     }
 
+    // Guards persist() against wipe(), under the prefs' own monitor.
+    private var wiped = false
+
     fun persist() {
-        pendingPrefs.edit().apply {
-            clear()
-            pendingPurchaseTokens.forEach { (token, entry) -> putString(token, entry) }
-            apply()
+        synchronized(pendingPrefs) {
+            if (wiped) return
+            pendingPrefs.edit().apply {
+                clear()
+                pendingPurchaseTokens.forEach { (token, entry) -> putString(token, entry) }
+                apply()
+            }
+        }
+    }
+
+    /** Deletes every pending entry for good, for reset(): later persists are dropped. */
+    fun wipe() {
+        synchronized(pendingPrefs) {
+            wiped = true
+            pendingPurchaseTokens.clear()
+            pendingPrefs.edit().clear().apply()
         }
     }
 

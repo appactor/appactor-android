@@ -19,6 +19,7 @@ internal class AppActorCacheDiskStore(
 
     private val lock = ReentrantLock()
     private val directory: File = directory
+    private var wiped = false
 
     fun load(resource: AppActorCacheResource): AppActorCacheEntry? = lock.withLock {
         val file = fileFor(resource)
@@ -42,6 +43,7 @@ internal class AppActorCacheDiskStore(
         entry: AppActorCacheEntry,
         resource: AppActorCacheResource,
     ) = lock.withLock {
+        if (wiped) return@withLock
         ensureDirectory()
         val encoded = runCatching {
             AppActorBackendJson.instance.encodeToString(entry)
@@ -89,7 +91,12 @@ internal class AppActorCacheDiskStore(
             .forEach { file -> file.delete() }
     }
 
-    fun clearAll() = lock.withLock {
+    /**
+     * Deletes the whole cache for good, for reset(): later saves through this instance are
+     * dropped, so a fetch of the ended session still running can't write its user's data back.
+     */
+    fun wipe() = lock.withLock {
+        wiped = true
         directory.deleteRecursively()
     }
 

@@ -96,7 +96,8 @@ internal class AppActorETagManager(
         diskStore.clearPrefix(prefix)
     }
 
-    fun clearAll() {
-        diskStore.clearAll()
+    /** See [AppActorCacheDiskStore.wipe]. */
+    fun wipe() {
+        diskStore.wipe()
     }
 }
