@@ -532,9 +532,10 @@ public object AppActor {
             currentRuntime.paymentProcessor.beginIdentityTransition()
             val info = try {
                 currentRuntime.paymentProcessor.drainAll()
-                // As on iOS, the outgoing user's writes must not block the switch.
+                // As on iOS, the outgoing user's writes must not block the switch, nor must a
+                // flush of them already running.
                 flushAttributesBestEffort("before the identity change") {
-                    currentRuntime.attributesManager.flushPending(currentAppUserId)
+                    currentRuntime.attributesManager.flushPending(currentAppUserId, waitForRunningFlush = false)
                 }
                 if (currentAppUserId != newAppUserId) {
                     currentRuntime.customerManager.clearCache(currentAppUserId)
@@ -596,9 +597,10 @@ public object AppActor {
             currentRuntime.paymentProcessor.beginIdentityTransition()
             val callbacks = try {
                 currentRuntime.paymentProcessor.drainAll()
-                // As on iOS, the outgoing user's writes must not block the switch.
+                // As on iOS, the outgoing user's writes must not block the switch, nor must a
+                // flush of them already running.
                 flushAttributesBestEffort("before the identity change") {
-                    currentRuntime.attributesManager.flushPending(currentAppUserId)
+                    currentRuntime.attributesManager.flushPending(currentAppUserId, waitForRunningFlush = false)
                 }
                 currentRuntime.customerManager.clearCache(currentAppUserId)
                 currentRuntime.remoteConfigManager.clearCache(currentAppUserId)

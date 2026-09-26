@@ -27,10 +27,11 @@ import com.appactor.android.models.AppActorPackageType
 import com.appactor.android.models.AppActorProductType
 import com.appactor.android.models.AppActorStore
 import com.appactor.android.models.appActorStoreLookupProductId
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -519,18 +520,7 @@ internal class AppActorOfferingsManager(
         request: CompletableDeferred<AppActorOfferings>,
         generation: Long,
     ) {
-        backgroundScope.launch {
-            try {
-                val result = fetchOfferings(false, generation)
-                request.complete(result)
-            } catch (throwable: Throwable) {
-                request.completeExceptionally(throwable)
-            } finally {
-                stateMutex.withLock {
-                    if (inFlight === request) inFlight = null
-                }
-            }
-        }.completeWhenCancelledBeforeStart(request)
+        launchRequest(request) { fetchOfferings(false, generation) }
     }
 
     private fun launchBootstrapEnrichment(
@@ -538,35 +528,40 @@ internal class AppActorOfferingsManager(
         seed: BootstrapSeed,
         generation: Long,
     ) {
-        backgroundScope.launch {
-            try {
-                val offerings = enrichAndCache(
-                    dto = seed.dto,
-                    cachedAtMillis = seed.cachedAtMillis,
-                    generation = generation,
-                    source = seed.source,
-                    verification = seed.verification,
-                )
-                request.complete(offerings)
-            } catch (throwable: Throwable) {
-                request.completeExceptionally(throwable)
-            } finally {
-                stateMutex.withLock {
-                    if (inFlight === request) {
-                        inFlight = null
-                    }
-                }
-            }
-        }.completeWhenCancelledBeforeStart(request)
+        launchRequest(request) {
+            enrichAndCache(
+                dto = seed.dto,
+                cachedAtMillis = seed.cachedAtMillis,
+                generation = generation,
+                source = seed.source,
+                verification = seed.verification,
+            )
+        }
     }
 
     /**
-     * A launch cancelled before it starts (reset() cancels the runtime scope) never runs its body,
-     * so it would leave [request] pending and every caller awaiting it waiting forever.
+     * Runs [block] in the background, completes [request] with its outcome and clears it from
+     * inFlight. Started ATOMIC so this happens even when reset() cancelled the scope before the
+     * launch began; otherwise every caller awaiting [request] would wait forever.
      */
-    private fun Job.completeWhenCancelledBeforeStart(request: CompletableDeferred<AppActorOfferings>) {
-        invokeOnCompletion { cause ->
-            if (cause != null) request.completeExceptionally(cause)
+    private fun launchRequest(
+        request: CompletableDeferred<AppActorOfferings>,
+        block: suspend () -> AppActorOfferings,
+    ) {
+        backgroundScope.launch(start = CoroutineStart.ATOMIC) {
+            try {
+                request.complete(block())
+            } catch (throwable: Throwable) {
+                // The callers awaiting the request were not cancelled themselves; a
+                // CancellationException would end them silently instead of failing them.
+                request.completeExceptionally(
+                    if (throwable is CancellationException) AppActorError.NotConfigured else throwable
+                )
+            } finally {
+                stateMutex.withLock {
+                    if (inFlight === request) inFlight = null
+                }
+            }
         }
     }
 

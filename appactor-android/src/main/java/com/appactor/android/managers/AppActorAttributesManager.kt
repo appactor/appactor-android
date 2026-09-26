@@ -155,7 +155,9 @@ internal class AppActorAttributesManager(
             // Persist the fingerprint only once nothing is left to send, so a transient failure
             // re-sends. A context key the server rejected was dropped and would only fail again.
             if (flushPending(appUserId)) {
-                queueStore.saveProfileContextFingerprint(appUserId, fingerprint)
+                queueMutex.withLock {
+                    if (!isCleared) queueStore.saveProfileContextFingerprint(appUserId, fingerprint)
+                }
             }
         } catch (throwable: Throwable) {
             if (throwable is CancellationException) throw throwable
@@ -274,21 +276,42 @@ internal class AppActorAttributesManager(
      * logOut. The server rejects a whole PATCH for one bad key, so a rejected PATCH is split in
      * halves until the bad keys are isolated.
      *
+     * @param waitForRunningFlush `false` returns `false` at once when a flush of this user is
+     *   already running, instead of waiting behind it (a 429 backoff can take minutes). That flush
+     *   sends the queue, and whatever it misses stays queued.
      * @return `true` when nothing is left to send (everything was delivered or dropped), `false`
-     *   when a transient failure left mutations queued for a later retry. Throws on any other
-     *   permanent failure, such as an invalid API key.
+     *   when mutations stay queued for a later flush. Throws on any other permanent failure, such
+     *   as an invalid API key.
      */
-    suspend fun flushPending(appUserId: String): Boolean = flushMutex(appUserId).withLock {
-        val pending = queueMutex.withLock { queueStore.load(appUserId) } ?: return@withLock true
+    suspend fun flushPending(
+        appUserId: String,
+        waitForRunningFlush: Boolean = true,
+    ): Boolean {
+        val mutex = flushMutex(appUserId)
+        if (waitForRunningFlush) {
+            mutex.lock()
+        } else if (!mutex.tryLock()) {
+            return false
+        }
+        try {
+            return flushLocked(appUserId)
+        } finally {
+            mutex.unlock()
+        }
+    }
+
+    private suspend fun flushLocked(appUserId: String): Boolean {
+        // A manager from before a reset() must not send what the next session queued.
+        val pending = queueMutex.withLock { queueStore.load(appUserId).takeUnless { isCleared } } ?: return true
         if (pending.isEmpty()) {
             queueMutex.withLock { queueStore.save(appUserId, null) }
-            return@withLock true
+            return true
         }
 
         // What was delivered or dropped so far, removed from the queue in one write at the end.
         var flushed = AppActorQueuedAttributeMutation()
         var attributionDelivered = false
-        try {
+        return try {
             if (pending.attributes.isNotEmpty()) {
                 patchIsolatingRejections(appUserId, pending.attributes) { done ->
                     flushed = flushed.copy(attributes = flushed.attributes + done)
@@ -356,8 +379,9 @@ internal class AppActorAttributesManager(
                 return false
             }
         }
-        // The server also answers 409 to a replayed signing nonce: a retry of a request it already
-        // saw, by OkHttp or after a 5xx. A 409 is final only once a fresh request gets it too.
+        // The server also answers 409 to a replayed signing nonce, which OkHttp sends when it
+        // silently retries a request after a connection failure (audit D11). A 409 is final only
+        // once a fresh request, with a new nonce, gets it too.
         try {
             send()
             return true
@@ -498,6 +522,7 @@ internal class AppActorAttributesManager(
     ) {
         if (attributes.isEmpty()) return
         queueMutex.withLock {
+            if (isCleared) return@withLock
             val current = queueStore.load(appUserId) ?: return@withLock
             queueStore.save(
                 appUserId,

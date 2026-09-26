@@ -24,9 +24,13 @@ import com.appactor.android.models.AppActorProductType
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
@@ -985,6 +989,43 @@ class AppActorOfferingsManagerTests {
         val offerings = withTimeout(5_000L) { manager.getOfferings() }
 
         assertEquals("off_main_android", offerings.current?.id)
+    }
+
+    @Test
+    fun `a refresh launched after reset cancelled the scope still releases waiting callers`() = runBlocking {
+        val dto = fixtureOfferings()
+        val cacheStore = offeringsCacheStore("offerings-cancelled-scope")
+        cacheStore.save(
+            payload = AppActorBackendJson.instance.encodeToString(dto),
+            eTag = "\"etag_123\"",
+            verified = true,
+        )
+        val mockClient = mockk<AppActorBackendClient>(relaxed = true)
+        coEvery { mockClient.getOfferings(any()) } returns freshOfferingsResponse(dto)
+        val productQueries = AtomicInteger(0)
+        val mockStoreAdapter = mockk<AppActorStoreAdapter>(relaxed = true)
+        coEvery { mockStoreAdapter.queryProductDetails(any()) } coAnswers {
+            if (productQueries.getAndIncrement() == 0) throw IllegalStateException("Billing unavailable")
+            delay(1)
+            val requests = firstArg<List<AppActorStoreProductRequest>>()
+            requests.mapNotNull { request -> pricedProducts()[requestKey(request)] }
+        }
+        // reset() cancels the runtime scope, which is the manager's background scope.
+        val cancelledScope = CoroutineScope(Job().apply { cancel() })
+        val manager = AppActorOfferingsManager(
+            backendClient = mockClient,
+            cacheStore = cacheStore,
+            offlineProductCatalogStore = offlineProductCatalogStore("offerings-cancelled-scope"),
+            storeAdapter = mockStoreAdapter,
+            backgroundScope = cancelledScope,
+        )
+        runCatching { manager.getOfferings(fetchPolicy = AppActorOfferingsFetchPolicy.ReturnCachedThenRefresh) }
+
+        val waiting = runCatching { withTimeout(5_000L) { manager.getOfferings() } }
+
+        // The next caller either awaits the refresh and gets its error, or starts its own fetch once
+        // the refresh has finished. It must never hang (a timeout) or end as if itself cancelled.
+        assertFalse(waiting.exceptionOrNull() is CancellationException)
     }
 
     private fun freshOfferingsResponse(dto: AppActorOfferingsEnvelopeDTO): AppActorBackendHttpResponse<AppActorOfferingsEnvelopeDTO> {

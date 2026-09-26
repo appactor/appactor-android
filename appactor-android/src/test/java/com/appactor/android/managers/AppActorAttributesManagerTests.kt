@@ -29,6 +29,8 @@ import com.appactor.android.storage.AppActorQueuedAttributeMutation
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -499,6 +501,19 @@ class AppActorAttributesManagerTests {
     }
 
     @Test
+    fun `an empty number array reaches the PATCH with its type`() = runBlocking {
+        val backend = FakeAttributesBackendClient()
+        val manager = manager(backend, InMemoryAttributeQueueStore())
+
+        manager.setAttribute("user_a", "owned_level_ids", AppActorAttributeValue.numberArray(emptyList()))
+
+        assertEquals(
+            JsonObject(mapOf("value" to JsonArray(emptyList()), "valueType" to JsonPrimitive("number_array"))),
+            backend.patchRequests.single().second.attributes["owned_level_ids"],
+        )
+    }
+
+    @Test
     fun `an attribute flush failure that is not the payload keeps the queue and throws`() = runBlocking {
         val backend = FakeAttributesBackendClient(permanentMutationStatus = 401)
         val store = InMemoryAttributeQueueStore()
@@ -571,6 +586,22 @@ class AppActorAttributesManagerTests {
 
         assertNull(store.load("user_a"))
         assertNull(store.loadAttributionSnapshot("user_a"))
+    }
+
+    @Test
+    fun `a manager from before a reset sends nothing the next session queued`() = runBlocking {
+        val backend = FakeAttributesBackendClient(failMutations = true)
+        val store = InMemoryAttributeQueueStore()
+        val oldManager = manager(backend, store)
+        oldManager.clearQueue()
+        // The next session, configured with the same app user id, queues a write while offline.
+        manager(backend, store).setAttribute("user_a", "tier", AppActorAttributeValue.string("gold"))
+
+        backend.failMutations = false
+        oldManager.flushPending("user_a")
+
+        assertEquals(0, backend.patchRequests.size)
+        assertNotNull(store.load("user_a"))
     }
 
     @Test

@@ -172,9 +172,9 @@ class AppActorBackendContractTests {
         val payload = fixture("fixtures/backend/customer_null_product_id.json")
 
         // The customer envelope goes through its own serializer (a tree decoder)...
-        val info = AppActorBackendJson.instance.decodeFromString<AppActorCustomerEnvelopeDTO>(payload).toModel()
-        assertEquals("", info.subscriptions["premium"]?.productIdentifier)
-        assertEquals("", info.nonSubscriptions["coins"]?.single()?.productIdentifier)
+        val envelope = AppActorBackendJson.instance.decodeFromString<AppActorCustomerEnvelopeDTO>(payload)
+        assertNull(envelope.customer.subscriptions["premium"]?.productId)
+        assertNull(envelope.customer.nonSubscriptions["coins"]?.single()?.productId)
 
         // ...while a receipt response embeds the customer through the generated (streaming) one.
         val customer = AppActorBackendJson.instance.parseToJsonElement(payload).jsonObject.getValue("customer")
