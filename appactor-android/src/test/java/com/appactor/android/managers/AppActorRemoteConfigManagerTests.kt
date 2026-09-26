@@ -421,6 +421,30 @@ class AppActorRemoteConfigManagerTests {
     }
 
     @Test
+    fun `a public-only app starting offline gets its stored configs and keeps them`() = runBlocking {
+        val cacheStore = createCacheStore("remote-config-public-only-offline")
+        val onlineClient = mockk<AppActorBackendClient>(relaxed = true)
+        coEvery { onlineClient.getRemoteConfigs(null, any(), any(), any()) } returns AppActorBackendHttpResponse(
+            body = sampleEnvelope("audience" to JsonPrimitive("public")),
+            statusCode = 200,
+            requestId = "req_public",
+            eTag = "\"etag_public\"",
+            signatureVerified = true,
+            remoteConfigRequiresUserContext = false,
+        )
+        createManager(backendClient = onlineClient, cacheStore = cacheStore)
+            .getRemoteConfigs(appUserId = "user_android_123")
+
+        val offlineClient = mockk<AppActorBackendClient>(relaxed = true)
+        coEvery { offlineClient.getRemoteConfigs(any(), any(), any(), any()) } throws IOException("offline")
+        repeat(2) {
+            val restarted = createManager(backendClient = offlineClient, cacheStore = cacheStore)
+            val configs = restarted.getRemoteConfigs(appUserId = "user_android_123")
+            assertEquals("public", configs["audience"]?.stringValue)
+        }
+    }
+
+    @Test
     fun `remote config user refetch failure does not expose public probe cache`() = runBlocking {
         val mockClient = mockk<AppActorBackendClient>(relaxed = true)
         coEvery { mockClient.getRemoteConfigs(null, any(), any(), any()) } returns AppActorBackendHttpResponse(
