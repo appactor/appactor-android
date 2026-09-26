@@ -16,6 +16,7 @@ import com.appactor.android.backend.mappers.toResult
 import com.appactor.android.models.AppActorPackageType
 import com.appactor.android.models.AppActorProductType
 import com.appactor.android.models.AppActorStore
+import com.appactor.android.models.AppActorSubscriptionStatus
 import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -268,9 +269,19 @@ class AppActorBackendContractTests {
         ).toModel("premium")
         assertFalse(cancelledButActive.willRenew)
 
+        // The backend's grace status is "grace".
+        val inGracePeriod = AppActorEntitlementDTO(
+            isActive = true,
+            status = "grace",
+            productId = "com.appactor.pro.monthly",
+            unsubscribeDetectedAt = null,
+        ).toModel("premium")
+        assertEquals(AppActorSubscriptionStatus.GracePeriod, inGracePeriod.subscriptionStatus)
+        assertTrue(inGracePeriod.willRenew)
+
         val cancelledInGracePeriod = AppActorEntitlementDTO(
             isActive = true,
-            status = "grace_period",
+            status = "grace",
             productId = "com.appactor.pro.monthly",
             unsubscribeDetectedAt = "2026-03-14T12:00:00.000Z",
         ).toModel("premium")
