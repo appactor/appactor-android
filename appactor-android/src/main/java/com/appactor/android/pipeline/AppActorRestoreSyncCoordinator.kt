@@ -142,14 +142,19 @@ internal class AppActorRestoreSyncCoordinator(
         // The launch sweep takes only purchases nothing has handled yet, as iOS sweeps only
         // unfinished transactions. Posting a finished purchase for a fresh anonymous user (after
         // a logout, a reset or a reinstall) has the backend merge that user into the buyer and
-        // undo the logout. A queued purchase is posted by the drain below, for its buyer.
-        val skippedPurchaseTokens = if (unfinishedOnly) {
-            excludedPurchaseTokens + queueStore.snapshot()
-                .filter { it.phase != AppActorReceiptQueuePhase.DeadLettered }
-                .map { it.purchaseToken }
+        // undo the logout. Queued purchases are posted by the drain below (and dead letters by
+        // the launch retry) for their buyer. An unknown-type dead letter revives only when its
+        // purchase is seen again, so it goes back through the queue, which keeps its buyer.
+        val (revivableItems, queuedItems) = if (unfinishedOnly) {
+            queueStore.snapshot().partition { item ->
+                item.phase == AppActorReceiptQueuePhase.DeadLettered &&
+                    item.productType == AppActorProductType.Unknown.wireValue
+            }
         } else {
-            excludedPurchaseTokens
+            emptyList<AppActorReceiptQueueItem>() to emptyList()
         }
+        val skippedPurchaseTokens = excludedPurchaseTokens + queuedItems.map { it.purchaseToken }
+        val revivablePurchaseTokens = revivableItems.mapTo(HashSet()) { it.purchaseToken }
 
         storeAdapter.queryActivePurchases().forEach { purchase ->
             if (purchase.purchaseToken in skippedPurchaseTokens || (unfinishedOnly && purchase.isAcknowledged)) {
@@ -180,7 +185,9 @@ internal class AppActorRestoreSyncCoordinator(
                 )
                 return@forEach
             }
-            if (normalized.productType == AppActorProductType.Unknown) {
+            if (normalized.productType == AppActorProductType.Unknown ||
+                normalized.purchaseToken in revivablePurchaseTokens
+            ) {
                 when (val outcome = enqueueAndProcess(
                     normalized,
                     productEntitlements,
@@ -609,8 +616,11 @@ internal class AppActorRestoreSyncCoordinator(
         if (finalAppUserId != requestedAppUserId) {
             customerManager.clearCache(requestedAppUserId)
             // A reset or logout while the request was in flight must not be undone by its answer.
-            if (identityStore.currentAppUserId == requestedAppUserId) {
-                identityStore.setAppUserId(finalAppUserId)
+            // reset() clears the identity under the same lock.
+            synchronized(identityStore) {
+                if (identityStore.currentAppUserId == requestedAppUserId) {
+                    identityStore.setAppUserId(finalAppUserId)
+                }
             }
         }
         return finalAppUserId

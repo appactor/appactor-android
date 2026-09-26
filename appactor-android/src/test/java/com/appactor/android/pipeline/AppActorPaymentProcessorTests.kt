@@ -1075,11 +1075,13 @@ class AppActorPaymentProcessorTests {
             ),
             identityStore = createMockIdentityStore(initialAppUserId = "appactor-anon-next"),
         )
-        dependencies.queueStore.upsert(purchaseFlowReceipt(token = "token_signed_out", appUserId = "user_signed_out"))
+        dependencies.queueStore.upsert(purchaseFlowReceipt(token = "token_signed_out_1", appUserId = "user_signed_out"))
+        dependencies.queueStore.upsert(purchaseFlowReceipt(token = "token_signed_out_2", appUserId = "user_signed_out"))
 
-        val drained = dependencies.processor.drainAll()
+        // One item per batch: a batch that reports nothing must not end the drain.
+        val drained = dependencies.processor.drainAll(limit = 1)
 
-        assertEquals("user_signed_out", dependencies.postedReceipts.single().appUserId)
+        assertEquals(listOf("user_signed_out", "user_signed_out"), dependencies.postedReceipts.map { it.appUserId })
         assertNull(drained)
         assertEquals("appactor-anon-next", dependencies.identityStore.currentAppUserId)
     }
@@ -3706,7 +3708,9 @@ class AppActorPaymentProcessorTests {
             orderId = "GPA.$token",
             basePlanId = "monthly001",
             idempotencyKey = "google:com.appactor.pro.monthly:monthly001:$token",
+            clientPurchaseAttemptStartedAt = AppActorBridgeReceiptEvent.millisToIso8601(now),
             clientDeliverySource = "purchase_flow",
+            clientPurchaseAttemptId = "attempt-$token",
             createdAtMillis = now,
             lastUpdatedAtMillis = now,
         )

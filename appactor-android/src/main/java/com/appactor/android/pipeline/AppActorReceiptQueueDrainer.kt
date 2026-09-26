@@ -62,13 +62,35 @@ internal class AppActorReceiptQueueDrainer(
     private val scheduleNextRetryWake: () -> Unit,
 ) {
 
-    suspend fun drainReadyQueueAssumingLocked(limit: Int = 20): AppActorCustomerInfo? {
+    suspend fun drainReadyQueueAssumingLocked(limit: Int = 20): AppActorCustomerInfo? =
+        drainReadyBatchAssumingLocked(limit).customerInfo
+
+    suspend fun drainAllAssumingLocked(
+        limit: Int = 20,
+    ): AppActorCustomerInfo? {
+        var latestCustomer: AppActorCustomerInfo? = null
+        while (true) {
+            val batch = drainReadyBatchAssumingLocked(limit)
+            batch.customerInfo?.let { latestCustomer = it }
+            if (!batch.finishedAny || !hasReadyWork()) {
+                break
+            }
+        }
+        return latestCustomer
+    }
+
+    // A batch that finished only other users' purchases reports no customer info, yet more of
+    // theirs may still be ready.
+    private class DrainedBatch(val finishedAny: Boolean = false, val customerInfo: AppActorCustomerInfo? = null)
+
+    private suspend fun drainReadyBatchAssumingLocked(limit: Int): DrainedBatch {
         val now = dateProviderMillis()
-        if (activeRateLimitCooldown(now) != null) return null
+        if (activeRateLimitCooldown(now) != null) return DrainedBatch()
         val claimed = queueStore.claimReady(limit = limit, nowMillis = now)
-        if (claimed.isEmpty()) return null
+        if (claimed.isEmpty()) return DrainedBatch()
 
         val productEntitlements = ensureProductEntitlements()
+        var finishedAny = false
         var latestCustomer: AppActorCustomerInfo? = null
         claimed.forEach { item ->
             val customerInfo = when (val outcome = processClaimedItem(item, productEntitlements)) {
@@ -77,6 +99,7 @@ internal class AppActorReceiptQueueDrainer(
                 is ProcessingOutcome.Queued,
                 is ProcessingOutcome.PermanentFailure -> return@forEach
             }
+            finishedAny = true
             // The queue also holds purchases other users left behind (a logout or an account
             // switch); only the current user's customer info goes back to the caller.
             if (customerInfo.appUserId == identityStore.currentAppUserId) {
@@ -88,23 +111,7 @@ internal class AppActorReceiptQueueDrainer(
                 identityStore.currentAppUserId == item.appUserId,
             )
         }
-        return latestCustomer
-    }
-
-    suspend fun drainAllAssumingLocked(
-        limit: Int = 20,
-    ): AppActorCustomerInfo? {
-        var latestCustomer: AppActorCustomerInfo? = null
-        while (true) {
-            val drained = drainReadyQueueAssumingLocked(limit)
-            if (drained != null) {
-                latestCustomer = drained
-            }
-            if (drained == null || !hasReadyWork()) {
-                break
-            }
-        }
-        return latestCustomer
+        return DrainedBatch(finishedAny, latestCustomer)
     }
 
     suspend fun reviveRecoverableDeadLetter(

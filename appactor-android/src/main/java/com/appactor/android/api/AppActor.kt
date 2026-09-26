@@ -67,10 +67,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -438,12 +439,12 @@ public object AppActor {
     public suspend fun reset(): Unit {
         val currentRuntime = transitionMutex.withLock {
             bumpIdentityEpochLocked()
-            isResetting = true
             val currentRuntime = runtime ?: run {
+                // An earlier reset may still be wiping; it clears isResetting itself.
                 preconfiguredFallbackOfferingsDTO = null
-                isResetting = false
                 return@withLock null
             }
+            isResetting = true
             currentRuntime.lifecycleCallbacks?.let { callbacks ->
                 (currentRuntime.configuration.applicationContext as? Application)
                     ?.unregisterActivityLifecycleCallbacks(callbacks)
@@ -453,45 +454,41 @@ public object AppActor {
             currentRuntime
         } ?: return
 
-        try {
-            val currentAppUserId = currentRuntime.identityStore.currentAppUserId
-            currentRuntime.paymentProcessor.onDeferredPurchaseResolved = null
-            currentRuntime.scope.cancel()
-            replaceCallbackScope()
-            currentRuntime.storeAdapter.shutdown()
-            currentRuntime.scope.coroutineContext[Job]?.join()
-            currentRuntime.remoteConfigManager.clearCache(currentAppUserId)
-            currentRuntime.experimentManager.clearCache(currentAppUserId)
-            currentRuntime.attributesManager.clearQueue()
-            currentRuntime.identityStore.clearIdentity()
-            currentRuntime.eTagManager.clearAll()
-            installReferrerEnabled.set(false)
-            synchronized(this) {
-                preconfiguredFallbackOfferingsDTO = null
-            }
-            AppActorAtomicJsonReceiptQueueStore.deletePersistedFile(currentRuntime.configuration.applicationContext)
-            AppActorAtomicJsonPostedLedgerStore.deletePersistedFile(currentRuntime.configuration.applicationContext)
-            currentRuntime.configuration.applicationContext
-                .getSharedPreferences("com.appactor.android.pending_purchases", android.content.Context.MODE_PRIVATE)
-                .edit().clear().apply()
-        } finally {
-            transitionMutex.withLock {
-                if (runtime == null) {
-                    isResetting = false
+        // The wipe must finish even when the caller is cancelled, which includes an
+        // AppActorBridge.reset() running in the callbackScope cancelled below.
+        withContext(NonCancellable) {
+            try {
+                val currentAppUserId = currentRuntime.identityStore.currentAppUserId
+                currentRuntime.paymentProcessor.onDeferredPurchaseResolved = null
+                currentRuntime.scope.cancel()
+                callbackScope.cancel()
+                callbackScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+                currentRuntime.storeAdapter.shutdown()
+                currentRuntime.scope.coroutineContext[Job]?.join()
+                currentRuntime.remoteConfigManager.clearCache(currentAppUserId)
+                currentRuntime.experimentManager.clearCache(currentAppUserId)
+                currentRuntime.attributesManager.clearQueue()
+                // Serialized with canonical-id adoption, which checks then writes the identity.
+                synchronized(currentRuntime.identityStore) {
+                    currentRuntime.identityStore.clearIdentity()
+                }
+                currentRuntime.eTagManager.clearAll()
+                installReferrerEnabled.set(false)
+                synchronized(this@AppActor) {
+                    preconfiguredFallbackOfferingsDTO = null
+                }
+                AppActorAtomicJsonReceiptQueueStore.deletePersistedFile(currentRuntime.configuration.applicationContext)
+                AppActorAtomicJsonPostedLedgerStore.deletePersistedFile(currentRuntime.configuration.applicationContext)
+                currentRuntime.configuration.applicationContext
+                    .getSharedPreferences("com.appactor.android.pending_purchases", android.content.Context.MODE_PRIVATE)
+                    .edit().clear().apply()
+            } finally {
+                transitionMutex.withLock {
+                    if (runtime == null) {
+                        isResetting = false
+                    }
                 }
             }
-        }
-    }
-
-    // Drops the old session's in-flight callback-API operations, except the caller:
-    // AppActorBridge.reset() runs in this scope, and cancelling it would abandon the wipe that
-    // follows and its completion callback.
-    private suspend fun replaceCallbackScope() {
-        val caller = currentCoroutineContext()[Job]
-        val oldScopeJob = callbackScope.coroutineContext[Job]
-        callbackScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-        oldScopeJob?.children?.forEach { operation ->
-            if (operation !== caller) operation.cancel()
         }
     }
 
@@ -1427,8 +1424,8 @@ public object AppActor {
         }
     }
 
-    // A write goes to the user who was current when it was called. Unlike a read it is never
-    // re-run after an identity change, which would copy that user's data onto the next one.
+    // A write goes to the user current when it starts. Unlike a read it is never re-run after an
+    // identity change, which would copy that user's data onto the next one.
     private suspend fun <T> executeWrite(operation: suspend (AppActorOperationSnapshot) -> T): T =
         operation(captureOperationSnapshot(resolveAppUserId = true))
 
