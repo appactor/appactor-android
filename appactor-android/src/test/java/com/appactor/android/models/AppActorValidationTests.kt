@@ -24,6 +24,7 @@ class AppActorValidationTests {
         listOf(
             "",
             "   ",
+            "\uFEFFnull",
             "a".repeat(256),
             "null",
             "NULL",

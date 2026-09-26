@@ -72,8 +72,9 @@ internal class GooglePlayStoreAdapter(
         }
     }
 
-    // A purchase request names the offer the package shows (or direct resolution picked), so it
-    // launches exactly that offer: a cache miss re-resolves it without offer auto-selection.
+    // A purchase request names the offer the package shows (or direct resolution picked). A cache
+    // miss re-resolves it without offer auto-selection; an offer Play no longer returns still falls
+    // back to its base plan.
     override suspend fun launchPurchase(
         activity: Activity,
         request: AppActorStoreProductRequest,

@@ -214,6 +214,22 @@ class AppActorReceiptQueueStoreTests {
     }
 
     @Test
+    fun `queue store purges an older version's dead letter by its last update on load`() {
+        val directory = tempDirectory("queue-legacy-dead-letter-retention")
+        val now = System.currentTimeMillis()
+        val legacyDeadLetter = queueItem(
+            createdAtMillis = now,
+            phase = AppActorReceiptQueuePhase.DeadLettered,
+            purchaseToken = "token_legacy",
+        ).copy(lastUpdatedAtMillis = now - AppActorAtomicJsonReceiptQueueStore.DEAD_LETTER_RETENTION_MILLIS - 1_000)
+        AppActorAtomicJsonReceiptQueueStore(context, directory).upsert(legacyDeadLetter)
+
+        val reloaded = AppActorAtomicJsonReceiptQueueStore(context, directory)
+
+        assertEquals(0, reloaded.deadLetteredCount())
+    }
+
+    @Test
     fun `consumeDeadLettered removes resolved items and preserves unknown-type items`() {
         val store = AppActorAtomicJsonReceiptQueueStore(context, tempDirectory("queue-consume-dead"))
         val resolvedDead = queueItem(

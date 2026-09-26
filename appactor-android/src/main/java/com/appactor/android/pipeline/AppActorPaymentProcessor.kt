@@ -891,7 +891,7 @@ internal class AppActorPaymentProcessor(
             isAutoRenewing = purchase.isAutoRenewing,
             obfuscatedAccountId = purchase.obfuscatedAccountId,
             sourceIntent = sourceIntent,
-            idempotencyKey = "google:${purchase.productId}:${purchase.basePlanId.orEmpty()}:${purchase.purchaseToken}",
+            idempotencyKey = googleReceiptIdempotencyKey(purchase.productId, purchase.basePlanId, purchase.purchaseToken),
             rawPurchaseData = purchase.rawPurchaseData,
             purchaseSignature = purchase.purchaseSignature,
             countryCode = storeAdapter.currentStorefront()?.countryCode,
@@ -1116,10 +1116,26 @@ internal fun AppActorReceiptQueueItem.toStorePurchase(): AppActorStorePurchase {
 internal fun AppActorStorePurchase.purchaseDateString(): String =
     AppActorIso8601.format(Date(purchaseTimeMillis))
 
+private fun googleReceiptIdempotencyKey(productId: String, basePlanId: String?, purchaseToken: String): String =
+    "google:$productId:${basePlanId.orEmpty()}:$purchaseToken"
+
 // Older versions labelled a subscription seen outside the purchase flow with a base plan guessed
 // from the catalog, which the backend rejects when it is wrong. The backend accepts a subscription
-// without one and reads it from Google, so a revived subscription is posted without it.
+// without one and reads it from Google, so a revived subscription is posted without it, under the
+// key a base-plan-less sighting of the same purchase gets.
 private fun AppActorReceiptQueueItem.withoutGuessedSubscriptionPlan(): AppActorReceiptQueueItem {
-    if (productType != AppActorProductType.Subscription.wireValue) return this
-    return copy(basePlanId = null, offerId = null, priceAmountMicros = null, currencyCode = null)
+    if (productType != AppActorProductType.Subscription.wireValue || basePlanId == null) return this
+    return copy(
+        key = AppActorReceiptQueueItem.makeKey(
+            purchaseToken = purchaseToken,
+            productId = productId,
+            orderId = orderId,
+            purchaseTime = purchaseTime,
+        ),
+        idempotencyKey = googleReceiptIdempotencyKey(productId, basePlanId = null, purchaseToken = purchaseToken),
+        basePlanId = null,
+        offerId = null,
+        priceAmountMicros = null,
+        currencyCode = null,
+    )
 }

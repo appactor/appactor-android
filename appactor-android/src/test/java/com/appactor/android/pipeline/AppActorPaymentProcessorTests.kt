@@ -403,7 +403,8 @@ class AppActorPaymentProcessorTests {
         assertEquals(2, dependencies.postedReceipts.size)
         assertEquals(listOf("token_123"), dependencies.acknowledgedTokens)
         assertTrue(dependencies.queueStore.snapshot().isEmpty())
-        assertTrue(dependencies.ledgerStore.isPosted("google:com.appactor.pro.monthly:monthly001:token_123"))
+        // A revived subscription is posted, and so recorded, without its base plan.
+        assertTrue(dependencies.ledgerStore.isPosted("google:com.appactor.pro.monthly:token_123"))
     }
 
     @Test
