@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased
+## 2.4.0
 
-Fixes from the 2026-09-26 SDK audit (#14, #16 to #21 and #23). Audit ids in parentheses. The version is set when the release is cut.
+Fixes from the 2026-09-26 SDK audit (#14, #16 to #21 and #23). Audit ids in parentheses.
 
 Behaviour changes apps can see:
 
