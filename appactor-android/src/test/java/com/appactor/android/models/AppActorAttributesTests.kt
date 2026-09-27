@@ -31,6 +31,15 @@ class AppActorAttributesTests {
     }
 
     @Test
+    fun `a date attribute accepts any Date subclass`() {
+        // java.sql.Date#toInstant always throws, so the formatter must not go through it.
+        assertEquals(
+            JsonPrimitive("1970-01-01T00:00:00.000Z"),
+            (AppActorAttributeValue.date(java.sql.Date(0)).toJsonElement() as JsonObject)["value"],
+        )
+    }
+
+    @Test
     fun `attribute PATCH values state the type of number and boolean arrays`() {
         // The backend would infer string_array for a bare [] and fix the key's definition to it.
         assertEquals(
