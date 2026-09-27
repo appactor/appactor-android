@@ -1,13 +1,28 @@
 package com.appactor.android.backend.dto
 
+import com.appactor.android.backend.client.AppActorBackendJson
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
 
 @Serializable
 internal data class AppActorOfferingsEnvelopeDTO(
     val data: AppActorOfferingsPayloadDTO,
     override val requestId: String? = null,
 ) : AppActorRequestIdCarrier
+
+/**
+ * Reads a fallback offerings file: a saved GET /v1/payment/offerings body or its data object, the
+ * two shapes iOS takes. As on iOS, one without an offerings array is refused, so a file holding
+ * some other JSON object isn't taken for an app without offerings.
+ */
+internal fun decodeFallbackOfferings(json: String): AppActorOfferingsEnvelopeDTO {
+    val root = AppActorBackendJson.instance.parseToJsonElement(json).jsonObject
+    val envelope = if ("data" in root) root else JsonObject(mapOf("data" to root))
+    require("offerings" in envelope.getValue("data").jsonObject) { "Fallback offerings JSON has no offerings." }
+    return AppActorBackendJson.instance.decodeFromJsonElement(AppActorOfferingsEnvelopeDTO.serializer(), envelope)
+}
 
 @Serializable
 internal data class AppActorOfferingsPayloadDTO(

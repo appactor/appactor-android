@@ -94,7 +94,7 @@ class AppActorBridgeTests {
         val callbackOnMain = AtomicReference<Boolean?>()
 
         AppActorBridge.setFallbackOfferings(
-            jsonData = """{"data":{}}""".toByteArray(),
+            jsonData = """{"data":{"offerings":[]}}""".toByteArray(),
             onSuccess = {
                 callbackOnMain.set(Looper.myLooper() == Looper.getMainLooper())
                 latch.countDown()

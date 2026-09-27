@@ -14,6 +14,7 @@ import com.appactor.android.storage.AppActorAtomicJsonReceiptQueueStore
 import com.appactor.android.storage.AppActorReceiptQueueItem
 import com.appactor.android.storage.AppActorReceiptQueuePhase
 import com.appactor.android.storage.AppActorReceiptQueueStore
+import com.appactor.android.storage.isCurrentUsersPurchase
 import kotlinx.coroutines.CancellationException
 
 /**
@@ -54,11 +55,13 @@ internal class AppActorReceiptQueueDrainer(
     private val isPurchasePosted: (AppActorReceiptQueueItem) -> Boolean,
     private val markPurchasePosted: (AppActorReceiptQueueItem) -> Unit,
     private val finalizePostedPurchase: suspend (AppActorReceiptQueueItem) -> Boolean,
-    private val resolveDeferredPurchaseCallbackIfNeeded: (
+    // Returns the current user's customer info when it fetched it.
+    private val resolveDeferredPurchaseCallbackIfNeeded: suspend (
         purchaseToken: String,
+        receiptAppUserId: String,
         customerInfo: AppActorCustomerInfo,
         emitCallback: Boolean,
-    ) -> Unit,
+    ) -> AppActorCustomerInfo?,
     private val scheduleNextRetryWake: () -> Unit,
 ) {
 
@@ -102,9 +105,10 @@ internal class AppActorReceiptQueueDrainer(
             }
             resolveDeferredPurchaseCallbackIfNeeded(
                 item.purchaseToken,
+                item.appUserId,
                 customerInfo,
-                identityStore.currentAppUserId == item.appUserId,
-            )
+                identityStore.isCurrentUsersPurchase(item.appUserId),
+            )?.let { latestCustomer = it }
         }
         return DrainedBatch(finishedAny, latestCustomer)
     }

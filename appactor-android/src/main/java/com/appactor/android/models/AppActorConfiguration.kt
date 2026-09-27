@@ -4,18 +4,21 @@ import android.content.Context
 
 internal class AppActorConfiguration(
     context: Context,
-    val apiKey: String,
+    apiKey: String,
     appUserId: String? = null,
     val baseUrl: String = DEFAULT_BASE_URL,
     val headerMode: HeaderMode = HeaderMode.Bearer,
     val environment: AppActorEnvironment = AppActorEnvironment.Production,
     val options: Options = Options(),
 ) {
+    // Trimmed as the backend trims the key it authenticates and signs responses with: a padded
+    // key would log in but fail every salt-signed response, offerings and remote configs included.
+    val apiKey: String = apiKey.backendTrim()
     val appUserId: String? = appUserId?.takeIf { it.trim().isNotEmpty() }
 
     init {
         validateConfiguration(
-            apiKey = apiKey,
+            apiKey = this.apiKey,
             appUserId = this.appUserId,
             baseUrl = baseUrl,
         )

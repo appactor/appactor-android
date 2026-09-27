@@ -7,6 +7,7 @@ import com.appactor.android.backend.client.AppActorBackendJson
 import com.appactor.android.backend.dto.AppActorGoogleReceiptRequestDTO
 import com.appactor.android.billing.AppActorStoreProduct
 import com.appactor.android.models.AppActorConfiguration
+import com.appactor.android.models.AppActorError
 import com.appactor.android.models.AppActorProductType
 import com.appactor.android.models.AppActorReceiptPipelineEvent
 import com.appactor.android.models.AppActorStore
@@ -15,6 +16,7 @@ import com.appactor.android.models.AppActorStorefront
 import com.appactor.android.models.appActorPublicReceiptId
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.json.jsonObject
 import okhttp3.mockwebserver.MockResponse
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -382,6 +384,29 @@ class AppActorStartupTests {
             backend.configure("user_fallback_b")
 
             assertEquals("off_main_android", AppActor.offerings().current?.id)
+        }
+    }
+
+    @Test
+    fun `a fallback file holding only the data object is served`() = runBlocking {
+        // The endpoint body's data object, the shape iOS took first: one file serves both platforms.
+        val dataObject = AppActorBackendJson.instance.parseToJsonElement(startupOfferingsFixture())
+            .jsonObject.getValue("data")
+        AppActor.setFallbackOfferings(dataObject.toString().toByteArray())
+
+        offlineOfferingsBackend().use { backend ->
+            backend.configure("user_fallback_data")
+
+            assertEquals("off_main_android", AppActor.offerings().current?.id)
+        }
+    }
+
+    @Test
+    fun `a fallback file without offerings is a decoding error`() {
+        listOf("{}", """{"data":{}}""", """{"requestId":"req_1","currentOffering":null}""").forEach { json ->
+            val error = runCatching { AppActor.setFallbackOfferings(json.toByteArray()) }.exceptionOrNull()
+
+            assertTrue(json, error is AppActorError.Decoding)
         }
     }
 

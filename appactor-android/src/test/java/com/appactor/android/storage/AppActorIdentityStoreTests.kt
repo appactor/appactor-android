@@ -5,6 +5,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.appactor.android.models.AppActorConfiguration
 import com.appactor.android.models.AppActorError
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -118,6 +119,23 @@ class AppActorIdentityStoreTests {
         assertEquals(installId, reloaded.installId)
         assertEquals(null, reloaded.currentAppUserId)
         assertNotEquals("", installId)
+    }
+
+    @Test
+    fun `purchases under the folded anonymous id are the current user's until clear identity`() {
+        val store = AppActorSharedPrefsIdentityStore(context)
+        store.setAppUserId("user_folded")
+        store.setFoldedAppUser(AppActorFoldedAppUser(anonymousId = "appactor-anon-1", into = "user_folded"))
+
+        assertTrue(store.isCurrentUsersPurchase("appactor-anon-1"))
+        assertTrue(store.isCurrentUsersPurchase("user_folded"))
+        assertFalse(store.isCurrentUsersPurchase("appactor-anon-2"))
+
+        store.setAppUserId("user_other")
+        assertFalse(store.isCurrentUsersPurchase("appactor-anon-1"))
+
+        store.clearIdentity()
+        assertNull(store.foldedAppUser)
     }
 
     @Test

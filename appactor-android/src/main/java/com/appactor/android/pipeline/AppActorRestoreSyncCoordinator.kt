@@ -21,6 +21,7 @@ import com.appactor.android.storage.AppActorIdentityStore
 import com.appactor.android.storage.AppActorReceiptQueueItem
 import com.appactor.android.storage.AppActorReceiptQueuePhase
 import com.appactor.android.storage.AppActorReceiptQueueStore
+import com.appactor.android.storage.isCurrentUsersPurchase
 import kotlinx.coroutines.CancellationException
 import java.util.Date
 
@@ -66,16 +67,13 @@ internal class AppActorRestoreSyncCoordinator(
         productEntitlements: Map<String, List<String>>,
     ) -> AppActorStorePurchase?,
     private val consumePendingPurchaseUpdateContext: (AppActorStorePurchase) -> AppActorPaymentProcessor.PurchaseUpdateContext?,
-    private val fireDeferredPurchaseCallbackIfNeeded: (
-        purchase: AppActorStorePurchase,
-        customerInfo: AppActorCustomerInfo,
-        emitCallback: Boolean,
-    ) -> Unit,
-    private val resolveDeferredPurchaseCallbackIfNeeded: (
+    // Returns the current user's customer info when it fetched it.
+    private val resolveDeferredPurchaseCallbackIfNeeded: suspend (
         purchaseToken: String,
+        receiptAppUserId: String,
         customerInfo: AppActorCustomerInfo,
         emitCallback: Boolean,
-    ) -> Unit,
+    ) -> AppActorCustomerInfo?,
     private val markPurchasePosted: (AppActorReceiptQueueItem) -> Unit,
     private val finalizePostedPurchase: suspend (AppActorReceiptQueueItem) -> Boolean,
     private val makeQueueItem: (
@@ -172,10 +170,13 @@ internal class AppActorRestoreSyncCoordinator(
                     pendingUpdateContext.clientPurchaseContext,
                 ).finishedCustomerInfo ?: return@forEach
                 report(customerInfo)
-                fireDeferredPurchaseCallbackIfNeeded(
-                    normalized,
-                    customerInfo,
-                    identityStore.currentAppUserId == pendingAppUserId,
+                report(
+                    resolveDeferredPurchaseCallbackIfNeeded(
+                        normalized.purchaseToken,
+                        pendingAppUserId,
+                        customerInfo,
+                        identityStore.isCurrentUsersPurchase(pendingAppUserId),
+                    )
                 )
                 return@forEach
             }
@@ -390,6 +391,7 @@ internal class AppActorRestoreSyncCoordinator(
                     successfullyRestoredActivePurchases.forEach { purchase ->
                         resolveDeferredPurchaseCallbackIfNeeded(
                             purchase.purchaseToken,
+                            resolvedAppUserId,
                             restoredCustomer,
                             true,
                         )

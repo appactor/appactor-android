@@ -6,9 +6,9 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import com.appactor.android.backend.client.AppActorBackendException
-import com.appactor.android.backend.client.AppActorBackendJson
 import com.appactor.android.backend.client.AppActorResponseSignatureVerifier
 import com.appactor.android.backend.dto.AppActorOfferingsEnvelopeDTO
+import com.appactor.android.backend.dto.decodeFallbackOfferings
 import com.appactor.android.billing.AppActorStoreAdapter
 import com.appactor.android.billing.AppActorStorePurchase
 import com.appactor.android.billing.GooglePlayStoreAdapter
@@ -593,6 +593,7 @@ public object AppActor {
                 currentRuntime.experimentManager.clearCache(currentAppUserId)
                 val callbacks = mutableListOf<Triple<((AppActorCustomerInfo) -> Unit)?, AppActorCustomerInfo, Long>>()
                 currentRuntime.identityStore.setAppUserId(null)
+                currentRuntime.identityStore.setFoldedAppUser(null)
                 val newAppUserId = currentRuntime.identityStore.ensureAppUserId()
                 currentRuntime.identityStore.clearLegacyIdentityState()
                 callbacks += Triple(
@@ -672,7 +673,8 @@ public object AppActor {
     }
 
     /**
-     * Sets bundled JSON as fallback offerings for first-launch offline scenarios.
+     * Sets bundled JSON as fallback offerings for first-launch offline scenarios: a saved
+     * `GET /v1/payment/offerings` body (`{"data": {…}}`) or its `data` object, as on iOS.
      * The fallback is used only when both network and disk cache fail.
      * Fallback offerings are immediately stale — the next call triggers a network refresh.
      *
@@ -680,7 +682,7 @@ public object AppActor {
      */
     public fun setFallbackOfferings(jsonData: ByteArray) {
         val dto = try {
-            AppActorBackendJson.instance.decodeFromString<AppActorOfferingsEnvelopeDTO>(jsonData.decodeToString())
+            decodeFallbackOfferings(jsonData.decodeToString())
         } catch (error: Exception) {
             throw AppActorError.Decoding(error.message ?: "Invalid fallback offerings JSON", error)
         }
