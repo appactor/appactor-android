@@ -5,6 +5,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.appactor.android.models.AppActorConfiguration
 import com.appactor.android.models.AppActorError
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -121,20 +122,20 @@ class AppActorIdentityStoreTests {
     }
 
     @Test
-    fun `a folded anonymous user survives a reload and clear identity drops it`() {
+    fun `purchases under the folded anonymous id are the current user's until clear identity`() {
         val store = AppActorSharedPrefsIdentityStore(context)
         store.setAppUserId("user_folded")
         store.setFoldedAppUser(AppActorFoldedAppUser(anonymousId = "appactor-anon-1", into = "user_folded"))
 
-        val reloaded = AppActorSharedPrefsIdentityStore(context)
+        assertTrue(store.isCurrentUsersPurchase("appactor-anon-1"))
+        assertTrue(store.isCurrentUsersPurchase("user_folded"))
+        assertFalse(store.isCurrentUsersPurchase("appactor-anon-2"))
 
-        assertEquals(AppActorFoldedAppUser("appactor-anon-1", "user_folded"), reloaded.foldedAppUser)
-        assertTrue(reloaded.isCurrentUsersPurchase("appactor-anon-1"))
-        assertEquals("appactor-anon-2", reloaded.creditedAppUserId("appactor-anon-2"))
+        store.setAppUserId("user_other")
+        assertFalse(store.isCurrentUsersPurchase("appactor-anon-1"))
 
-        reloaded.clearIdentity()
-
-        assertNull(AppActorSharedPrefsIdentityStore(context).foldedAppUser)
+        store.clearIdentity()
+        assertNull(store.foldedAppUser)
     }
 
     @Test

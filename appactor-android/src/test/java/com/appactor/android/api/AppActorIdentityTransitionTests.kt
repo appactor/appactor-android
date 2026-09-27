@@ -7,7 +7,6 @@ import com.appactor.android.billing.AppActorStorePurchase
 import com.appactor.android.billing.AppActorStorePurchaseState
 import com.appactor.android.models.AppActorConfiguration
 import com.appactor.android.pipeline.AppActorClientPurchaseContext
-import com.appactor.android.storage.AppActorSharedPrefsIdentityStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -751,10 +750,8 @@ class AppActorIdentityTransitionTests {
             AppActor.logIn(LOGGED_IN_USER)
             purchaseUpdates.emit(listOf(approvedPendingPurchase()))
 
-            assertTrue(awaitMainThreadCallback(observed.deferredResolved))
-            assertTrue(awaitMainThreadCallback(observed.receiptPublished))
-            assertEquals(listOf(PENDING_PRODUCT_ID to LOGGED_IN_USER), observed.deferredPurchases)
-            assertEquals(listOf(LOGGED_IN_USER), observed.receiptAppUserIds)
+            observed.assertResolvedForLoggedInUser()
+            assertTrue(awaitMainThreadCallback(observed.refreshedInfoPublished))
         }
     }
 
@@ -767,14 +764,36 @@ class AppActorIdentityTransitionTests {
                 val login = async(Dispatchers.Default) { AppActor.logIn(LOGGED_IN_USER) }
                 assertTrue(loginStarted.await(5, TimeUnit.SECONDS))
                 purchaseUpdates.emit(listOf(approvedPendingPurchase()))
+                // The updates are handled one at a time, so once the second empty one is taken the
+                // purchase has been held for the login to post when it ends.
+                purchaseUpdates.emit(emptyList())
+                purchaseUpdates.emit(emptyList())
+                assertEquals(1L, observed.receiptPosted.count)
                 releaseLogin.countDown()
                 withTimeout(5_000L) { login.await() }
             }
 
-            assertTrue(awaitMainThreadCallback(observed.deferredResolved))
-            assertTrue(awaitMainThreadCallback(observed.receiptPublished))
-            assertEquals(listOf(PENDING_PRODUCT_ID to LOGGED_IN_USER), observed.deferredPurchases)
-            assertEquals(listOf(LOGGED_IN_USER), observed.receiptAppUserIds)
+            observed.assertResolvedForLoggedInUser()
+            assertTrue(awaitMainThreadCallback(observed.refreshedInfoPublished))
+        }
+    }
+
+    @Test
+    fun `a pending purchase approved after a relaunch still resolves for the user logged in to`() = runBlocking {
+        withPendingPurchaseOfAnonymousBuyer(relaunchedAfterLogin = true) { _, observed ->
+            observed.assertResolvedForLoggedInUser()
+        }
+    }
+
+    @Test
+    fun `a pending purchase whose receipt is retried after the login resolves for the user`() = runBlocking {
+        withPendingPurchaseOfAnonymousBuyer(failFirstReceiptPost = true) { purchaseUpdates, observed ->
+            AppActor.logIn(LOGGED_IN_USER)
+            purchaseUpdates.emit(listOf(approvedPendingPurchase()))
+
+            // The retry wake posts it again after the backoff.
+            observed.assertResolvedForLoggedInUser(timeoutMillis = 15_000L, receiptPosts = 2)
+            assertTrue(awaitMainThreadCallback(observed.refreshedInfoPublished))
         }
     }
 
@@ -793,25 +812,57 @@ class AppActorIdentityTransitionTests {
 
     private class PendingPurchaseObservations {
         val deferredResolved = CountDownLatch(1)
-        val receiptPublished = CountDownLatch(1)
+        val refreshedInfoPublished = CountDownLatch(1)
         val receiptPosted = CountDownLatch(1)
-        val deferredPurchases = CopyOnWriteArrayList<Pair<String, String?>>()
+        val deferredPurchases = CopyOnWriteArrayList<Triple<String, String?, String?>>()
         val receiptAppUserIds = CopyOnWriteArrayList<String>()
+
+        /**
+         * The receipt went to the backend under the anonymous id, which decides whose it is, and
+         * the callback got the logged-in user's info, fetched fresh rather than relabelled.
+         */
+        fun assertResolvedForLoggedInUser(timeoutMillis: Long = 5_000L, receiptPosts: Int = 1) {
+            assertTrue(awaitMainThreadCallback(deferredResolved, timeoutMillis))
+            assertEquals(
+                listOf(Triple(PENDING_PRODUCT_ID, LOGGED_IN_USER, REFRESHED_REQUEST_ID)),
+                deferredPurchases,
+            )
+            assertEquals(List(receiptPosts) { ANONYMOUS_BUYER }, receiptAppUserIds)
+        }
     }
 
     /**
      * Configures [ANONYMOUS_BUYER], who has a purchase pending approval from an earlier session,
      * then runs [scenario]. Login answers as [LOGGED_IN_USER], held by [loginGate] when given.
+     * [relaunchedAfterLogin] configures instead as a previous session left it after logging the
+     * buyer in, with the purchase approved and listed by Play. [failFirstReceiptPost] answers the
+     * first receipt post with a retryable error.
      */
     private suspend fun withPendingPurchaseOfAnonymousBuyer(
         loginGate: Pair<CountDownLatch, CountDownLatch>? = null,
+        relaunchedAfterLogin: Boolean = false,
+        failFirstReceiptPost: Boolean = false,
         scenario: suspend (MutableSharedFlow<List<AppActorStorePurchase>>, PendingPurchaseObservations) -> Unit,
     ) {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val purchaseUpdates = MutableSharedFlow<List<AppActorStorePurchase>>(extraBufferCapacity = 1)
         val observed = PendingPurchaseObservations()
-        AppActor.storeAdapterFactory = { FakeStoreAdapter(purchaseUpdatesFlow = purchaseUpdates) }
-        AppActorSharedPrefsIdentityStore(context).setAppUserId(ANONYMOUS_BUYER)
+        val activePurchases = if (relaunchedAfterLogin) listOf(approvedPendingPurchase()) else emptyList()
+        AppActor.storeAdapterFactory = {
+            FakeStoreAdapter(activePurchases = activePurchases, purchaseUpdatesFlow = purchaseUpdates)
+        }
+        val identity = context.getSharedPreferences("appactor_identity", Context.MODE_PRIVATE).edit()
+        if (relaunchedAfterLogin) {
+            identity.putString("appactor_billing_app_user_id", LOGGED_IN_USER)
+            // As the login stored it.
+            identity.putString(
+                "appactor_billing_folded_app_user",
+                """{"anonymousId":"$ANONYMOUS_BUYER","into":"$LOGGED_IN_USER"}""",
+            )
+        } else {
+            identity.putString("appactor_billing_app_user_id", ANONYMOUS_BUYER)
+        }
+        identity.commit()
         val now = System.currentTimeMillis()
         context.getSharedPreferences("com.appactor.android.pending_purchases", Context.MODE_PRIVATE)
             .edit()
@@ -821,6 +872,7 @@ class AppActorIdentityTransitionTests {
                     .toPendingEntry(productId = PENDING_PRODUCT_ID, recordedAtMillis = now, appUserId = ANONYMOUS_BUYER),
             )
             .commit()
+        val receiptPosts = AtomicInteger(0)
 
         TestBackendServer { request ->
             val path = request.path?.substringBefore("?") ?: ""
@@ -829,8 +881,16 @@ class AppActorIdentityTransitionTests {
                     customerEnvelope(requestId = "req_identify_pending", appUserId = identifyAppUserId(request, ANONYMOUS_BUYER)),
                 )
                 path == "/v1/payment/offerings" -> jsonResponse("""{"requestId":"req_off","data":{"offerings":[],"productEntitlements":{}}}""")
+                path == "/v1/customers/$LOGGED_IN_USER" -> jsonResponse(
+                    // Differs from the login's info in more than its requestId, so the listener is called again.
+                    customerEnvelope(
+                        requestId = REFRESHED_REQUEST_ID,
+                        appUserId = LOGGED_IN_USER,
+                        managementUrl = "https://play.google.com/store/account/subscriptions",
+                    ),
+                )
                 path.startsWith("/v1/customers/") -> jsonResponse(
-                    customerEnvelope(requestId = "req_customer_pending", appUserId = path.substringAfterLast('/')),
+                    customerEnvelope(requestId = "req_customer_other", appUserId = path.substringAfterLast('/')),
                 )
                 path == "/v1/payment/login" -> {
                     loginGate?.let { (started, release) ->
@@ -843,18 +903,22 @@ class AppActorIdentityTransitionTests {
                     observed.receiptAppUserIds += AppActorBackendJson.instance.parseToJsonElement(request.body.readUtf8())
                         .jsonObject.getValue("appUserId").jsonPrimitive.content
                     observed.receiptPosted.countDown()
-                    // Differs from the login's info in more than its requestId, so the listener is called again.
-                    jsonResponse(
-                        googleReceiptEnvelope(
-                            requestId = "req_receipt_pending",
-                            appUserId = LOGGED_IN_USER,
-                            managementUrl = "https://play.google.com/store/account/subscriptions",
-                        ),
-                    )
+                    if (failFirstReceiptPost && receiptPosts.incrementAndGet() == 1) {
+                        jsonResponse("""{"status":"retryable_error","requestId":"req_receipt_retry","error":{"code":"UPSTREAM","message":"Try again."}}""")
+                    } else {
+                        jsonResponse(googleReceiptEnvelope(requestId = "req_receipt_pending", appUserId = ANONYMOUS_BUYER))
+                    }
                 }
                 else -> jsonResponse("{}", 404)
             }
         }.use { backend ->
+            AppActor.onDeferredPurchaseResolved = { productId, customerInfo ->
+                observed.deferredPurchases += Triple(productId, customerInfo.appUserId, customerInfo.requestId)
+                observed.deferredResolved.countDown()
+            }
+            AppActor.onCustomerInfoChanged = { info ->
+                if (info.requestId == REFRESHED_REQUEST_ID) observed.refreshedInfoPublished.countDown()
+            }
             AppActor.configure(
                 AppActorConfiguration(
                     context = context,
@@ -863,13 +927,6 @@ class AppActorIdentityTransitionTests {
                     options = testOptionsForLocalBackend(),
                 )
             )
-            AppActor.onDeferredPurchaseResolved = { productId, customerInfo ->
-                observed.deferredPurchases += productId to customerInfo.appUserId
-                observed.deferredResolved.countDown()
-            }
-            AppActor.onCustomerInfoChanged = { info ->
-                if (info.requestId == "req_receipt_pending") observed.receiptPublished.countDown()
-            }
             scenario(purchaseUpdates, observed)
         }
     }
@@ -893,5 +950,6 @@ class AppActorIdentityTransitionTests {
         const val LOGGED_IN_USER = "user_folded"
         const val PENDING_PRODUCT_ID = "com.appactor.pro.monthly"
         const val PENDING_TOKEN = "token_pending_approved_after_login"
+        const val REFRESHED_REQUEST_ID = "req_customer_user_folded"
     }
 }

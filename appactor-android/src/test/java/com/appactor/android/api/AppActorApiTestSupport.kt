@@ -233,12 +233,15 @@ internal fun jsonResponse(
 internal fun customerEnvelope(
     requestId: String,
     appUserId: String,
+    managementUrl: String? = null,
 ): String {
+    val managementUrlField = managementUrl?.let { "\"managementUrl\": \"$it\"," }.orEmpty()
     return """
         {
           "requestId": "$requestId",
           "appUserId": "$appUserId",
           "customer": {
+            $managementUrlField
             "entitlements": {},
             "subscriptions": {},
             "nonSubscriptions": {}

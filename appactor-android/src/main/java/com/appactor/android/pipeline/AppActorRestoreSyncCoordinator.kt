@@ -67,16 +67,17 @@ internal class AppActorRestoreSyncCoordinator(
         productEntitlements: Map<String, List<String>>,
     ) -> AppActorStorePurchase?,
     private val consumePendingPurchaseUpdateContext: (AppActorStorePurchase) -> AppActorPaymentProcessor.PurchaseUpdateContext?,
-    private val fireDeferredPurchaseCallbackIfNeeded: (
+    // Both return the current user's customer info when they fetched it.
+    private val fireDeferredPurchaseCallbackIfNeeded: suspend (
         purchase: AppActorStorePurchase,
         customerInfo: AppActorCustomerInfo,
         emitCallback: Boolean,
-    ) -> Unit,
-    private val resolveDeferredPurchaseCallbackIfNeeded: (
+    ) -> AppActorCustomerInfo?,
+    private val resolveDeferredPurchaseCallbackIfNeeded: suspend (
         purchaseToken: String,
         customerInfo: AppActorCustomerInfo,
         emitCallback: Boolean,
-    ) -> Unit,
+    ) -> AppActorCustomerInfo?,
     private val markPurchasePosted: (AppActorReceiptQueueItem) -> Unit,
     private val finalizePostedPurchase: suspend (AppActorReceiptQueueItem) -> Boolean,
     private val makeQueueItem: (
@@ -173,10 +174,12 @@ internal class AppActorRestoreSyncCoordinator(
                     pendingUpdateContext.clientPurchaseContext,
                 ).finishedCustomerInfo ?: return@forEach
                 report(customerInfo)
-                fireDeferredPurchaseCallbackIfNeeded(
-                    normalized,
-                    customerInfo,
-                    identityStore.isCurrentUsersPurchase(pendingAppUserId),
+                report(
+                    fireDeferredPurchaseCallbackIfNeeded(
+                        normalized,
+                        customerInfo,
+                        identityStore.isCurrentUsersPurchase(pendingAppUserId),
+                    )
                 )
                 return@forEach
             }

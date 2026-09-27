@@ -4,6 +4,8 @@ import android.content.Context
 import android.content.SharedPreferences
 import com.appactor.android.internal.logging.AppActorLogger
 import com.appactor.android.models.AppActorValidation
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 import java.util.UUID
 
 private const val ANONYMOUS_APP_USER_ID_PREFIX: String = "appactor-anon-"
@@ -11,6 +13,7 @@ private const val ANONYMOUS_APP_USER_ID_PREFIX: String = "appactor-anon-"
 internal fun isAnonymousAppUserId(appUserId: String): Boolean = appUserId.startsWith(ANONYMOUS_APP_USER_ID_PREFIX)
 
 /** An anonymous user a logIn folded into the user it logged in to. */
+@Serializable
 internal data class AppActorFoldedAppUser(val anonymousId: String, val into: String)
 
 internal interface AppActorIdentityStore {
@@ -20,10 +23,10 @@ internal interface AppActorIdentityStore {
     val installReferrer: String?
 
     /**
-     * The anonymous user the last logIn folded into the user it logged in to. The backend keeps
-     * the anonymous ID as that user's alias, so a purchase made under it and posted later (a
-     * pending one approved after the login) is theirs. Kept through later logIns, as the alias
-     * is; logOut and reset() clear it.
+     * The anonymous user the last logIn from an anonymous user folded into the user it logged in
+     * to. The backend normally keeps the anonymous ID as that user's alias, so a purchase made
+     * under it and posted later (a pending one approved after the login) is theirs. Kept through
+     * later logIns, as iOS keeps it; logOut and reset() clear it.
      */
     val foldedAppUser: AppActorFoldedAppUser?
     fun setFoldedAppUser(fold: AppActorFoldedAppUser?)
@@ -114,22 +117,19 @@ internal class AppActorSharedPrefsIdentityStore(
         }
     }
 
+    // One key, so a reader never pairs one fold's anonymous ID with another's target.
     override val foldedAppUser: AppActorFoldedAppUser?
-        get() {
-            val anonymousId = preferences.getString(KEY_FOLDED_ANONYMOUS_APP_USER_ID, null) ?: return null
-            val into = preferences.getString(KEY_FOLDED_INTO_APP_USER_ID, null) ?: return null
-            return AppActorFoldedAppUser(anonymousId, into)
+        get() = preferences.getString(KEY_FOLDED_APP_USER, null)?.let { stored ->
+            runCatching { Json.decodeFromString(AppActorFoldedAppUser.serializer(), stored) }.getOrNull()
         }
 
     override fun setFoldedAppUser(fold: AppActorFoldedAppUser?) {
         synchronized(WRITE_LOCK) {
             preferences.edit().apply {
                 if (fold == null) {
-                    remove(KEY_FOLDED_ANONYMOUS_APP_USER_ID)
-                    remove(KEY_FOLDED_INTO_APP_USER_ID)
+                    remove(KEY_FOLDED_APP_USER)
                 } else {
-                    putString(KEY_FOLDED_ANONYMOUS_APP_USER_ID, fold.anonymousId)
-                    putString(KEY_FOLDED_INTO_APP_USER_ID, fold.into)
+                    putString(KEY_FOLDED_APP_USER, Json.encodeToString(AppActorFoldedAppUser.serializer(), fold))
                 }
             }.apply()
         }
@@ -159,8 +159,7 @@ internal class AppActorSharedPrefsIdentityStore(
                 .remove(KEY_APP_USER_ID)
                 .remove(KEY_LEGACY_SERVER_USER_ID)
                 .remove(KEY_LAST_REQUEST_ID)
-                .remove(KEY_FOLDED_ANONYMOUS_APP_USER_ID)
-                .remove(KEY_FOLDED_INTO_APP_USER_ID)
+                .remove(KEY_FOLDED_APP_USER)
                 .apply()
         }
     }
@@ -174,18 +173,15 @@ internal class AppActorSharedPrefsIdentityStore(
         const val KEY_INSTALL_ID = "appactor_billing_install_id"
         const val KEY_LAST_REQUEST_ID = "appactor_billing_last_request_id"
         const val KEY_INSTALL_REFERRER = "appactor_billing_install_referrer"
-        const val KEY_FOLDED_ANONYMOUS_APP_USER_ID = "appactor_billing_folded_anonymous_app_user_id"
-        const val KEY_FOLDED_INTO_APP_USER_ID = "appactor_billing_folded_into_app_user_id"
+        const val KEY_FOLDED_APP_USER = "appactor_billing_folded_app_user"
     }
 }
 
 /**
- * The user a purchase made under [appUserId] is credited to: the one the last logIn folded that
- * anonymous ID into, else [appUserId] itself.
+ * Whether a purchase made under [appUserId] is the current user's: made under their ID, or under
+ * the anonymous ID folded into them (see [AppActorIdentityStore.foldedAppUser]).
  */
-internal fun AppActorIdentityStore.creditedAppUserId(appUserId: String): String =
-    foldedAppUser?.takeIf { it.anonymousId == appUserId }?.into ?: appUserId
-
-/** Whether a purchase made under [appUserId] is the current user's. */
-internal fun AppActorIdentityStore.isCurrentUsersPurchase(appUserId: String): Boolean =
-    currentAppUserId == creditedAppUserId(appUserId)
+internal fun AppActorIdentityStore.isCurrentUsersPurchase(appUserId: String): Boolean {
+    val currentAppUserId = currentAppUserId ?: return false
+    return appUserId == currentAppUserId || foldedAppUser == AppActorFoldedAppUser(appUserId, currentAppUserId)
+}

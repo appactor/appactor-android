@@ -561,7 +561,7 @@ class AppActorHttpBackendClientTests {
     }
 
     @Test
-    fun `a padded api key is sent and signed with as the backend trims it`() = runBlocking {
+    fun `a padded api key is sent trimmed, and signatures are checked with the trimmed key`() = runBlocking {
         // A BOM, and a newline as a key read from a file ends with: OkHttp refuses a header holding either.
         val paddedApiKey = "\uFEFF pk_test_123\n\u00A0"
         val sentAuthorization = mutableListOf<String?>()

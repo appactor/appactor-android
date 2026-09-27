@@ -55,11 +55,12 @@ internal class AppActorReceiptQueueDrainer(
     private val isPurchasePosted: (AppActorReceiptQueueItem) -> Boolean,
     private val markPurchasePosted: (AppActorReceiptQueueItem) -> Unit,
     private val finalizePostedPurchase: suspend (AppActorReceiptQueueItem) -> Boolean,
-    private val resolveDeferredPurchaseCallbackIfNeeded: (
+    // Returns the current user's customer info when it fetched it.
+    private val resolveDeferredPurchaseCallbackIfNeeded: suspend (
         purchaseToken: String,
         customerInfo: AppActorCustomerInfo,
         emitCallback: Boolean,
-    ) -> Unit,
+    ) -> AppActorCustomerInfo?,
     private val scheduleNextRetryWake: () -> Unit,
 ) {
 
@@ -105,7 +106,7 @@ internal class AppActorReceiptQueueDrainer(
                 item.purchaseToken,
                 customerInfo,
                 identityStore.isCurrentUsersPurchase(item.appUserId),
-            )
+            )?.let { latestCustomer = it }
         }
         return DrainedBatch(finishedAny, latestCustomer)
     }

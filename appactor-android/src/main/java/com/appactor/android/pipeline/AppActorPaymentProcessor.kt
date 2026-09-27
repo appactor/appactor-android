@@ -4,6 +4,7 @@ import android.app.Activity
 import com.appactor.android.backend.client.AppActorBackendClient
 import com.appactor.android.internal.logging.AppActorLogger
 import com.appactor.android.internal.runtime.appActorBackgroundScope
+import com.appactor.android.internal.runtime.throwIfCancellation
 import com.appactor.android.backend.dto.AppActorGoogleReceiptResponseDTO
 import com.appactor.android.billing.AppActorStoreAdapter
 import com.appactor.android.billing.AppActorStorePurchase
@@ -26,7 +27,6 @@ import com.appactor.android.models.AppActorStore
 import com.appactor.android.models.AppActorValidation
 import com.appactor.android.models.toResolvedPurchaseTarget
 import com.appactor.android.storage.AppActorIdentityStore
-import com.appactor.android.storage.creditedAppUserId
 import com.appactor.android.storage.isAnonymousAppUserId
 import com.appactor.android.storage.isCurrentUsersPurchase
 import com.appactor.android.storage.AppActorAtomicJsonReceiptQueueStore
@@ -373,7 +373,7 @@ internal class AppActorPaymentProcessor(
                     purchase = purchase,
                     customerInfo = customerInfo,
                     emitCallback = shouldEmitDeferredCallback,
-                )
+                )?.let { latestCustomer = it }
             }
             latestCustomer
         }
@@ -699,29 +699,51 @@ internal class AppActorPaymentProcessor(
         }.getOrElse { false }
     }
 
-    private fun fireDeferredPurchaseCallbackIfNeeded(
+    private suspend fun fireDeferredPurchaseCallbackIfNeeded(
         purchase: AppActorStorePurchase,
         customerInfo: AppActorCustomerInfo,
         emitCallback: Boolean = true,
-    ) {
-        resolveDeferredPurchaseCallbackIfNeeded(
+    ): AppActorCustomerInfo? {
+        return resolveDeferredPurchaseCallbackIfNeeded(
             purchaseToken = purchase.purchaseToken,
             customerInfo = customerInfo,
             emitCallback = emitCallback,
         )
     }
 
-    private fun resolveDeferredPurchaseCallbackIfNeeded(
+    /**
+     * Resolves the pending entry of [purchaseToken], telling the host when [emitCallback]. Returns
+     * the current user's customer info when it had to fetch it, for the caller to publish.
+     */
+    private suspend fun resolveDeferredPurchaseCallbackIfNeeded(
         purchaseToken: String,
         customerInfo: AppActorCustomerInfo,
         emitCallback: Boolean = true,
-    ) {
-        val resolvedProductId = pendingPurchaseRegistry.resolveDeferredEntry(purchaseToken)
-        if (resolvedProductId != null) {
-            if (emitCallback) {
-                onDeferredPurchaseResolved?.invoke(resolvedProductId, customerInfo)
+    ): AppActorCustomerInfo? {
+        val receiptAppUserId = customerInfo.appUserId
+        val currentAppUserId = identityStore.currentAppUserId
+        if (emitCallback && currentAppUserId != null && receiptAppUserId != null &&
+            receiptAppUserId != currentAppUserId && identityStore.isCurrentUsersPurchase(receiptAppUserId)
+        ) {
+            // Posted under the anonymous id a logIn folded into the current user, so the info is
+            // the anonymous id's. As on iOS, the callback gets the current user's, fetched fresh
+            // so it holds the purchase; a failed fetch leaves the entry for a later sighting.
+            if (!pendingPurchaseRegistry.hasDeferredEntry(purchaseToken)) return null
+            val refreshed = try {
+                customerManager.getCustomerInfo(currentAppUserId, forceRefresh = true)
+            } catch (throwable: Throwable) {
+                throwIfCancellation(throwable)
+                return null
             }
+            val resolvedProductId = pendingPurchaseRegistry.resolveDeferredEntry(purchaseToken) ?: return null
+            onDeferredPurchaseResolved?.invoke(resolvedProductId, refreshed)
+            return refreshed
         }
+        val resolvedProductId = pendingPurchaseRegistry.resolveDeferredEntry(purchaseToken)
+        if (resolvedProductId != null && emitCallback) {
+            onDeferredPurchaseResolved?.invoke(resolvedProductId, customerInfo)
+        }
+        return null
     }
 
     private fun resolvePurchaseUpdateContext(purchase: AppActorStorePurchase): PurchaseUpdateContext {
@@ -806,14 +828,9 @@ internal class AppActorPaymentProcessor(
     }
 
     // A purchase queued under an id the backend rejects (e.g. "null", stored by older versions)
-    // was made signed out, so it can only be credited to the signed-out user, anonymous now. One
-    // made under an anonymous id a logIn has since folded into a user is that user's, and is
-    // posted as theirs, so their customer info comes back.
+    // was made signed out, so it can only be credited to the signed-out user, anonymous now.
     private fun AppActorReceiptQueueItem.withCreditableAppUserId(): AppActorReceiptQueueItem {
-        if (AppActorValidation.isValidAppUserId(appUserId)) {
-            val creditedAppUserId = identityStore.creditedAppUserId(appUserId)
-            return if (creditedAppUserId == appUserId) this else copy(appUserId = creditedAppUserId)
-        }
+        if (AppActorValidation.isValidAppUserId(appUserId)) return this
         val anonymousAppUserId = identityStore.currentAppUserId?.takeIf(::isAnonymousAppUserId) ?: return this
         return copy(appUserId = anonymousAppUserId)
     }
