@@ -4,6 +4,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.Date
@@ -417,5 +418,6 @@ internal object AppActorIso8601 {
     private val formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US)
         .withZone(ZoneOffset.UTC)
 
-    fun format(date: Date): String = formatter.format(date.toInstant())
+    // From the millis, not Date#toInstant, which a java.sql.Date an app passes always throws from.
+    fun format(date: Date): String = formatter.format(Instant.ofEpochMilli(date.time))
 }
