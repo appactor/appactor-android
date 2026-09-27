@@ -154,6 +154,28 @@ class AppActorExperimentManagerTests {
     }
 
     @Test
+    fun `a new user does not join the previous user's fetch`() = runBlocking {
+        val started = CompletableDeferred<Unit>()
+        val unblock = CompletableDeferred<Unit>()
+        val mock = mockk<AppActorBackendClient>(relaxed = true)
+        coEvery { mock.postExperimentAssignment(any(), "appactor-anon-A", any(), any()) } coAnswers {
+            started.complete(Unit)
+            unblock.await()
+            successResponse()
+        }
+        coEvery { mock.postExperimentAssignment(any(), "user_android_B", any(), any()) } returns successResponse()
+        val manager = createManager(mock)
+        val previous = async { manager.getAssignment("paywall_copy", "appactor-anon-A") }
+        started.await()
+
+        withTimeout(5_000) { manager.getAssignment("paywall_copy", "user_android_B") }
+        unblock.complete(Unit)
+        previous.await()
+
+        coVerify(exactly = 1) { mock.postExperimentAssignment("paywall_copy", "user_android_B", any(), any()) }
+    }
+
+    @Test
     fun `the offline fallback does not serve the previous user's assignment`() = runBlocking {
         val mock = mockk<AppActorBackendClient>(relaxed = true)
         coEvery { mock.postExperimentAssignment(any(), "appactor-anon-A", any(), any()) } returns successResponse()

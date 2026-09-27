@@ -46,6 +46,21 @@ class AppActorLifecycleCallbacksTests {
     }
 
     @Test
+    fun `recreating the only activity for a configuration change is not a background`() {
+        // Stands in for host, being recreated.
+        val rotating = object : Activity() {
+            override fun isChangingConfigurations() = true
+        }
+
+        callbacks.onActivityPaused(rotating)
+        callbacks.onActivityStopped(rotating)
+        callbacks.onActivityDestroyed(rotating)
+        callbacks.onActivityStarted(Activity())
+
+        assertEquals(emptyList<String>(), transitions)
+    }
+
+    @Test
     fun `leaving the app from an activity started before registration is a background`() {
         callbacks.onActivityPaused(host)
         callbacks.onActivityStopped(host)

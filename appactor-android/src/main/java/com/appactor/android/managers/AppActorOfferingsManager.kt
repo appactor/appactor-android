@@ -294,8 +294,8 @@ internal class AppActorOfferingsManager(
 
     private suspend fun fetchOfferings(forceRefresh: Boolean, generation: Long): AppActorOfferings {
         val requestLocales = currentLocales()
-        val sentETag = cacheStore.eTag(forceRefresh = forceRefresh, currentLocales = requestLocales)
         return try {
+            val sentETag = cacheStore.eTag(forceRefresh = forceRefresh, currentLocales = requestLocales)
             val response = backendClient.getOfferings(eTag = sentETag)
             when {
                 response.isNotModified -> {
@@ -313,9 +313,8 @@ internal class AppActorOfferingsManager(
                                 null
                             }
                         }
-                        if (decoded != null) {
-                            decoded
-                        } else {
+                        // The offerings in memory, though built from an older entry, beat the bundled fallback.
+                        decoded ?: cached() ?: run {
                             val fallback = fallbackDTO
                             if (fallback != null) {
                                 enrichAndCache(fallback, 0L, generation, AppActorDiagnosticsDataSource.Cache)
@@ -424,9 +423,8 @@ internal class AppActorOfferingsManager(
             when {
                 cachedValue != null -> decodeBootstrapSeed(cachedValue)
 
-                fallbackDTO != null -> fallbackBootstrapSeed(requireNotNull(fallbackDTO))
-
-                else -> throw throwable.toAppActorError("Failed to fetch offerings.")
+                else -> fallbackDTO?.let(::fallbackBootstrapSeed)
+                    ?: throw throwable.toAppActorError("Failed to fetch offerings.")
             }
         }
     }
@@ -520,6 +518,7 @@ internal class AppActorOfferingsManager(
         cachedAtMillis = dateProviderMillis()
         // The entry's ETag as the 304 left it, which the next request sends.
         cachedETag = confirmed?.eTag ?: sentETag
+        lastLoadSource = AppActorDiagnosticsDataSource.Cache
         offerings
     }
 

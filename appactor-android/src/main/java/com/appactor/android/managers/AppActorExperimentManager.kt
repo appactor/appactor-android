@@ -32,7 +32,8 @@ internal class AppActorExperimentManager(
 
     private val stateLock = ReentrantLock()
     private val cachedAssignments = linkedMapOf<String, CachedAssignment>()
-    private val inFlight = linkedMapOf<String, CompletableDeferred<AppActorExperimentAssignment?>>()
+    // Keyed by user too: a user adopted by restore or sync must not join the previous user's fetch.
+    private val inFlight = linkedMapOf<Pair<String, String>, CompletableDeferred<AppActorExperimentAssignment?>>()
     @Volatile
     private var lastRequestId: String? = null
     @Volatile
@@ -50,7 +51,7 @@ internal class AppActorExperimentManager(
             if (cached != null && isFresh(cached.cachedAtMillis) && lastCacheUserId == appUserId) {
                 return cached.assignment?.toPublic()
             }
-            inFlight[experimentKey] ?: startFetchLocked(experimentKey, appUserId)
+            inFlight[appUserId to experimentKey] ?: startFetchLocked(experimentKey, appUserId)
         }
         return request.await()
     }
@@ -61,13 +62,14 @@ internal class AppActorExperimentManager(
         appUserId: String,
     ): CompletableDeferred<AppActorExperimentAssignment?> {
         val generation = cacheGeneration
+        val key = appUserId to experimentKey
         return CompletableDeferred<AppActorExperimentAssignment?>().also { request ->
-            inFlight[experimentKey] = request
+            inFlight[key] = request
             backgroundScope.launchSharedRequest(
                 request = request,
                 cleanup = {
                     stateLock.withLock {
-                        if (inFlight[experimentKey] === request) inFlight.remove(experimentKey)
+                        if (inFlight[key] === request) inFlight.remove(key)
                     }
                 },
                 block = { fetchAssignment(experimentKey, appUserId, generation) },
@@ -121,7 +123,6 @@ internal class AppActorExperimentManager(
                 verified = response.signatureVerified,
             )
         } catch (throwable: Throwable) {
-            ensureGeneration(requestGeneration)
             throwIfCancellation(throwable)
             val cached = stateLock.withLock {
                 ensureGenerationLocked(requestGeneration)

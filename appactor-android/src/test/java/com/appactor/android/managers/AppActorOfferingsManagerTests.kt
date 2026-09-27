@@ -1059,6 +1059,43 @@ class AppActorOfferingsManagerTests {
     }
 
     @Test
+    fun `a 304 whose payload can't be enriched serves the older offerings in memory`() = runBlocking {
+        var now = 1_710_000_000_000L
+        val first = fixtureOfferings()
+        val second = first.copy(
+            data = first.data.copy(currentOffering = first.data.currentOffering?.copy(displayName = "Updated")),
+        )
+        val mockClient = mockk<AppActorBackendClient>(relaxed = true)
+        coEvery { mockClient.getOfferings(any()) } answers {
+            when (firstArg<String?>()) {
+                null -> freshOfferingsResponse(first, eTag = "\"e1\"")
+                "\"e1\"" -> freshOfferingsResponse(second, eTag = "\"e2\"")
+                else -> notModifiedResponse(eTag = "\"e2\"")
+            }
+        }
+        val productQueries = AtomicInteger(0)
+        val mockStoreAdapter = mockk<AppActorStoreAdapter>(relaxed = true)
+        coEvery { mockStoreAdapter.queryProductDetails(any()) } answers {
+            if (productQueries.incrementAndGet() > 1) throw IllegalStateException("Billing unavailable")
+            val requests = firstArg<List<AppActorStoreProductRequest>>()
+            requests.mapNotNull { request -> pricedProducts()[requestKey(request)] }
+        }
+        val manager = AppActorOfferingsManager(
+            backendClient = mockClient,
+            cacheStore = offeringsCacheStore("offerings-304-memory-last-resort"),
+            offlineProductCatalogStore = offlineProductCatalogStore("offerings-304-memory-last-resort"),
+            storeAdapter = mockStoreAdapter,
+            dateProviderMillis = { now },
+        )
+        manager.setFallbackOfferings(first.copy(data = first.data.copy(currentOffering = null, offerings = emptyList())))
+        manager.getOfferings()
+        now += 6 * 60 * 1_000
+        runCatching { manager.getOfferings() }
+
+        assertEquals("Main", manager.getOfferings().current?.displayName)
+    }
+
+    @Test
     fun `a 304 confirming the offerings in memory restarts their freshness`() = runBlocking {
         var now = 1_710_000_000_000L
         val mockClient = mockk<AppActorBackendClient>(relaxed = true)
