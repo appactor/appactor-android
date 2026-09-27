@@ -300,6 +300,19 @@ internal class GooglePlayBillingClientBridge(
 
                 purchaseContinuation = continuation
                 pendingPurchaseProductType = productType
+                // shutdown() sets isShutDown before it takes the continuation, so one of the two
+                // always sees the other: a purchase launched after that would never be resumed.
+                if (isShutDown) {
+                    if (purchaseContinuation === continuation) {
+                        purchaseContinuation = null
+                        pendingPurchaseProductType = null
+                    }
+                    resumePurchaseContinuationIfActive(
+                        continuation,
+                        AppActorBillingLaunchResult.Failed(error = AppActorError.NotConfigured),
+                    )
+                    return@suspendCancellableCoroutine
+                }
                 continuation.invokeOnCancellation {
                     if (purchaseContinuation === continuation) {
                         purchaseContinuation = null

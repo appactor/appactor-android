@@ -149,8 +149,11 @@ internal class AppActorRetryWakeScheduler(
             if (delayMillis > 0L) {
                 delay(delayMillis)
             }
+            // A job replaced after its delay ended must not drain: its cancel would only land
+            // once it had claimed receipts, which then wait in Posting.
             synchronized(retryWakeLock) {
-                if (retryWakeJob === thisJob) drainingJob = thisJob
+                if (retryWakeJob !== thisJob) return@launch
+                drainingJob = thisJob
             }
             try {
                 runDrainUnderPipelineLock(limit)
