@@ -37,8 +37,7 @@ internal class AppActorExperimentManager(
     private var lastRequestId: String? = null
     @Volatile
     private var cacheGeneration: Long = 0
-    // The user whose assignments memory holds; their disk file is merged in before memory is
-    // first persisted over it, which would otherwise drop what earlier sessions stored.
+    // The user whose assignments memory holds. Memory holds one user's; see useAssignmentsOfLocked.
     @Volatile
     private var lastCacheUserId: String? = null
 
@@ -124,8 +123,11 @@ internal class AppActorExperimentManager(
         } catch (throwable: Throwable) {
             ensureGeneration(requestGeneration)
             throwIfCancellation(throwable)
-            loadFromDiskCache(appUserId, requestGeneration)
-            val cached = stateLock.withLock { cachedAssignments[experimentKey] }
+            val cached = stateLock.withLock {
+                ensureGenerationLocked(requestGeneration)
+                useAssignmentsOfLocked(appUserId)
+                cachedAssignments[experimentKey]
+            }
             if (cached != null && shouldFallbackToCache(throwable)) {
                 ensureGeneration(requestGeneration)
                 cached.assignment?.toPublic()
@@ -135,16 +137,17 @@ internal class AppActorExperimentManager(
         }
     }
 
-    private suspend fun loadFromDiskCache(
-        appUserId: String,
-        requestGeneration: Long,
-    ) {
-        val decoded = diskAssignments(appUserId) ?: return
-        stateLock.withLock {
-            ensureGenerationLocked(requestGeneration)
-            cachedAssignments.putAll(decoded)
-            lastCacheUserId = appUserId
-        }
+    /**
+     * Points memory at [appUserId]'s assignments. A different user's are dropped, not relabelled:
+     * after restore or sync adopts a merged user they are the previous user's, and the server may
+     * answer the new user differently. The new user's disk file is loaded, since persisting memory
+     * would otherwise overwrite what earlier sessions stored. Under stateLock.
+     */
+    private fun useAssignmentsOfLocked(appUserId: String) {
+        if (lastCacheUserId == appUserId) return
+        cachedAssignments.clear()
+        diskAssignments(appUserId)?.let(cachedAssignments::putAll)
+        lastCacheUserId = appUserId
     }
 
     private fun diskAssignments(appUserId: String): Map<String, CachedAssignment>? {
@@ -182,12 +185,9 @@ internal class AppActorExperimentManager(
     ): AppActorExperimentAssignment? {
         return stateLock.withLock {
             ensureGenerationLocked(requestGeneration)
-            if (lastCacheUserId != appUserId) {
-                diskAssignments(appUserId)?.forEach { (key, value) -> cachedAssignments.putIfAbsent(key, value) }
-            }
+            useAssignmentsOfLocked(appUserId)
             lastRequestId = requestId
             cachedAssignments[experimentKey] = cached
-            lastCacheUserId = appUserId
             persistCache(appUserId, verified)
             ensureGenerationLocked(requestGeneration)
             cached.assignment?.toPublic()
