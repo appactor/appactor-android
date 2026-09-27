@@ -1,7 +1,7 @@
 package com.appactor.android.pipeline
 
 import com.appactor.android.backend.client.AppActorBackendClient
-import com.appactor.android.backend.client.AppActorBackendException
+import com.appactor.android.backend.client.toAppActorError
 import com.appactor.android.backend.dto.AppActorCustomerEnvelopeDTO
 import com.appactor.android.backend.dto.AppActorGoogleBatchResultDTO
 import com.appactor.android.backend.dto.AppActorGoogleRestorePurchaseDTO
@@ -11,7 +11,6 @@ import com.appactor.android.billing.AppActorStoreAdapter
 import com.appactor.android.billing.AppActorStorePurchase
 import com.appactor.android.managers.AppActorCustomerManager
 import com.appactor.android.models.AppActorCustomerInfo
-import com.appactor.android.models.AppActorError
 import com.appactor.android.models.AppActorIso8601
 import com.appactor.android.models.AppActorProductType
 import com.appactor.android.models.appActorGoogleObfuscatedAccountId
@@ -412,16 +411,11 @@ internal class AppActorRestoreSyncCoordinator(
                     .any { remainingBatch -> remainingBatch.any { !it.isActive } }
                 if (remainingHistoryRestore) {
                     fallbackCustomer.exceptionOrNull()?.let(throwable::addSuppressed)
-                    throw restoreFailure(
-                        throwable,
-                        "Failed to restore full Google Play purchase history."
-                    )
+                    throw throwable.toAppActorError("Failed to restore full Google Play purchase history.")
                 }
                 return fallbackCustomer.getOrElse { syncThrowable ->
-                    throw restoreFailure(
-                        syncThrowable,
-                        "Failed to restore Google Play purchases."
-                    )
+                    if (syncThrowable is CancellationException) throw syncThrowable
+                    throw syncThrowable.toAppActorError("Failed to restore Google Play purchases.")
                 }
             }
         }
@@ -686,17 +680,6 @@ internal class AppActorRestoreSyncCoordinator(
         const val MAX_PURCHASES_PER_REQUEST = 20
         const val SOURCE_INTENT_RESTORE = "restore"
         const val SOURCE_INTENT_SYNC = "sync"
-    }
-}
-
-private fun restoreFailure(
-    throwable: Throwable,
-    defaultMessage: String,
-): AppActorError {
-    return when (throwable) {
-        is AppActorError -> throwable
-        is AppActorBackendException.Network -> AppActorError.Network(defaultMessage, throwable)
-        else -> AppActorError.Unknown(defaultMessage, throwable)
     }
 }
 

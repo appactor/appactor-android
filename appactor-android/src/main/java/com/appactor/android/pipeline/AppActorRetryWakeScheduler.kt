@@ -56,6 +56,11 @@ internal class AppActorRetryWakeScheduler(
     private var retryWakeJob: Job? = null
     private var scheduledRetryAtMillis: Long? = null
 
+    // The wake job while it drains. It re-arms the wake itself when the drain ends, so it is never
+    // replaced meanwhile: cancelling it would abort the drain mid-batch and leave the receipts it
+    // claimed in Posting until the stale-claim threshold.
+    private var drainingJob: Job? = null
+
     private fun nextReadyAtMillis(nowMillis: Long = dateProviderMillis()): Long? {
         val stalePostingThreshold = nowMillis - AppActorAtomicJsonReceiptQueueStore.STALE_CLAIM_THRESHOLD_MILLIS
         val itemNextReady = queueStore.snapshot()
@@ -95,6 +100,7 @@ internal class AppActorRetryWakeScheduler(
         // the background wake threads. The drain itself is launched (not run)
         // inside the lock, so we never hold the monitor across suspension.
         synchronized(retryWakeLock) {
+            if (drainingJob?.isActive == true) return
             val nextReadyAt = nextReadyAtMillis(now) ?: run {
                 retryWakeJob?.cancel()
                 retryWakeJob = null
@@ -141,11 +147,15 @@ internal class AppActorRetryWakeScheduler(
             if (delayMillis > 0L) {
                 delay(delayMillis)
             }
+            synchronized(retryWakeLock) {
+                if (retryWakeJob === thisJob) drainingJob = thisJob
+            }
             runDrainUnderPipelineLock(limit)
             val isStillActiveJob = synchronized(retryWakeLock) {
                 if (retryWakeJob === thisJob) {
                     retryWakeJob = null
                     scheduledRetryAtMillis = null
+                    drainingJob = null
                     true
                 } else {
                     false
