@@ -281,10 +281,12 @@ class AppActorHttpBackendClientTests {
     @Test
     fun `offerings request does not include nonce header`() = runBlocking {
         var capturedNonce: String? = "UNSET"
+        var capturedApiKeyBinding: String? = "UNSET"
         val client = backendClient(
             okHttpClient = OkHttpClient.Builder()
                 .addInterceptor { chain ->
                     capturedNonce = chain.request().header("X-AppActor-Nonce")
+                    capturedApiKeyBinding = chain.request().header("X-AppActor-Signature-Api-Key")
                     response(
                         chain = chain,
                         code = 200,
@@ -309,6 +311,8 @@ class AppActorHttpBackendClientTests {
         client.getOfferings(eTag = null)
 
         assertNull("Offerings request should NOT include X-AppActor-Nonce", capturedNonce)
+        // The salt payload signs the API key already.
+        assertNull(capturedApiKeyBinding)
     }
 
     @Test
@@ -370,12 +374,14 @@ class AppActorHttpBackendClientTests {
     }
 
     @Test
-    fun `nonce requests ask for a request bound signature`() = runBlocking {
+    fun `nonce requests ask for a request and api key bound signature`() = runBlocking {
         var binding: String? = null
+        var apiKeyBinding: String? = null
         val client = backendClient(
             okHttpClient = OkHttpClient.Builder()
                 .addInterceptor { chain ->
                     binding = chain.request().header("X-AppActor-Signature-Binding")
+                    apiKeyBinding = chain.request().header("X-AppActor-Signature-Api-Key")
                     response(
                         chain = chain,
                         code = 200,
@@ -392,6 +398,7 @@ class AppActorHttpBackendClientTests {
         client.identify(AppActorIdentifyRequestDTO(appUserId = "user_android_123"))
 
         assertEquals("request", binding)
+        assertEquals("include", apiKeyBinding)
     }
 
     @Test

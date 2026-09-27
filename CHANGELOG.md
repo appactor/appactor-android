@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.4.2
+
+- Fixed: the signature on customer info, login, purchase, restore and sync responses didn't cover the API key. Every AppActor project is signed with the same key, so a proxy on the device could swap in its own project's API key and pass that project's signed answer (premium it granted itself) off as the app's. Nonce requests now send `X-AppActor-Signature-Api-Key: include`, and the SDK checks the signature against the API key it sent, as iOS 0.2.1 does. (iOS re-audit Y-1, 2026-09-27)
+
 ## 2.4.1
 
 Fixes from the 2026-09-27 re-audit of 2.4.0. Re-audit ids in parentheses.
