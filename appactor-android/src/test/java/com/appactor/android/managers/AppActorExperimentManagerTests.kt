@@ -3,6 +3,7 @@ package com.appactor.android.managers
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.appactor.android.backend.client.AppActorBackendClient
+import com.appactor.android.backend.client.AppActorBackendException
 import com.appactor.android.backend.client.AppActorBackendHttpResponse
 import com.appactor.android.backend.dto.AppActorExperimentAssignmentEnvelopeDTO
 import com.appactor.android.backend.dto.AppActorExperimentAssignmentResponseDTO
@@ -138,6 +139,69 @@ class AppActorExperimentManagerTests {
 
         val offlineSession = createManager(mockClient(throwable = IOException("offline")), cacheStore = cacheStore)
         assertEquals("variant_b", offlineSession.getAssignment("paywall_copy", "user_android_A")?.variantKey)
+    }
+
+    @Test
+    fun `a new user's fetch does not relabel the previous user's assignments`() = runBlocking {
+        // Restore or sync adopting a merged user switches the id without clearing the cache.
+        val mock = mockClient(response = successResponse())
+        val manager = createManager(mock)
+        manager.getAssignment("paywall_copy", "appactor-anon-A")
+
+        manager.getAssignment("home_layout", "user_android_B")
+        manager.getAssignment("paywall_copy", "user_android_B")
+
+        coVerify(exactly = 1) { mock.postExperimentAssignment("paywall_copy", "user_android_B", any(), any()) }
+    }
+
+    @Test
+    fun `a new user does not join the previous user's fetch`() = runBlocking {
+        val started = CompletableDeferred<Unit>()
+        val unblock = CompletableDeferred<Unit>()
+        val mock = mockk<AppActorBackendClient>(relaxed = true)
+        coEvery { mock.postExperimentAssignment(any(), "appactor-anon-A", any(), any()) } coAnswers {
+            started.complete(Unit)
+            unblock.await()
+            successResponse()
+        }
+        coEvery { mock.postExperimentAssignment(any(), "user_android_B", any(), any()) } returns successResponse()
+        val manager = createManager(mock)
+        val previous = async { manager.getAssignment("paywall_copy", "appactor-anon-A") }
+        started.await()
+
+        withTimeout(5_000) { manager.getAssignment("paywall_copy", "user_android_B") }
+        unblock.complete(Unit)
+        previous.await()
+
+        coVerify(exactly = 1) { mock.postExperimentAssignment("paywall_copy", "user_android_B", any(), any()) }
+    }
+
+    @Test
+    fun `an error with no cache fallback leaves the assignments in memory alone`() = runBlocking {
+        val mock = mockk<AppActorBackendClient>(relaxed = true)
+        coEvery { mock.postExperimentAssignment(any(), "user_android_A", any(), any()) } returns successResponse()
+        coEvery { mock.postExperimentAssignment(any(), "user_android_B", any(), any()) } throws
+            AppActorBackendException.Http(statusCode = 400)
+        val manager = createManager(mock)
+        manager.getAssignment("paywall_copy", "user_android_A")
+
+        runCatching { manager.getAssignment("paywall_copy", "user_android_B") }
+        manager.getAssignment("paywall_copy", "user_android_A")
+
+        coVerify(exactly = 1) { mock.postExperimentAssignment("paywall_copy", "user_android_A", any(), any()) }
+    }
+
+    @Test
+    fun `the offline fallback does not serve the previous user's assignment`() = runBlocking {
+        val mock = mockk<AppActorBackendClient>(relaxed = true)
+        coEvery { mock.postExperimentAssignment(any(), "appactor-anon-A", any(), any()) } returns successResponse()
+        coEvery { mock.postExperimentAssignment(any(), "user_android_B", any(), any()) } throws IOException("offline")
+        val manager = createManager(mock)
+        manager.getAssignment("paywall_copy", "appactor-anon-A")
+
+        val offline = runCatching { manager.getAssignment("paywall_copy", "user_android_B") }
+
+        assertTrue(offline.isFailure)
     }
 
     @Test

@@ -32,13 +32,13 @@ internal class AppActorExperimentManager(
 
     private val stateLock = ReentrantLock()
     private val cachedAssignments = linkedMapOf<String, CachedAssignment>()
-    private val inFlight = linkedMapOf<String, CompletableDeferred<AppActorExperimentAssignment?>>()
+    // Keyed by user too: a user adopted by restore or sync must not join the previous user's fetch.
+    private val inFlight = linkedMapOf<Pair<String, String>, CompletableDeferred<AppActorExperimentAssignment?>>()
     @Volatile
     private var lastRequestId: String? = null
     @Volatile
     private var cacheGeneration: Long = 0
-    // The user whose assignments memory holds; their disk file is merged in before memory is
-    // first persisted over it, which would otherwise drop what earlier sessions stored.
+    // The user whose assignments memory holds. Memory holds one user's; see useAssignmentsOfLocked.
     @Volatile
     private var lastCacheUserId: String? = null
 
@@ -51,24 +51,25 @@ internal class AppActorExperimentManager(
             if (cached != null && isFresh(cached.cachedAtMillis) && lastCacheUserId == appUserId) {
                 return cached.assignment?.toPublic()
             }
-            inFlight[experimentKey] ?: startFetchLocked(experimentKey, appUserId)
+            inFlight[appUserId to experimentKey] ?: startFetchLocked(experimentKey, appUserId)
         }
         return request.await()
     }
 
-    /** Starts a fetch every caller of [experimentKey] shares, as its inFlight request. Under stateLock. */
+    /** Starts a fetch every caller of [experimentKey] for [appUserId] shares, as its inFlight request. Under stateLock. */
     private fun startFetchLocked(
         experimentKey: String,
         appUserId: String,
     ): CompletableDeferred<AppActorExperimentAssignment?> {
         val generation = cacheGeneration
+        val key = appUserId to experimentKey
         return CompletableDeferred<AppActorExperimentAssignment?>().also { request ->
-            inFlight[experimentKey] = request
+            inFlight[key] = request
             backgroundScope.launchSharedRequest(
                 request = request,
                 cleanup = {
                     stateLock.withLock {
-                        if (inFlight[experimentKey] === request) inFlight.remove(experimentKey)
+                        if (inFlight[key] === request) inFlight.remove(key)
                     }
                 },
                 block = { fetchAssignment(experimentKey, appUserId, generation) },
@@ -122,29 +123,31 @@ internal class AppActorExperimentManager(
                 verified = response.signatureVerified,
             )
         } catch (throwable: Throwable) {
-            ensureGeneration(requestGeneration)
             throwIfCancellation(throwable)
-            loadFromDiskCache(appUserId, requestGeneration)
-            val cached = stateLock.withLock { cachedAssignments[experimentKey] }
-            if (cached != null && shouldFallbackToCache(throwable)) {
-                ensureGeneration(requestGeneration)
-                cached.assignment?.toPublic()
-            } else {
+            if (!shouldFallbackToCache(throwable)) {
                 throw throwable.toAppActorError("Failed to fetch experiment assignment.")
             }
+            val cached = stateLock.withLock {
+                ensureGenerationLocked(requestGeneration)
+                useAssignmentsOfLocked(appUserId)
+                cachedAssignments[experimentKey]
+            } ?: throw throwable.toAppActorError("Failed to fetch experiment assignment.")
+            ensureGeneration(requestGeneration)
+            cached.assignment?.toPublic()
         }
     }
 
-    private suspend fun loadFromDiskCache(
-        appUserId: String,
-        requestGeneration: Long,
-    ) {
-        val decoded = diskAssignments(appUserId) ?: return
-        stateLock.withLock {
-            ensureGenerationLocked(requestGeneration)
-            cachedAssignments.putAll(decoded)
-            lastCacheUserId = appUserId
-        }
+    /**
+     * Points memory at [appUserId]'s assignments. A different user's are dropped, not relabelled:
+     * after restore or sync adopts a merged user they are the previous user's, and the server may
+     * answer the new user differently. The new user's disk file is loaded, since persisting memory
+     * would otherwise overwrite what earlier sessions stored. Under stateLock.
+     */
+    private fun useAssignmentsOfLocked(appUserId: String) {
+        if (lastCacheUserId == appUserId) return
+        cachedAssignments.clear()
+        diskAssignments(appUserId)?.let(cachedAssignments::putAll)
+        lastCacheUserId = appUserId
     }
 
     private fun diskAssignments(appUserId: String): Map<String, CachedAssignment>? {
@@ -182,12 +185,9 @@ internal class AppActorExperimentManager(
     ): AppActorExperimentAssignment? {
         return stateLock.withLock {
             ensureGenerationLocked(requestGeneration)
-            if (lastCacheUserId != appUserId) {
-                diskAssignments(appUserId)?.forEach { (key, value) -> cachedAssignments.putIfAbsent(key, value) }
-            }
+            useAssignmentsOfLocked(appUserId)
             lastRequestId = requestId
             cachedAssignments[experimentKey] = cached
-            lastCacheUserId = appUserId
             persistCache(appUserId, verified)
             ensureGenerationLocked(requestGeneration)
             cached.assignment?.toPublic()
