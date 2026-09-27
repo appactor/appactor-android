@@ -12,8 +12,9 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.Test
 
-// TODO(android-6 coverage): also pin that the dedup-skip (scheduledRetryAtMillis == nextReadyAt
-// with an active job) spawns no second wake, and that a wake replaced after its delay doesn't drain.
+// TODO(android-6 coverage): also pin that the completion cleanup clears the fields only while they
+// still hold its own job, that the dedup-skip (scheduledRetryAtMillis == nextReadyAt with an active
+// job) spawns no second wake, and that a wake replaced after its delay doesn't drain.
 class AppActorRetryWakeSchedulerTests {
 
     @Test

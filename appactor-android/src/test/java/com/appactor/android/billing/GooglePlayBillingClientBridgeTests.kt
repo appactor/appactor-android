@@ -563,9 +563,14 @@ class GooglePlayBillingClientBridgeTests {
 }
 
 // A purchased Play purchase; [extraJson] adds fields to its JSON.
-private fun playPurchase(token: String, productId: String, extraJson: String = ""): Purchase = Purchase(
+private fun playPurchase(
+    token: String,
+    productId: String,
+    acknowledged: Boolean = false,
+    extraJson: String = "",
+): Purchase = Purchase(
     """{"orderId":"GPA.$token","productIds":["$productId"],"purchaseToken":"$token",
-       "purchaseState":0,"purchaseTime":1710000000000,"acknowledged":false$extraJson}""",
+       "purchaseState":0,"purchaseTime":1710000000000,"acknowledged":$acknowledged$extraJson}""",
     "signature",
 )
 
@@ -573,6 +578,7 @@ private fun playPurchase(token: String, productId: String, extraJson: String = "
 private fun pendingPrepaidUpdatePurchase(): Purchase = playPurchase(
     token = "token_old",
     productId = "prepaid.monthly",
+    acknowledged = true,
     extraJson = ""","pendingPurchaseUpdate":{"purchaseToken":"token_new","productIds":["prepaid.yearly"]}""",
 )
 
