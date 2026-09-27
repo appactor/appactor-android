@@ -58,7 +58,8 @@ class AppActorLifecycleCoordinatorTests {
         val callbacks = coordinator.registerLifecycleCallbacksIfNeeded(runtime)
         assertNotNull(callbacks)
 
-        callbacks!!.onActivityStarted(Activity())
+        val activity = Activity()
+        callbacks!!.onActivityStarted(activity)
 
         // Wait for initial foreground drain + refresh
         assertTrue(host.operationsExpected!!.await(5, TimeUnit.SECONDS))
@@ -66,7 +67,7 @@ class AppActorLifecycleCoordinatorTests {
         assertTrue(refreshAfterForeground >= 1)
 
         // Background should cancel timer
-        callbacks.onActivityStopped(Activity())
+        callbacks.onActivityStopped(activity)
 
         val refreshAfterBackground = host.refreshCount.get()
         Thread.sleep(200)
