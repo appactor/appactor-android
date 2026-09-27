@@ -3,6 +3,7 @@ package com.appactor.android.pipeline
 import com.appactor.android.billing.AppActorStorePurchase
 import com.appactor.android.internal.logging.AppActorLogger
 import com.appactor.android.storage.AppActorIdentityStore
+import com.appactor.android.storage.isCurrentUsersPurchase
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -50,7 +51,7 @@ internal class AppActorIdentityTransitionBuffer(
      * [process] for each captured-identity group OUTSIDE the lock. [process]
      * receives the captured appUserId, the buffered purchases, the per-token
      * context overrides, and whether the deferred-purchase callback should fire
-     * (true only when the captured identity matches the currently active one).
+     * (true only when the captured identity's purchases are the current user's).
      */
     suspend fun end(
         process: suspend (
@@ -66,14 +67,13 @@ internal class AppActorIdentityTransitionBuffer(
             identityTransitionAppUserId = null
             items
         }
-        val currentAppUserId = identityStore.currentAppUserId
         return buffered.groupBy { it.capturedAppUserId }
             .mapNotNull { (userId, items) ->
                 process(
                     userId,
                     items.map { it.purchase },
                     items.associate { it.purchase.purchaseToken to it.purchaseUpdateContext },
-                    currentAppUserId == userId,
+                    identityStore.isCurrentUsersPurchase(userId),
                 )
             }
     }

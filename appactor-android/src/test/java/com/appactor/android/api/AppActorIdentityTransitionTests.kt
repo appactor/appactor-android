@@ -2,14 +2,21 @@ package com.appactor.android.api
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import com.appactor.android.backend.client.AppActorBackendJson
 import com.appactor.android.billing.AppActorStorePurchase
 import com.appactor.android.billing.AppActorStorePurchaseState
+import com.appactor.android.models.AppActorConfiguration
+import com.appactor.android.pipeline.AppActorClientPurchaseContext
+import com.appactor.android.storage.AppActorSharedPrefsIdentityStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -736,5 +743,155 @@ class AppActorIdentityTransitionTests {
             assertEquals(listOf("com.appactor.pro.monthly"), deferredProducts)
             assertTrue(publishedRequestIds.contains("req_receipt_same_user_publish"))
         }
+    }
+
+    @Test
+    fun `a pending purchase approved after an anonymous user logs in resolves for them`() = runBlocking {
+        withPendingPurchaseOfAnonymousBuyer { purchaseUpdates, observed ->
+            AppActor.logIn(LOGGED_IN_USER)
+            purchaseUpdates.emit(listOf(approvedPendingPurchase()))
+
+            assertTrue(awaitMainThreadCallback(observed.deferredResolved))
+            assertTrue(awaitMainThreadCallback(observed.receiptPublished))
+            assertEquals(listOf(PENDING_PRODUCT_ID to LOGGED_IN_USER), observed.deferredPurchases)
+            assertEquals(listOf(LOGGED_IN_USER), observed.receiptAppUserIds)
+        }
+    }
+
+    @Test
+    fun `a pending purchase approved while an anonymous user logs in resolves for them`() = runBlocking {
+        val loginStarted = CountDownLatch(1)
+        val releaseLogin = CountDownLatch(1)
+        withPendingPurchaseOfAnonymousBuyer(loginGate = loginStarted to releaseLogin) { purchaseUpdates, observed ->
+            coroutineScope {
+                val login = async(Dispatchers.Default) { AppActor.logIn(LOGGED_IN_USER) }
+                assertTrue(loginStarted.await(5, TimeUnit.SECONDS))
+                purchaseUpdates.emit(listOf(approvedPendingPurchase()))
+                releaseLogin.countDown()
+                withTimeout(5_000L) { login.await() }
+            }
+
+            assertTrue(awaitMainThreadCallback(observed.deferredResolved))
+            assertTrue(awaitMainThreadCallback(observed.receiptPublished))
+            assertEquals(listOf(PENDING_PRODUCT_ID to LOGGED_IN_USER), observed.deferredPurchases)
+            assertEquals(listOf(LOGGED_IN_USER), observed.receiptAppUserIds)
+        }
+    }
+
+    @Test
+    fun `a pending purchase approved after the user logs out does not resolve for them`() = runBlocking {
+        withPendingPurchaseOfAnonymousBuyer { purchaseUpdates, observed ->
+            AppActor.logIn(LOGGED_IN_USER)
+            AppActor.logOut()
+            purchaseUpdates.emit(listOf(approvedPendingPurchase()))
+
+            assertTrue(observed.receiptPosted.await(5, TimeUnit.SECONDS))
+            assertFalse(awaitMainThreadCallback(observed.deferredResolved, timeoutMillis = 500L))
+            assertEquals(listOf(ANONYMOUS_BUYER), observed.receiptAppUserIds)
+        }
+    }
+
+    private class PendingPurchaseObservations {
+        val deferredResolved = CountDownLatch(1)
+        val receiptPublished = CountDownLatch(1)
+        val receiptPosted = CountDownLatch(1)
+        val deferredPurchases = CopyOnWriteArrayList<Pair<String, String?>>()
+        val receiptAppUserIds = CopyOnWriteArrayList<String>()
+    }
+
+    /**
+     * Configures [ANONYMOUS_BUYER], who has a purchase pending approval from an earlier session,
+     * then runs [scenario]. Login answers as [LOGGED_IN_USER], held by [loginGate] when given.
+     */
+    private suspend fun withPendingPurchaseOfAnonymousBuyer(
+        loginGate: Pair<CountDownLatch, CountDownLatch>? = null,
+        scenario: suspend (MutableSharedFlow<List<AppActorStorePurchase>>, PendingPurchaseObservations) -> Unit,
+    ) {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val purchaseUpdates = MutableSharedFlow<List<AppActorStorePurchase>>(extraBufferCapacity = 1)
+        val observed = PendingPurchaseObservations()
+        AppActor.storeAdapterFactory = { FakeStoreAdapter(purchaseUpdatesFlow = purchaseUpdates) }
+        AppActorSharedPrefsIdentityStore(context).setAppUserId(ANONYMOUS_BUYER)
+        val now = System.currentTimeMillis()
+        context.getSharedPreferences("com.appactor.android.pending_purchases", Context.MODE_PRIVATE)
+            .edit()
+            .putString(
+                PENDING_TOKEN,
+                AppActorClientPurchaseContext.purchaseAttempt(startedAtMillis = now)
+                    .toPendingEntry(productId = PENDING_PRODUCT_ID, recordedAtMillis = now, appUserId = ANONYMOUS_BUYER),
+            )
+            .commit()
+
+        TestBackendServer { request ->
+            val path = request.path?.substringBefore("?") ?: ""
+            when {
+                path == "/v1/payment/identify" -> jsonResponse(
+                    customerEnvelope(requestId = "req_identify_pending", appUserId = identifyAppUserId(request, ANONYMOUS_BUYER)),
+                )
+                path == "/v1/payment/offerings" -> jsonResponse("""{"requestId":"req_off","data":{"offerings":[],"productEntitlements":{}}}""")
+                path.startsWith("/v1/customers/") -> jsonResponse(
+                    customerEnvelope(requestId = "req_customer_pending", appUserId = path.substringAfterLast('/')),
+                )
+                path == "/v1/payment/login" -> {
+                    loginGate?.let { (started, release) ->
+                        started.countDown()
+                        assertTrue(release.await(5, TimeUnit.SECONDS))
+                    }
+                    jsonResponse(loginEnvelope(requestId = "req_login_pending", appUserId = LOGGED_IN_USER))
+                }
+                path == "/v1/payment/receipts/google" -> {
+                    observed.receiptAppUserIds += AppActorBackendJson.instance.parseToJsonElement(request.body.readUtf8())
+                        .jsonObject.getValue("appUserId").jsonPrimitive.content
+                    observed.receiptPosted.countDown()
+                    // Differs from the login's info in more than its requestId, so the listener is called again.
+                    jsonResponse(
+                        googleReceiptEnvelope(
+                            requestId = "req_receipt_pending",
+                            appUserId = LOGGED_IN_USER,
+                            managementUrl = "https://play.google.com/store/account/subscriptions",
+                        ),
+                    )
+                }
+                else -> jsonResponse("{}", 404)
+            }
+        }.use { backend ->
+            AppActor.configure(
+                AppActorConfiguration(
+                    context = context,
+                    apiKey = "pk_test_123",
+                    baseUrl = backend.baseUrl,
+                    options = testOptionsForLocalBackend(),
+                )
+            )
+            AppActor.onDeferredPurchaseResolved = { productId, customerInfo ->
+                observed.deferredPurchases += productId to customerInfo.appUserId
+                observed.deferredResolved.countDown()
+            }
+            AppActor.onCustomerInfoChanged = { info ->
+                if (info.requestId == "req_receipt_pending") observed.receiptPublished.countDown()
+            }
+            scenario(purchaseUpdates, observed)
+        }
+    }
+
+    private fun approvedPendingPurchase(): AppActorStorePurchase = AppActorStorePurchase(
+        productId = PENDING_PRODUCT_ID,
+        productType = com.appactor.android.models.AppActorProductType.Subscription,
+        purchaseToken = PENDING_TOKEN,
+        orderId = "GPA.pending.approved.1234",
+        purchaseTimeMillis = 1_710_000_000_000,
+        purchaseState = AppActorStorePurchaseState.Purchased,
+        basePlanId = "monthly001",
+        isAcknowledged = false,
+        isAutoRenewing = true,
+        rawPurchaseData = "{\"purchaseToken\":\"$PENDING_TOKEN\"}",
+        purchaseSignature = "signature_pending_approved",
+    )
+
+    private companion object {
+        const val ANONYMOUS_BUYER = "appactor-anon-pending-buyer"
+        const val LOGGED_IN_USER = "user_folded"
+        const val PENDING_PRODUCT_ID = "com.appactor.pro.monthly"
+        const val PENDING_TOKEN = "token_pending_approved_after_login"
     }
 }

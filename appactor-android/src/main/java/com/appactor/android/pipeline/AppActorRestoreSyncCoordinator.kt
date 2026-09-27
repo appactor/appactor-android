@@ -21,6 +21,7 @@ import com.appactor.android.storage.AppActorIdentityStore
 import com.appactor.android.storage.AppActorReceiptQueueItem
 import com.appactor.android.storage.AppActorReceiptQueuePhase
 import com.appactor.android.storage.AppActorReceiptQueueStore
+import com.appactor.android.storage.isCurrentUsersPurchase
 import kotlinx.coroutines.CancellationException
 import java.util.Date
 
@@ -175,7 +176,7 @@ internal class AppActorRestoreSyncCoordinator(
                 fireDeferredPurchaseCallbackIfNeeded(
                     normalized,
                     customerInfo,
-                    identityStore.currentAppUserId == pendingAppUserId,
+                    identityStore.isCurrentUsersPurchase(pendingAppUserId),
                 )
                 return@forEach
             }

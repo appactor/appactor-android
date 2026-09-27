@@ -26,7 +26,9 @@ import com.appactor.android.models.AppActorStore
 import com.appactor.android.models.AppActorValidation
 import com.appactor.android.models.toResolvedPurchaseTarget
 import com.appactor.android.storage.AppActorIdentityStore
+import com.appactor.android.storage.creditedAppUserId
 import com.appactor.android.storage.isAnonymousAppUserId
+import com.appactor.android.storage.isCurrentUsersPurchase
 import com.appactor.android.storage.AppActorAtomicJsonReceiptQueueStore
 import com.appactor.android.storage.AppActorPostedLedgerStore
 import com.appactor.android.storage.AppActorReceiptQueueItem
@@ -354,7 +356,7 @@ internal class AppActorPaymentProcessor(
                     processedAppUserId = receiptAppUserId
                 }
                 val shouldEmitDeferredCallback =
-                    emitDeferredPurchaseCallback && identityStore.currentAppUserId == receiptAppUserId
+                    emitDeferredPurchaseCallback && identityStore.isCurrentUsersPurchase(receiptAppUserId)
                 val customerInfo = enqueueAndProcess(
                     purchase = purchase,
                     productEntitlements = productEntitlements,
@@ -804,9 +806,14 @@ internal class AppActorPaymentProcessor(
     }
 
     // A purchase queued under an id the backend rejects (e.g. "null", stored by older versions)
-    // was made signed out, so it can only be credited to the signed-out user, anonymous now.
+    // was made signed out, so it can only be credited to the signed-out user, anonymous now. One
+    // made under an anonymous id a logIn has since folded into a user is that user's, and is
+    // posted as theirs, so their customer info comes back.
     private fun AppActorReceiptQueueItem.withCreditableAppUserId(): AppActorReceiptQueueItem {
-        if (AppActorValidation.isValidAppUserId(appUserId)) return this
+        if (AppActorValidation.isValidAppUserId(appUserId)) {
+            val creditedAppUserId = identityStore.creditedAppUserId(appUserId)
+            return if (creditedAppUserId == appUserId) this else copy(appUserId = creditedAppUserId)
+        }
         val anonymousAppUserId = identityStore.currentAppUserId?.takeIf(::isAnonymousAppUserId) ?: return this
         return copy(appUserId = anonymousAppUserId)
     }

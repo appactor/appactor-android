@@ -14,6 +14,7 @@ import com.appactor.android.storage.AppActorAtomicJsonReceiptQueueStore
 import com.appactor.android.storage.AppActorReceiptQueueItem
 import com.appactor.android.storage.AppActorReceiptQueuePhase
 import com.appactor.android.storage.AppActorReceiptQueueStore
+import com.appactor.android.storage.isCurrentUsersPurchase
 import kotlinx.coroutines.CancellationException
 
 /**
@@ -103,7 +104,7 @@ internal class AppActorReceiptQueueDrainer(
             resolveDeferredPurchaseCallbackIfNeeded(
                 item.purchaseToken,
                 customerInfo,
-                identityStore.currentAppUserId == item.appUserId,
+                identityStore.isCurrentUsersPurchase(item.appUserId),
             )
         }
         return DrainedBatch(finishedAny, latestCustomer)

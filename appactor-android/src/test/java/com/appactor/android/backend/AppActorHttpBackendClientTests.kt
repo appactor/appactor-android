@@ -561,6 +561,33 @@ class AppActorHttpBackendClientTests {
     }
 
     @Test
+    fun `a padded api key is sent and signed with as the backend trims it`() = runBlocking {
+        // A BOM, and a newline as a key read from a file ends with: OkHttp refuses a header holding either.
+        val paddedApiKey = "\uFEFF pk_test_123\n\u00A0"
+        val sentAuthorization = mutableListOf<String?>()
+        val client = backendClient(
+            okHttpClient = OkHttpClient.Builder()
+                .addInterceptor { chain ->
+                    sentAuthorization += chain.request().header("Authorization")
+                    response(chain = chain, code = 200, body = fixture("fixtures/backend/offerings_android_sample.json"))
+                }
+                .build(),
+            options = AppActorConfiguration.Options(
+                verifyResponseSignatures = false,
+                requireResponseSignatures = false,
+            ),
+            apiKey = paddedApiKey,
+        )
+
+        client.getOfferings(eTag = null)
+
+        assertEquals(listOf("Bearer pk_test_123"), sentAuthorization)
+        // The key salt-signed responses are verified with.
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        assertEquals("pk_test_123", AppActorConfiguration(context = context, apiKey = paddedApiKey).apiKey)
+    }
+
+    @Test
     fun `a 304 for another etag is fetched again without the validator`() = runBlocking {
         val sentValidators = mutableListOf<String?>()
         val client = backendClient(
@@ -684,12 +711,13 @@ class AppActorHttpBackendClientTests {
     private fun backendClient(
         okHttpClient: OkHttpClient,
         options: AppActorConfiguration.Options,
+        apiKey: String = "pk_test_123",
     ): AppActorHttpBackendClient {
         val context = ApplicationProvider.getApplicationContext<Context>()
         return AppActorHttpBackendClient(
             configuration = AppActorConfiguration(
                 context = context,
-                apiKey = "pk_test_123",
+                apiKey = apiKey,
                 baseUrl = "https://api.appactor.com",
                 options = options,
             ),

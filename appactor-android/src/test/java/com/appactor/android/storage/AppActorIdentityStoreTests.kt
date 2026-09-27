@@ -121,6 +121,23 @@ class AppActorIdentityStoreTests {
     }
 
     @Test
+    fun `a folded anonymous user survives a reload and clear identity drops it`() {
+        val store = AppActorSharedPrefsIdentityStore(context)
+        store.setAppUserId("user_folded")
+        store.setFoldedAppUser(AppActorFoldedAppUser(anonymousId = "appactor-anon-1", into = "user_folded"))
+
+        val reloaded = AppActorSharedPrefsIdentityStore(context)
+
+        assertEquals(AppActorFoldedAppUser("appactor-anon-1", "user_folded"), reloaded.foldedAppUser)
+        assertTrue(reloaded.isCurrentUsersPurchase("appactor-anon-1"))
+        assertEquals("appactor-anon-2", reloaded.creditedAppUserId("appactor-anon-2"))
+
+        reloaded.clearIdentity()
+
+        assertNull(AppActorSharedPrefsIdentityStore(context).foldedAppUser)
+    }
+
+    @Test
     fun `install referrer persists and survives reload`() {
         val store = AppActorSharedPrefsIdentityStore(context)
         assertNull(store.installReferrer)
