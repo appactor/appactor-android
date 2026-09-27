@@ -782,6 +782,7 @@ class AppActorIdentityTransitionTests {
     fun `a pending purchase approved after a relaunch still resolves for the user logged in to`() = runBlocking {
         withPendingPurchaseOfAnonymousBuyer(relaunchedAfterLogin = true) { _, observed ->
             observed.assertResolvedForLoggedInUser()
+            assertTrue(awaitMainThreadCallback(observed.refreshedInfoPublished))
         }
     }
 
@@ -807,10 +808,14 @@ class AppActorIdentityTransitionTests {
             assertTrue(observed.receiptPosted.await(5, TimeUnit.SECONDS))
             assertFalse(awaitMainThreadCallback(observed.deferredResolved, timeoutMillis = 500L))
             assertEquals(listOf(ANONYMOUS_BUYER), observed.receiptAppUserIds)
+            val identity = ApplicationProvider.getApplicationContext<Context>()
+                .getSharedPreferences("appactor_identity", Context.MODE_PRIVATE)
+            assertNull(identity.getString("appactor_billing_folded_app_user", null))
         }
     }
 
     private class PendingPurchaseObservations {
+        @Volatile var deferredRequestId: String? = null
         val deferredResolved = CountDownLatch(1)
         val refreshedInfoPublished = CountDownLatch(1)
         val receiptPosted = CountDownLatch(1)
@@ -823,10 +828,10 @@ class AppActorIdentityTransitionTests {
          */
         fun assertResolvedForLoggedInUser(timeoutMillis: Long = 5_000L, receiptPosts: Int = 1) {
             assertTrue(awaitMainThreadCallback(deferredResolved, timeoutMillis))
-            assertEquals(
-                listOf(Triple(PENDING_PRODUCT_ID, LOGGED_IN_USER, REFRESHED_REQUEST_ID)),
-                deferredPurchases,
-            )
+            val (productId, appUserId, requestId) = deferredPurchases.single()
+            assertEquals(PENDING_PRODUCT_ID, productId)
+            assertEquals(LOGGED_IN_USER, appUserId)
+            assertTrue(requestId.orEmpty(), requestId.orEmpty().startsWith(REFRESHED_REQUEST_ID))
             assertEquals(List(receiptPosts) { ANONYMOUS_BUYER }, receiptAppUserIds)
         }
     }
@@ -873,6 +878,7 @@ class AppActorIdentityTransitionTests {
             )
             .commit()
         val receiptPosts = AtomicInteger(0)
+        val customerFetches = AtomicInteger(0)
 
         TestBackendServer { request ->
             val path = request.path?.substringBefore("?") ?: ""
@@ -882,9 +888,10 @@ class AppActorIdentityTransitionTests {
                 )
                 path == "/v1/payment/offerings" -> jsonResponse("""{"requestId":"req_off","data":{"offerings":[],"productEntitlements":{}}}""")
                 path == "/v1/customers/$LOGGED_IN_USER" -> jsonResponse(
-                    // Differs from the login's info in more than its requestId, so the listener is called again.
+                    // Differs from the login's info in more than its requestId, so the listener is
+                    // called again. Numbered, to tell the callback's fetch from any other.
                     customerEnvelope(
-                        requestId = REFRESHED_REQUEST_ID,
+                        requestId = "$REFRESHED_REQUEST_ID-${customerFetches.incrementAndGet()}",
                         appUserId = LOGGED_IN_USER,
                         managementUrl = "https://play.google.com/store/account/subscriptions",
                     ),
@@ -912,12 +919,16 @@ class AppActorIdentityTransitionTests {
                 else -> jsonResponse("{}", 404)
             }
         }.use { backend ->
+            // Both on the main thread, the callback first.
             AppActor.onDeferredPurchaseResolved = { productId, customerInfo ->
                 observed.deferredPurchases += Triple(productId, customerInfo.appUserId, customerInfo.requestId)
+                observed.deferredRequestId = customerInfo.requestId
                 observed.deferredResolved.countDown()
             }
             AppActor.onCustomerInfoChanged = { info ->
-                if (info.requestId == REFRESHED_REQUEST_ID) observed.refreshedInfoPublished.countDown()
+                if (info.requestId != null && info.requestId == observed.deferredRequestId) {
+                    observed.refreshedInfoPublished.countDown()
+                }
             }
             AppActor.configure(
                 AppActorConfiguration(

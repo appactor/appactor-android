@@ -727,7 +727,8 @@ internal class AppActorPaymentProcessor(
         ) {
             // Posted under the anonymous id a logIn folded into the current user, so the info is
             // the anonymous id's. As on iOS, the callback gets the current user's, fetched fresh
-            // so it holds the purchase; a failed fetch leaves the entry for a later sighting.
+            // so it holds the purchase, and is skipped when the fetch fails or the user changed
+            // meanwhile. The entry then stays, for the app's next syncPurchases() or restore.
             if (!pendingPurchaseRegistry.hasDeferredEntry(purchaseToken)) return null
             val refreshed = try {
                 customerManager.getCustomerInfo(currentAppUserId, forceRefresh = true)
@@ -735,6 +736,7 @@ internal class AppActorPaymentProcessor(
                 throwIfCancellation(throwable)
                 return null
             }
+            if (identityStore.currentAppUserId != currentAppUserId) return null
             val resolvedProductId = pendingPurchaseRegistry.resolveDeferredEntry(purchaseToken) ?: return null
             onDeferredPurchaseResolved?.invoke(resolvedProductId, refreshed)
             return refreshed

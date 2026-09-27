@@ -2,10 +2,10 @@ package com.appactor.android.storage
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.appactor.android.backend.client.AppActorBackendJson
 import com.appactor.android.internal.logging.AppActorLogger
 import com.appactor.android.models.AppActorValidation
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
 import java.util.UUID
 
 private const val ANONYMOUS_APP_USER_ID_PREFIX: String = "appactor-anon-"
@@ -120,7 +120,7 @@ internal class AppActorSharedPrefsIdentityStore(
     // One key, so a reader never pairs one fold's anonymous ID with another's target.
     override val foldedAppUser: AppActorFoldedAppUser?
         get() = preferences.getString(KEY_FOLDED_APP_USER, null)?.let { stored ->
-            runCatching { Json.decodeFromString(AppActorFoldedAppUser.serializer(), stored) }.getOrNull()
+            runCatching { AppActorBackendJson.instance.decodeFromString(AppActorFoldedAppUser.serializer(), stored) }.getOrNull()
         }
 
     override fun setFoldedAppUser(fold: AppActorFoldedAppUser?) {
@@ -129,7 +129,7 @@ internal class AppActorSharedPrefsIdentityStore(
                 if (fold == null) {
                     remove(KEY_FOLDED_APP_USER)
                 } else {
-                    putString(KEY_FOLDED_APP_USER, Json.encodeToString(AppActorFoldedAppUser.serializer(), fold))
+                    putString(KEY_FOLDED_APP_USER, AppActorBackendJson.instance.encodeToString(AppActorFoldedAppUser.serializer(), fold))
                 }
             }.apply()
         }

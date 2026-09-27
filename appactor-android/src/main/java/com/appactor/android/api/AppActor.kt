@@ -531,8 +531,8 @@ public object AppActor {
                 )
                 val source = currentRuntime.customerManager.lastLoadSource()
                 val loggedInAppUserId = currentRuntime.identityStore.currentAppUserId
-                // Before the endIdentityTransition below posts what arrived meanwhile, which
-                // includes a pending purchase made under the anonymous ID and approved now.
+                // Before the endIdentityTransition below posts what arrived meanwhile, so its
+                // deferred-purchase check counts a purchase the anonymous ID made as this user's.
                 if (isAnonymousAppUserId(currentAppUserId) && loggedInAppUserId != null &&
                     loggedInAppUserId != currentAppUserId
                 ) {
