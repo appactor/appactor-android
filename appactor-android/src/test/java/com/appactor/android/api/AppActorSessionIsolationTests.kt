@@ -4,6 +4,8 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.appactor.android.backend.client.AppActorBackendJson
 import com.appactor.android.backend.dto.AppActorGoogleReceiptRequestDTO
+import com.appactor.android.backend.dto.AppActorGoogleRestoreRequestDTO
+import com.appactor.android.internal.runtime.runtimeTestPurchase
 import com.appactor.android.models.AppActorBridgeError
 import com.appactor.android.models.AppActorBridgeErrorCallback
 import com.appactor.android.models.AppActorCompletionCallback
@@ -13,6 +15,7 @@ import com.appactor.android.storage.AppActorAtomicJsonReceiptQueueStore
 import com.appactor.android.storage.AppActorReceiptQueuePhase
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -103,23 +106,44 @@ class AppActorSessionIsolationTests {
         }.use { backend ->
             AppActor.configure(configuration(backend, appUserId = "user_attr_a"))
 
-            val write = async(Dispatchers.Default) { AppActor.setEmail(EMAIL) }
-            assertTrue(emailPatchStarted.await(5, TimeUnit.SECONDS))
-            val epochBeforeLogout = identityEpoch()
-            val logout = async(Dispatchers.Default) { AppActor.logOut() }
-            // Let logOut switch the identity while the write is still in flight.
-            withTimeout(5_000L) {
-                while (identityEpoch() == epochBeforeLogout) delay(10)
-            }
-            releaseEmailPatch.countDown()
-            withTimeout(10_000L) {
-                write.await()
-                logout.await()
-            }
+            logOutWhileInFlight(emailPatchStarted, releaseEmailPatch) { AppActor.setEmail(EMAIL) }
 
             val nextAppUserId = AppActor.appUserId.orEmpty()
             assertTrue(nextAppUserId.startsWith("appactor-anon-"))
             assertTrue(attributeRequests.none { (path, body) -> nextAppUserId in path && body.contains(EMAIL) })
+        }
+    }
+
+    @Test
+    fun `a restore in flight during logout is not run again for the next user`() = runBlocking {
+        // Acknowledged, so only the restore sends it, not the launch sweep.
+        AppActor.storeAdapterFactory = {
+            FakeStoreAdapter(activePurchases = listOf(runtimeTestPurchase(obfuscatedAccountId = null).copy(isAcknowledged = true)))
+        }
+        val restoredAppUserIds = CopyOnWriteArrayList<String>()
+        val restoreStarted = CountDownLatch(1)
+        val releaseRestore = CountDownLatch(1)
+
+        TestBackendServer { request ->
+            if (request.path?.substringBefore("?") == "/v1/payment/restore/google") {
+                restoredAppUserIds += AppActorBackendJson.instance
+                    .decodeFromString<AppActorGoogleRestoreRequestDTO>(request.body.readUtf8())
+                    .appUserId
+                restoreStarted.countDown()
+                releaseRestore.await(5, TimeUnit.SECONDS)
+                // The purchase is user_restore_a's, whoever restores it: the backend merges the
+                // one asking into them.
+                jsonResponse(googleRestoreEnvelope(requestId = "req_restore", appUserId = "user_restore_a"))
+            } else {
+                customerBackend(request)
+            }
+        }.use { backend ->
+            AppActor.configure(configuration(backend, appUserId = "user_restore_a"))
+
+            logOutWhileInFlight(restoreStarted, releaseRestore) { AppActor.restorePurchases() }
+
+            assertEquals(listOf("user_restore_a"), restoredAppUserIds)
+            assertTrue(AppActor.appUserId.orEmpty().startsWith("appactor-anon-"))
         }
     }
 
@@ -167,6 +191,31 @@ class AppActorSessionIsolationTests {
             }
             path.startsWith("/v1/payment/users/") -> jsonResponse("""{"requestId":"req_attributes"}""")
             else -> jsonResponse("{}", 404)
+        }
+    }
+
+    /**
+     * Runs [operation] and, once [started] shows its request in flight, a logOut(), waiting until
+     * it has bumped the identity epoch. Then [release]s the request and waits for both.
+     */
+    private suspend fun logOutWhileInFlight(
+        started: CountDownLatch,
+        release: CountDownLatch,
+        operation: suspend () -> Unit,
+    ) {
+        coroutineScope {
+            val call = async(Dispatchers.Default) { operation() }
+            assertTrue(started.await(5, TimeUnit.SECONDS))
+            val epochBeforeLogout = identityEpoch()
+            val logout = async(Dispatchers.Default) { AppActor.logOut() }
+            withTimeout(5_000L) {
+                while (identityEpoch() == epochBeforeLogout) delay(10)
+            }
+            release.countDown()
+            withTimeout(10_000L) {
+                call.await()
+                logout.await()
+            }
         }
     }
 

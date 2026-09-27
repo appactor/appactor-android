@@ -3,6 +3,7 @@ package com.appactor.android.pipeline
 import com.appactor.android.backend.dto.AppActorGoogleReceiptRequestDTO
 import com.appactor.android.models.AppActorBridgeReceiptEvent
 import com.appactor.android.models.AppActorEnvironment
+import com.appactor.android.models.AppActorProductType
 import com.appactor.android.storage.AppActorReceiptQueueItem
 
 internal object AppActorReceiptRequestBuilder {
@@ -19,7 +20,11 @@ internal object AppActorReceiptRequestBuilder {
             packageName = item.packageName,
             environment = item.environment,
             productId = item.productId,
-            productType = item.productType,
+            // The backend types a one-time purchase from its own catalog and answers whether to
+            // consume or acknowledge it, so one the SDK couldn't type goes as a one-time purchase.
+            // Kept Unknown in the queue, a dead letter of it is never finished by a guess.
+            productType = item.productType.takeUnless { it == AppActorProductType.Unknown.wireValue }
+                ?: AppActorProductType.NonConsumable.wireValue,
             purchaseToken = item.purchaseToken,
             purchaseTime = item.purchaseTime,
             purchaseState = item.purchaseState,
