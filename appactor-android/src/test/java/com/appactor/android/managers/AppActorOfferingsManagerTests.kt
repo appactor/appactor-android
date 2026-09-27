@@ -3,8 +3,10 @@ package com.appactor.android.managers
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.appactor.android.backend.client.AppActorBackendClient
+import com.appactor.android.backend.client.AppActorBackendException
 import com.appactor.android.backend.client.AppActorBackendHttpResponse
 import com.appactor.android.backend.client.AppActorBackendJson
+import com.appactor.android.backend.dto.AppActorBackendErrorDTO
 import com.appactor.android.backend.dto.AppActorOfferingDTO
 import com.appactor.android.backend.dto.AppActorOfferingsEnvelopeDTO
 import com.appactor.android.backend.dto.AppActorOfferingsPayloadDTO
@@ -593,6 +595,36 @@ class AppActorOfferingsManagerTests {
         val error = runCatching { manager.getOfferings() }.exceptionOrNull()
 
         assertTrue(error is com.appactor.android.models.AppActorError.Unknown)
+    }
+
+    @Test
+    fun `get offerings serves the disk cache when the client refuses a 304`() = runBlocking {
+        val cacheStore = offeringsCacheStore("offerings-refused-304")
+        cacheStore.save(
+            payload = AppActorBackendJson.instance.encodeToString(fixtureOfferings()),
+            eTag = "\"etag_123\"",
+            verified = true,
+        )
+        val mockClient = mockk<AppActorBackendClient>(relaxed = true)
+        coEvery { mockClient.getOfferings(any()) } throws AppActorBackendException.Http(
+            statusCode = 304,
+            error = AppActorBackendErrorDTO(code = "CACHE_INCONSISTENCY"),
+        )
+        val mockStoreAdapter = mockk<AppActorStoreAdapter>(relaxed = true)
+        coEvery { mockStoreAdapter.queryProductDetails(any()) } answers {
+            val requests = firstArg<List<AppActorStoreProductRequest>>()
+            requests.mapNotNull { request -> pricedProducts()[requestKey(request)] }
+        }
+        val manager = AppActorOfferingsManager(
+            backendClient = mockClient,
+            cacheStore = cacheStore,
+            offlineProductCatalogStore = offlineProductCatalogStore("offerings-refused-304"),
+            storeAdapter = mockStoreAdapter,
+        )
+
+        val offerings = manager.getOfferings()
+
+        assertNotNull(offerings.current)
     }
 
     @Test

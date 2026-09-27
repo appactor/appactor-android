@@ -3,7 +3,6 @@ package com.appactor.android.cache
 import android.content.Context
 import com.appactor.android.backend.client.AppActorBackendJson
 import com.appactor.android.internal.logging.AppActorLogger
-import com.appactor.android.models.AppActorVerificationResult
 import java.io.File
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
@@ -100,17 +99,21 @@ internal class AppActorCacheDiskStore(
         directory.deleteRecursively()
     }
 
-    fun clearAllUnverified() = lock.withLock {
+    /** Removes every entry that doesn't hold a verified response; returns the removed cache keys. */
+    fun clearAllUnverified(): Set<String> = lock.withLock {
+        val removed = mutableSetOf<String>()
         val files = directory.listFiles().orEmpty()
         files.filter { it.extension == "json" }.forEach { file ->
             val entry = runCatching {
                 AppActorBackendJson.instance.decodeFromString<AppActorCacheEntry>(file.readText())
             }.onFailure { AppActorLogger.warn("[$TAG] Cache entry decode failed during cleanup: ${it.message}") }
                 .getOrNull()
-            if (entry == null || entry.resolvedStatus == AppActorVerificationResult.Failed) {
+            if (entry == null || !entry.resolvedStatus.isVerified) {
+                removed += file.nameWithoutExtension
                 file.delete()
             }
         }
+        removed
     }
 
     private fun fileFor(resource: AppActorCacheResource): File {

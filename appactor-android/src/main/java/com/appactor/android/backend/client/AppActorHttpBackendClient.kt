@@ -3,6 +3,7 @@ package com.appactor.android.backend.client
 import com.appactor.android.backend.auth.AppActorAuthHeaderProvider
 import com.appactor.android.backend.dto.AppActorAttributionRequestDTO
 import com.appactor.android.backend.dto.AppActorAttributesPatchRequestDTO
+import com.appactor.android.backend.dto.AppActorBackendErrorDTO
 import com.appactor.android.backend.dto.AppActorBackendErrorEnvelopeDTO
 import com.appactor.android.backend.dto.AppActorCustomerEnvelopeDTO
 import com.appactor.android.backend.dto.AppActorExperimentAssignmentEnvelopeDTO
@@ -354,7 +355,7 @@ internal class AppActorHttpBackendClient(
             )
 
             try {
-                val rawResponse = executeResendingReplayedNonce(request, initialRequest)
+                val rawResponse = executeRevalidating(request, initialRequest)
                 val errorEnvelope = parseErrorEnvelope(rawResponse.rawBody)
                 val resolvedRequestId = errorEnvelope?.requestId ?: rawResponse.requestId
 
@@ -418,13 +419,21 @@ internal class AppActorHttpBackendClient(
                     }
 
                     else -> {
-                        additionalNonRetryableHandler?.invoke(rawResponse.statusCode, resolvedRequestId)
-                        throw AppActorBackendException.Http(
+                        val httpError = AppActorBackendException.Http(
                             statusCode = rawResponse.statusCode,
                             requestId = resolvedRequestId,
                             error = errorEnvelope?.error,
                             rawBodyLength = rawResponse.rawBody?.length,
                         )
+                        // The backend asks the SDK to re-drive a login that met a merge in progress.
+                        if (errorEnvelope.isConflict(rawResponse.statusCode, "Concurrent identity merge in progress") &&
+                            attempt < totalAttempts - 1
+                        ) {
+                            lastError = httpError
+                            continue
+                        }
+                        additionalNonRetryableHandler?.invoke(rawResponse.statusCode, resolvedRequestId)
+                        throw httpError
                     }
                 }
             } catch (backendException: AppActorBackendException.Signature) {
@@ -478,7 +487,7 @@ internal class AppActorHttpBackendClient(
     /**
      * OkHttp silently re-sends a request whose connection failed after the backend had it, nonce
      * included, and the backend answers the replayed nonce with a 409. The request went through,
-     * so it is sent again, once, with a fresh nonce. Not inline, unlike its caller.
+     * so it is sent again, once, with a fresh nonce.
      */
     private suspend fun executeResendingReplayedNonce(request: Request, initialRequest: Request): RawBackendResponse {
         val response = executeRaw(request)
@@ -487,6 +496,50 @@ internal class AppActorHttpBackendClient(
         if (resent.isReplayedNonce()) throw IOException("Response signing nonce was replayed twice.")
         return resent
     }
+
+    /**
+     * A 304 revalidates only the validator its own request sent. A nonce signature doesn't cover
+     * the ETag, so a proxy that rewrote If-None-Match to `*` once would otherwise get the cached
+     * body re-stamped with the server's current ETag, and every genuine 304 after it would keep it.
+     * One that doesn't (unsigned, or for another ETag) is fetched once more without the validator;
+     * a 304 to a request that sent none is refused.
+     */
+    private suspend fun executeRevalidating(request: Request, initialRequest: Request): RawBackendResponse {
+        val response = executeResendingReplayedNonce(request, initialRequest)
+        if (response.revalidatesSentETag()) return response
+        if (response.sentETag == null) throw response.notModifiedFailure()
+        val refetched = executeResendingReplayedNonce(resigned(initialRequest), initialRequest)
+        if (!refetched.revalidatesSentETag()) throw refetched.notModifiedFailure()
+        return refetched
+    }
+
+    /** True for anything but a 304, and for a verified 304 of the ETag its request sent (W/ aside). */
+    private fun RawBackendResponse.revalidatesSentETag(): Boolean {
+        if (statusCode != 304) return true
+        val sent = sentETag ?: return false
+        if (isUnverified()) return false
+        return eTag == null || eTag.removePrefix("W/") == sent.removePrefix("W/")
+    }
+
+    private fun RawBackendResponse.notModifiedFailure(): AppActorBackendException =
+        if (isUnverified()) {
+            AppActorBackendException.Signature(
+                result = AppActorResponseSignatureVerifier.VerificationResult.SignatureMissing,
+                requestId = requestId,
+            )
+        } else {
+            AppActorBackendException.Http(
+                statusCode = 304,
+                requestId = requestId,
+                error = AppActorBackendErrorDTO(
+                    code = "CACHE_INCONSISTENCY",
+                    message = "Server returned 304 for a validator this request did not send",
+                ),
+            )
+        }
+
+    private fun RawBackendResponse.isUnverified(): Boolean =
+        configuration.options.verifyResponseSignatures && !signatureVerified
 
     private fun parseErrorEnvelope(rawBody: String?): AppActorBackendErrorEnvelopeDTO? {
         return rawBody
@@ -587,6 +640,7 @@ internal class AppActorHttpBackendClient(
 
                 return RawBackendResponse(
                     statusCode = statusCode,
+                    sentETag = request.header("If-None-Match"),
                     rawBody = rawBody,
                     requestId = requestId,
                     eTag = eTag,
@@ -627,22 +681,29 @@ internal class AppActorHttpBackendClient(
             }
             ?.let(::signatureRequestBinding)
 
-        return when (
-            val result = AppActorResponseSignatureVerifier.verify(
-                headers = signatureHeaders,
-                body = rawBody,
-                sentNonce = sentNonce,
-                apiKey = configuration.apiKey,
-                requestPath = signatureRequestTarget(request),
-                eTag = eTag.orEmpty(),
-                requestBinding = requestBinding,
-            )
+        val result = AppActorResponseSignatureVerifier.verify(
+            headers = signatureHeaders,
+            body = rawBody,
+            sentNonce = sentNonce,
+            apiKey = configuration.apiKey,
+            requestPath = signatureRequestTarget(request),
+            eTag = eTag.orEmpty(),
+            requestBinding = requestBinding,
+        )
+        // A 304 without its signature is left to the 304 check, which fetches once more without
+        // the validator (as iOS does).
+        if (statusCode == 304 &&
+            (result == AppActorResponseSignatureVerifier.VerificationResult.SigningNotSupported ||
+                result == AppActorResponseSignatureVerifier.VerificationResult.SignatureMissing)
         ) {
+            return false
+        }
+        return when (result) {
             AppActorResponseSignatureVerifier.VerificationResult.Success -> true
             AppActorResponseSignatureVerifier.VerificationResult.SigningNotSupported -> {
-                // Salt-based (CDN) endpoints may not support signing during rollout.
-                // Only enforce requireResponseSignatures on nonce-based endpoints.
-                if (configuration.options.requireResponseSignatures && sentNonce != null) {
+                // The backend signs every JSON response on the nonce and the salt routes alike, so
+                // an unsigned one had its signature stripped on the way.
+                if (configuration.options.requireResponseSignatures) {
                     throw AppActorBackendException.Signature(
                         result = AppActorResponseSignatureVerifier.VerificationResult.SignatureMissing,
                         requestId = requestId,
@@ -675,9 +736,12 @@ internal class AppActorHttpBackendClient(
         return if (query.isNullOrEmpty()) encodedPath else "$encodedPath?$query"
     }
 
+    // A 409 the backend marks only by its message.
+    private fun AppActorBackendErrorEnvelopeDTO?.isConflict(statusCode: Int, message: String): Boolean =
+        statusCode == 409 && this?.error?.message?.contains(message, ignoreCase = true) == true
+
     private fun RawBackendResponse.isReplayedNonce(): Boolean =
-        statusCode == 409 &&
-            parseErrorEnvelope(rawBody)?.error?.message?.contains("nonce has already been used", ignoreCase = true) == true
+        statusCode == 409 && parseErrorEnvelope(rawBody).isConflict(statusCode, "nonce has already been used")
 
     private fun parseBooleanHeader(value: String?): Boolean? {
         return when (value?.trim()?.lowercase()) {
@@ -717,6 +781,7 @@ internal fun buildAppActorUrl(
 
 private data class RawBackendResponse(
     val statusCode: Int,
+    val sentETag: String?,
     val rawBody: String?,
     val requestId: String?,
     val eTag: String?,

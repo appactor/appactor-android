@@ -34,8 +34,6 @@ import com.appactor.android.storage.AppActorReceiptQueuePhase
 import com.appactor.android.storage.AppActorReceiptQueueStore
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.withContext
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
@@ -101,7 +99,7 @@ internal class AppActorPaymentProcessor(
     )
 
     // Owns the retry-wake scheduler state: retryWakeJob, scheduledRetryAtMillis,
-    // and its exclusive retryWakeLock (audit android-6). The drain it triggers
+    // drainingJob, and its exclusive retryWakeLock (audit android-6). The drain it triggers
     // runs under the shared pipelineMutex via the supplied callback — the
     // orchestrator keeps the mutex; the scheduler never touches it. The
     // rate-limit cooldown check lives in the receipt-queue drainer (shared with
@@ -118,8 +116,7 @@ internal class AppActorPaymentProcessor(
             val drained = pipelineMutex.withLock {
                 receiptQueueDrainer.drainAllAssumingLocked(limit)
             }
-            // A reschedule cancels this job once the drain is done; the publish must not be lost.
-            drained?.let { withContext(NonCancellable) { onRetryWakeDrained?.invoke(it) } }
+            drained?.let { onRetryWakeDrained?.invoke(it) }
         },
     )
 

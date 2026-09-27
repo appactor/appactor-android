@@ -9,6 +9,7 @@ import com.appactor.android.backend.dto.AppActorAttributesPatchRequestDTO
 import com.appactor.android.backend.dto.AppActorIdentifyRequestDTO
 import com.appactor.android.backend.dto.AppActorGoogleReceiptRequestDTO
 import com.appactor.android.backend.dto.AppActorIntegrationIdentifierRequestDTO
+import com.appactor.android.backend.dto.AppActorLoginRequestDTO
 import com.appactor.android.models.AppActorConfiguration
 import com.appactor.android.models.AppActorPlatformInfo
 import kotlinx.coroutines.runBlocking
@@ -531,6 +532,153 @@ class AppActorHttpBackendClientTests {
         assertTrue(captured[2].third.contains("\"status\":\"non_organic\""))
         assertTrue(captured[2].third.contains("\"campaign_name\":\"spring\""))
         assertTrue(captured[2].third.contains("\"ad_group_id\":\"ag_123\""))
+    }
+
+    @Test
+    fun `an unsigned offerings response is refused when signatures are required`() = runBlocking {
+        val client = backendClient(
+            okHttpClient = OkHttpClient.Builder()
+                .addInterceptor { chain ->
+                    response(
+                        chain = chain,
+                        code = 200,
+                        body = fixture("fixtures/backend/offerings_android_sample.json"),
+                    )
+                }
+                .build(),
+            options = AppActorConfiguration.Options(
+                verifyResponseSignatures = true,
+                requireResponseSignatures = true,
+            ),
+        )
+
+        try {
+            client.getOfferings(eTag = null)
+            throw AssertionError("Expected signature exception")
+        } catch (error: AppActorBackendException.Signature) {
+            assertEquals("SignatureMissing", error.result.name)
+        }
+    }
+
+    @Test
+    fun `a 304 for another etag is fetched again without the validator`() = runBlocking {
+        val sentValidators = mutableListOf<String?>()
+        val client = backendClient(
+            okHttpClient = OkHttpClient.Builder()
+                .addInterceptor { chain ->
+                    sentValidators += chain.request().header("If-None-Match")
+                    if (sentValidators.size == 1) {
+                        // A proxy sent If-None-Match: * instead, and the server answered its current ETag.
+                        response(chain = chain, code = 304, body = "", headers = mapOf("ETag" to "\"E1\""))
+                    } else {
+                        response(
+                            chain = chain,
+                            code = 200,
+                            body = fixture("fixtures/backend/customer_android_active.json"),
+                            headers = mapOf("ETag" to "\"E1\""),
+                        )
+                    }
+                }
+                .build(),
+            options = AppActorConfiguration.Options(
+                verifyResponseSignatures = false,
+                requireResponseSignatures = false,
+            ),
+        )
+
+        val result = client.getCustomer(appUserId = "user_android_123", eTag = "\"E0\"")
+
+        assertEquals(listOf("\"E0\"", null), sentValidators)
+        assertFalse(result.isNotModified)
+        assertNotNull(result.body)
+    }
+
+    @Test
+    fun `a 304 to a request without a validator is refused`() = runBlocking {
+        val attempts = AtomicInteger(0)
+        val client = backendClient(
+            okHttpClient = OkHttpClient.Builder()
+                .addInterceptor { chain ->
+                    attempts.incrementAndGet()
+                    response(chain = chain, code = 304, body = "", headers = mapOf("ETag" to "\"E1\""))
+                }
+                .build(),
+            options = AppActorConfiguration.Options(
+                verifyResponseSignatures = false,
+                requireResponseSignatures = false,
+            ),
+        )
+
+        try {
+            client.getCustomer(appUserId = "user_android_123", eTag = null)
+            throw AssertionError("Expected HTTP exception")
+        } catch (error: AppActorBackendException.Http) {
+            assertEquals(304, error.statusCode)
+            assertEquals("CACHE_INCONSISTENCY", error.error?.code)
+            assertEquals(1, attempts.get())
+        }
+    }
+
+    @Test
+    fun `a 304 for the sent weak etag revalidates the cache`() = runBlocking {
+        val client = backendClient(
+            okHttpClient = OkHttpClient.Builder()
+                .addInterceptor { chain ->
+                    response(chain = chain, code = 304, body = "", headers = mapOf("ETag" to "\"E0\""))
+                }
+                .build(),
+            options = AppActorConfiguration.Options(
+                verifyResponseSignatures = false,
+                requireResponseSignatures = false,
+            ),
+        )
+
+        val result = client.getCustomer(appUserId = "user_android_123", eTag = "W/\"E0\"")
+
+        assertTrue(result.isNotModified)
+    }
+
+    @Test
+    fun `login is sent again after a concurrent merge conflict`() = runBlocking {
+        val attempts = AtomicInteger(0)
+        val client = backendClient(
+            okHttpClient = OkHttpClient.Builder()
+                .addInterceptor { chain ->
+                    if (attempts.incrementAndGet() == 1) {
+                        response(
+                            chain = chain,
+                            code = 409,
+                            body = """
+                                {
+                                  "requestId": "req_login_409",
+                                  "error": {
+                                    "code": "CONFLICT",
+                                    "message": "Concurrent identity merge in progress, please retry"
+                                  }
+                                }
+                            """.trimIndent(),
+                        )
+                    } else {
+                        response(
+                            chain = chain,
+                            code = 200,
+                            body = fixture("fixtures/backend/identify_android_sample.json"),
+                        )
+                    }
+                }
+                .build(),
+            options = AppActorConfiguration.Options(
+                verifyResponseSignatures = false,
+                requireResponseSignatures = false,
+            ),
+        )
+
+        val result = client.login(
+            AppActorLoginRequestDTO(currentAppUserId = "appactor-anon-1", newAppUserId = "user_android_123"),
+        )
+
+        assertEquals(2, attempts.get())
+        assertEquals("user_android_123", result.body?.appUserId)
     }
 
     private fun backendClient(

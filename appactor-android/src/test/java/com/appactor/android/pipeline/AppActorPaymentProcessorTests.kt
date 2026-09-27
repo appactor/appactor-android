@@ -3170,6 +3170,54 @@ class AppActorPaymentProcessorTests {
     }
 
     @Test
+    fun `a restore failed by a server error reports the transient server error`() = runBlocking {
+        val restoreResponse = fixtureRestoreResponse("fixtures/backend/google_restore_sample.json")
+        val customerEnvelope = fixtureCustomerEnvelope("fixtures/backend/customer_android_active.json")
+        val historyPurchases = (0 until 21).map { index ->
+            historyRecord(
+                productId = "com.appactor.pro.monthly",
+                purchaseToken = "token_history_503_$index",
+                purchaseTimeMillis = 1_710_000_000_000L + index,
+            )
+        }
+        val dependencies = createDependencies(
+            receiptResponse = AppActorBackendHttpResponse(
+                body = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json"),
+                statusCode = 200,
+                requestId = "unused",
+                signatureVerified = true,
+            ),
+            customerResponse = AppActorBackendHttpResponse(
+                body = customerEnvelope,
+                statusCode = 200,
+                requestId = customerEnvelope.requestId,
+                signatureVerified = true,
+            ),
+            historyPurchases = historyPurchases,
+            restoreOutcomes = listOf(
+                RestoreOutcome.Success(
+                    AppActorBackendHttpResponse(
+                        body = restoreResponse,
+                        statusCode = 200,
+                        requestId = restoreResponse.requestId,
+                        signatureVerified = true,
+                    )
+                ),
+                RestoreOutcome.Failure(AppActorBackendException.Http(statusCode = 503, retryAfterSeconds = 30.0)),
+            ),
+        )
+
+        val error = runCatching {
+            dependencies.processor.restorePurchases()
+        }.exceptionOrNull()
+
+        val serverError = error as AppActorError.Server
+        assertEquals(503, serverError.statusCode)
+        assertEquals(30.0, serverError.retryAfterSeconds)
+        assertTrue(serverError.isTransient)
+    }
+
+    @Test
     fun `restore purchases falls back to single receipt pipeline when bulk restore fails`() = runBlocking {
         val customerEnvelope = fixtureCustomerEnvelope("fixtures/backend/customer_android_active.json")
         val activePurchase = AppActorStorePurchase(
@@ -3554,24 +3602,6 @@ class AppActorPaymentProcessorTests {
     }
 
     // endregion
-
-    // TODO(android-6 coverage): lock in the retry-wake scheduler invariants once
-    // the scheduler exposes a deterministic seam. The two invariants are:
-    //   (a) launchRetryWake's completion cleanup must only clear retryWakeJob /
-    //       scheduledRetryAtMillis when `retryWakeJob === thisJob`, so a newer
-    //       schedule that replaced retryWakeJob after this wake started is never
-    //       clobbered (no lost-cancel / orphaned-coroutine).
-    //   (b) scheduleNextRetryWake's dedup-skip (scheduledRetryAtMillis == nextReadyAt
-    //       && retryWakeJob.isActive) must not spawn a duplicate concurrent wake job.
-    // These are NOT deterministically testable from here: retryWakeJob and
-    // scheduledRetryAtMillis are private with no @VisibleForTesting accessor or
-    // observable projection, createDependencies cannot inject a TestScope as the
-    // processor's backgroundScope, and the wakes run on the real Dispatchers.Default
-    // with delay() while this harness uses runBlocking — so the race needs sub-step
-    // interleaving control that is unavailable, and the only behavioral signal
-    // (drain/post count) is masked by posted-ledger dedup. Asserting either
-    // invariant today would require a Thread.sleep-and-hope (flaky) test or a
-    // production change to add a test seam; both are out of scope for this audit.
 
     // region — Dependencies
 

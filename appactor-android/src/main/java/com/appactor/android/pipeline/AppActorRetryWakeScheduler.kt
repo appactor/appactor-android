@@ -8,6 +8,7 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
@@ -21,9 +22,10 @@ import kotlinx.coroutines.launch
  *  - [retryWakeJob]: the currently armed wake coroutine, or null.
  *  - [scheduledRetryAtMillis]: the wall-clock millis the armed job is scheduled to
  *    fire for, or null when running an immediate drain / no job is armed.
- *  - [retryWakeLock]: dedicated monitor guarding both fields above. It is exclusive
+ *  - [drainingJob]: the wake coroutine while it drains, or null.
+ *  - [retryWakeLock]: dedicated monitor guarding the fields above. It is exclusive
  *    to this collaborator — no other code touches this lock. All inspection and
- *    mutation of [retryWakeJob]/[scheduledRetryAtMillis] (including the cancel+assign
+ *    mutation of [retryWakeJob]/[scheduledRetryAtMillis]/[drainingJob] (including the cancel+assign
  *    sequence in [scheduleNextRetryWake] and the completion cleanup inside the launched
  *    wake coroutines) happens under this lock so they share a consistent happens-before
  *    relationship regardless of the calling thread or whether the pipeline mutex is held.
@@ -47,7 +49,7 @@ internal class AppActorRetryWakeScheduler(
 ) {
 
     // Dedicated monitor guarding the retry-wake scheduler state below. All
-    // reads/writes of retryWakeJob and scheduledRetryAtMillis — including the
+    // reads/writes of retryWakeJob, scheduledRetryAtMillis and drainingJob — including the
     // cancel+assign sequence in scheduleNextRetryWake() and the cleanup inside
     // the launched wake coroutines — must happen under this lock so they share a
     // consistent happens-before relationship regardless of the calling thread or
@@ -55,6 +57,11 @@ internal class AppActorRetryWakeScheduler(
     private val retryWakeLock = Any()
     private var retryWakeJob: Job? = null
     private var scheduledRetryAtMillis: Long? = null
+
+    // The wake job while it drains. It re-arms the wake itself when the drain ends, so it is never
+    // replaced meanwhile: cancelling it would abort the drain mid-batch and leave the receipts it
+    // claimed in Posting until the stale-claim threshold.
+    private var drainingJob: Job? = null
 
     private fun nextReadyAtMillis(nowMillis: Long = dateProviderMillis()): Long? {
         val stalePostingThreshold = nowMillis - AppActorAtomicJsonReceiptQueueStore.STALE_CLAIM_THRESHOLD_MILLIS
@@ -89,12 +96,13 @@ internal class AppActorRetryWakeScheduler(
 
     fun scheduleNextRetryWake(limit: Int = 20) {
         val now = dateProviderMillis()
-        // All inspection and mutation of retryWakeJob/scheduledRetryAtMillis is
+        // All inspection and mutation of retryWakeJob/scheduledRetryAtMillis/drainingJob is
         // funnelled through this monitor so the cancel+assign is atomic and
         // visible across the coroutine Mutex callers, the lock-free callers, and
         // the background wake threads. The drain itself is launched (not run)
         // inside the lock, so we never hold the monitor across suspension.
         synchronized(retryWakeLock) {
+            if (drainingJob?.isActive == true) return
             val nextReadyAt = nextReadyAtMillis(now) ?: run {
                 retryWakeJob?.cancel()
                 retryWakeJob = null
@@ -103,8 +111,8 @@ internal class AppActorRetryWakeScheduler(
             }
 
             if (nextReadyAt <= now) {
-                val runningImmediateDrain = scheduledRetryAtMillis == null && retryWakeJob?.isActive == true
-                if (runningImmediateDrain) {
+                val immediateWakeArmed = scheduledRetryAtMillis == null && retryWakeJob?.isActive == true
+                if (immediateWakeArmed) {
                     return
                 }
                 retryWakeJob?.cancel()
@@ -128,31 +136,42 @@ internal class AppActorRetryWakeScheduler(
      * [retryWakeJob]. Must be called while holding [retryWakeLock].
      *
      * The completion cleanup re-acquires [retryWakeLock] and only clears the
-     * scheduler fields when they still reference *this* job, so a newer schedule
-     * that replaced [retryWakeJob] after this one started is never clobbered —
-     * preventing the lost-cancel / orphaned-coroutine race (audit android-6).
+     * scheduler fields while they still reference *this* job. A wake is replaced
+     * only before it drains (it then returns without draining) or after a reset
+     * cancelled it, so a newer schedule is never clobbered — preventing the
+     * lost-cancel / orphaned-coroutine race (audit android-6).
      */
     private fun launchRetryWake(limit: Int, delayMillis: Long) {
         // Started lazily so the field assignment below completes before the
-        // coroutine body can read `thisJob`, guaranteeing the identity check in
-        // the completion cleanup observes an initialized reference.
+        // coroutine body can read `thisJob`, guaranteeing its identity checks
+        // observe an initialized reference.
         lateinit var thisJob: Job
         thisJob = backgroundScope.launch(start = CoroutineStart.LAZY) {
             if (delayMillis > 0L) {
                 delay(delayMillis)
             }
-            runDrainUnderPipelineLock(limit)
-            val isStillActiveJob = synchronized(retryWakeLock) {
-                if (retryWakeJob === thisJob) {
-                    retryWakeJob = null
-                    scheduledRetryAtMillis = null
-                    true
-                } else {
-                    false
-                }
+            // A job replaced after its delay ended must not drain: its cancel would only land
+            // once it had claimed receipts, which then wait in Posting.
+            synchronized(retryWakeLock) {
+                if (retryWakeJob !== thisJob) return@launch
+                drainingJob = thisJob
             }
-            if (isStillActiveJob) {
-                scheduleNextRetryWake(limit)
+            try {
+                runDrainUnderPipelineLock(limit)
+            } finally {
+                synchronized(retryWakeLock) {
+                    if (retryWakeJob === thisJob) {
+                        retryWakeJob = null
+                        scheduledRetryAtMillis = null
+                        drainingJob = null
+                    }
+                }
+                // Nothing replaces a draining job, so only a cancel (reset) skips this. Also after
+                // a failed drain: the wakes it asked for were held back, and what it had claimed
+                // waits in Posting until the stale-claim threshold, so this can't spin.
+                if (isActive) {
+                    scheduleNextRetryWake(limit)
+                }
             }
         }
         retryWakeJob = thisJob

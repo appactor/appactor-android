@@ -4,6 +4,7 @@ import android.content.Context
 import com.appactor.android.backend.client.AppActorBackendJson
 import com.appactor.android.internal.logging.AppActorLogger
 import com.appactor.android.models.AppActorProductType
+import com.appactor.android.models.appActorPublicReceiptId
 import kotlinx.serialization.Serializable
 import java.io.File
 import java.util.concurrent.locks.ReentrantLock
@@ -254,7 +255,7 @@ internal class AppActorAtomicJsonReceiptQueueStore(
                 // Disk write failed — keep the in-memory state so the current
                 // session can still process this item. It will be lost on restart.
                 items = updated.toMutableMap()
-                AppActorLogger.warn("[$TAG] Receipt queue persist failed on upsert for key=${item.key}; in-memory state updated, will be lost on restart")
+                AppActorLogger.warn("[$TAG] Receipt queue persist failed on upsert for ${appActorPublicReceiptId(item.key)}; in-memory state updated, will be lost on restart")
             }
         }
     }
@@ -314,7 +315,7 @@ internal class AppActorAtomicJsonReceiptQueueStore(
             updated[item.key] = item
             if (!persist(updated, rateLimitCooldownMillis)) {
                 items = updated.toMutableMap()
-                AppActorLogger.warn("[$TAG] Receipt queue persist failed on update for key=${item.key}; in-memory state updated, will be lost on restart")
+                AppActorLogger.warn("[$TAG] Receipt queue persist failed on update for ${appActorPublicReceiptId(item.key)}; in-memory state updated, will be lost on restart")
             }
         }
     }
@@ -325,7 +326,7 @@ internal class AppActorAtomicJsonReceiptQueueStore(
             updated.remove(key)
             if (!persist(updated, rateLimitCooldownMillis)) {
                 items = updated.toMutableMap()
-                AppActorLogger.warn("[$TAG] Receipt queue persist failed on remove for key=$key; in-memory state updated, will be lost on restart")
+                AppActorLogger.warn("[$TAG] Receipt queue persist failed on remove for ${appActorPublicReceiptId(key)}; in-memory state updated, will be lost on restart")
             }
         }
     }
@@ -421,7 +422,7 @@ internal class AppActorAtomicJsonReceiptQueueStore(
         val persisted = raw?.let {
             runCatching {
                 AppActorBackendJson.instance.decodeFromString<PersistedQueueState>(it)
-            }.onFailure { AppActorLogger.warn("[$TAG] Receipt queue decode failed: ${it.message}") }
+            }.onFailure { AppActorLogger.warn("[$TAG] Receipt queue decode failed: ${it::class.java.simpleName}") }
                 .getOrNull()
         }
 

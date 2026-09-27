@@ -648,7 +648,8 @@ internal class AppActorOfferingsManager(
     private fun shouldFallbackToCache(throwable: Throwable): Boolean {
         return when (throwable) {
             is AppActorBackendException.Network -> true
-            is AppActorBackendException.Http -> throwable.statusCode >= 500
+            // A 304 the client refused (CACHE_INCONSISTENCY) falls back like iOS does.
+            is AppActorBackendException.Http -> throwable.statusCode >= 500 || throwable.statusCode == 304
             else -> false
         }
     }

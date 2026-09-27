@@ -92,7 +92,7 @@ internal class AppActorAtomicJsonPostedLedgerStore(
         val persisted = raw?.let {
             runCatching {
                 AppActorBackendJson.instance.decodeFromString<PersistedLedgerState>(it)
-            }.onFailure { AppActorLogger.warn("[$TAG] Posted ledger decode failed: ${it.message}") }
+            }.onFailure { AppActorLogger.warn("[$TAG] Posted ledger decode failed: ${it::class.java.simpleName}") }
                 .getOrNull()
         }
 
