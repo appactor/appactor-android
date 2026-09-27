@@ -488,7 +488,7 @@ internal class AppActorHttpBackendClient(
     /**
      * OkHttp silently re-sends a request whose connection failed after the backend had it, nonce
      * included, and the backend answers the replayed nonce with a 409. The request went through,
-     * so it is sent again, once, with a fresh nonce. Not inline, unlike its caller.
+     * so it is sent again, once, with a fresh nonce.
      */
     private suspend fun executeResendingReplayedNonce(request: Request, initialRequest: Request): RawBackendResponse {
         val response = executeRaw(request)
@@ -500,8 +500,7 @@ internal class AppActorHttpBackendClient(
 
     /**
      * A 304 that doesn't revalidate what its request sent (unsigned, or for another ETag) is
-     * fetched once more without the validator. A CDN edge answering the validator itself heals
-     * this way; a second bad 304 is refused by the caller.
+     * fetched once more without the validator; a second bad 304 is refused by the caller.
      */
     private suspend fun executeRevalidating(request: Request, initialRequest: Request): RawBackendResponse {
         val response = executeResendingReplayedNonce(request, initialRequest)
@@ -675,23 +674,29 @@ internal class AppActorHttpBackendClient(
             }
             ?.let(::signatureRequestBinding)
 
-        return when (
-            val result = AppActorResponseSignatureVerifier.verify(
-                headers = signatureHeaders,
-                body = rawBody,
-                sentNonce = sentNonce,
-                apiKey = configuration.apiKey,
-                requestPath = signatureRequestTarget(request),
-                eTag = eTag.orEmpty(),
-                requestBinding = requestBinding,
-            )
+        val result = AppActorResponseSignatureVerifier.verify(
+            headers = signatureHeaders,
+            body = rawBody,
+            sentNonce = sentNonce,
+            apiKey = configuration.apiKey,
+            requestPath = signatureRequestTarget(request),
+            eTag = eTag.orEmpty(),
+            requestBinding = requestBinding,
+        )
+        // A 304 without its signature is left to the 304 check, which fetches once more without
+        // the validator (as iOS does).
+        if (statusCode == 304 &&
+            (result == AppActorResponseSignatureVerifier.VerificationResult.SigningNotSupported ||
+                result == AppActorResponseSignatureVerifier.VerificationResult.SignatureMissing)
         ) {
+            return false
+        }
+        return when (result) {
             AppActorResponseSignatureVerifier.VerificationResult.Success -> true
             AppActorResponseSignatureVerifier.VerificationResult.SigningNotSupported -> {
-                // The backend signs every response on the nonce and the salt routes alike, so an
-                // unsigned one had its signature stripped on the way. An unsigned 304 is left to
-                // the 304 check, which fetches once more without the validator.
-                if (configuration.options.requireResponseSignatures && statusCode != 304) {
+                // The backend signs every JSON response on the nonce and the salt routes alike, so
+                // an unsigned one had its signature stripped on the way.
+                if (configuration.options.requireResponseSignatures) {
                     throw AppActorBackendException.Signature(
                         result = AppActorResponseSignatureVerifier.VerificationResult.SignatureMissing,
                         requestId = requestId,

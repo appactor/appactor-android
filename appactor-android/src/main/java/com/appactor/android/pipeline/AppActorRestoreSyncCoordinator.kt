@@ -410,8 +410,9 @@ internal class AppActorRestoreSyncCoordinator(
                     .subList(batchIndex, restoreBatches.size)
                     .any { remainingBatch -> remainingBatch.any { !it.isActive } }
                 if (remainingHistoryRestore) {
-                    fallbackCustomer.exceptionOrNull()?.let(throwable::addSuppressed)
-                    throw throwable.toAppActorError("Failed to restore full Google Play purchase history.")
+                    val error = throwable.toAppActorError("Failed to restore full Google Play purchase history.")
+                    fallbackCustomer.exceptionOrNull()?.let(error::addSuppressed)
+                    throw error
                 }
                 return fallbackCustomer.getOrElse { syncThrowable ->
                     if (syncThrowable is CancellationException) throw syncThrowable

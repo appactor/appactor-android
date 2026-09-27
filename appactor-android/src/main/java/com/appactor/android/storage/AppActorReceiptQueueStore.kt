@@ -422,7 +422,7 @@ internal class AppActorAtomicJsonReceiptQueueStore(
         val persisted = raw?.let {
             runCatching {
                 AppActorBackendJson.instance.decodeFromString<PersistedQueueState>(it)
-            }.onFailure { AppActorLogger.warn("[$TAG] Receipt queue decode failed: ${it.message?.substringBefore('\n')}") }
+            }.onFailure { AppActorLogger.warn("[$TAG] Receipt queue decode failed: ${it::class.java.simpleName}") }
                 .getOrNull()
         }
 

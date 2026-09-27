@@ -85,7 +85,7 @@ class GooglePlayBillingClientBridgeTests {
     }
 
     @Test
-    fun `a live pending prepaid plan update is reported under the new token`() = runBlocking {
+    fun `a live pending prepaid plan update is not reported as a purchase`() = runBlocking {
         var listener: com.android.billingclient.api.PurchasesUpdatedListener? = null
         val bridge = GooglePlayBillingClientBridge(
             context = context,
@@ -94,18 +94,25 @@ class GooglePlayBillingClientBridgeTests {
                 FakeBillingClient()
             },
         )
+        val completed = com.android.billingclient.api.Purchase(
+            """{"orderId":"GPA.new","productIds":["prepaid.yearly"],"purchaseToken":"token_new",
+               "purchaseState":0,"purchaseTime":1710000100000,"acknowledged":false}""",
+            "signature",
+        )
 
-        // No purchase flow is waiting: the update arrives after the launch continuation is gone.
+        // No purchase flow is waiting: the pending update arrives, then later the paid update.
         requireNotNull(listener).onPurchasesUpdated(
             billingResult(BillingClient.BillingResponseCode.OK),
             mutableListOf(pendingPrepaidUpdatePurchase()),
         )
+        requireNotNull(listener).onPurchasesUpdated(
+            billingResult(BillingClient.BillingResponseCode.OK),
+            mutableListOf(completed),
+        )
 
         val update = kotlinx.coroutines.withTimeout(5_000) { bridge.purchaseUpdates().first() }
-        val pending = update.purchases.single()
         assertEquals(setOf("token_new"), update.purchaseTokens)
-        assertEquals(listOf("prepaid.yearly"), pending.products)
-        assertEquals(AppActorStorePurchaseState.Pending, pending.purchaseState)
+        assertEquals(AppActorStorePurchaseState.Purchased, update.purchases.single().purchaseState)
         bridge.shutdown()
     }
 

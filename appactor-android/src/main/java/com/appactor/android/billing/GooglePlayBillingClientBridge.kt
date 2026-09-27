@@ -72,7 +72,12 @@ internal class GooglePlayBillingClientBridge(
     private val purchaseUpdatesChannel = Channel<AppActorBillingPurchaseUpdate>(capacity = Channel.UNLIMITED)
     private val purchasesUpdatedListener = PurchasesUpdatedListener { billingResult, purchases ->
         val resolvedProductType = pendingPurchaseProductType ?: AppActorProductType.Unknown
-        val purchasePayloads = purchases.orEmpty().map { it.toUpdatePayload(resolvedProductType) }
+        // A prepaid plan's Purchase carrying a pending top-up or plan change is the old purchase,
+        // unchanged; the update arrives as a purchase of its own once it is paid. (A waiting
+        // purchase flow still reports it as pending, below.)
+        val purchasePayloads = purchases.orEmpty()
+            .filter { it.pendingPurchaseUpdate == null }
+            .map { it.toPayload(resolvedProductType) }
 
         val continuation = purchaseContinuation
         purchaseContinuation = null
@@ -407,9 +412,9 @@ internal class GooglePlayBillingClientBridge(
                     .build()
 
                 consumeAsync(params) { billingResult, _ ->
-                    // After a bulk sync or restore the backend has consumed it already. Google:
-                    // "if the updated purchase information says it is already consumed, you can
-                    // ignore the error" (BillingResponseCode.ITEM_NOT_OWNED).
+                    // ITEM_NOT_OWNED: nothing left to consume. After a bulk sync or restore the
+                    // backend has consumed it, and Google lets an already consumed purchase's
+                    // error be ignored. Were Play's cache stale, the next startup sync finds it.
                     if (billingResult.responseCode == BillingResponseCode.OK ||
                         billingResult.responseCode == BillingResponseCode.ITEM_NOT_OWNED
                     ) {
@@ -813,10 +818,6 @@ private fun Purchase.toPayload(productType: AppActorProductType): AppActorBillin
         purchaseSignature = signature,
     )
 }
-
-// A live update reads a pending plan update the way the launch that bought it does.
-private fun Purchase.toUpdatePayload(productType: AppActorProductType): AppActorBillingPurchasePayload =
-    pendingPurchaseUpdate?.let { update -> toPendingUpdatePayload(update, productType) } ?: toPayload(productType)
 
 internal fun BillingResult.toLaunchResult(
     productType: AppActorProductType,

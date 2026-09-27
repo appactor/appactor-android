@@ -118,7 +118,7 @@ internal class AppActorPaymentProcessor(
             val drained = pipelineMutex.withLock {
                 receiptQueueDrainer.drainAllAssumingLocked(limit)
             }
-            // A reschedule cancels this job once the drain is done; the publish must not be lost.
+            // Published even if a reset cancels the job now: the drain already posted it.
             drained?.let { withContext(NonCancellable) { onRetryWakeDrained?.invoke(it) } }
         },
     )
