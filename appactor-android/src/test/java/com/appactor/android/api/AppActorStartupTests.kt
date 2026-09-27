@@ -15,6 +15,7 @@ import com.appactor.android.models.AppActorStorefront
 import com.appactor.android.models.appActorPublicReceiptId
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import okhttp3.mockwebserver.MockResponse
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -113,20 +114,7 @@ class AppActorStartupTests {
         val fakeStoreAdapter = FakeStoreAdapter(
             queryProductDetailsStarted = queryStarted,
             releaseQueryProductDetails = releaseQuery,
-            resolvedProducts = listOf(
-                AppActorStoreProduct(
-                    productId = "com.appactor.pro.monthly",
-                    productType = AppActorProductType.Subscription,
-                    basePlanId = "monthly001",
-                    offerId = "intro7d",
-                    localizedPrice = "$4.99",
-                ),
-                AppActorStoreProduct(
-                    productId = "com.appactor.coins.100",
-                    productType = AppActorProductType.Consumable,
-                    localizedPrice = "$1.99",
-                ),
-            ),
+            resolvedProducts = startupFixtureProducts(),
         )
         AppActor.storeAdapterFactory = { fakeStoreAdapter }
 
@@ -191,20 +179,7 @@ class AppActorStartupTests {
         val releaseOfferings = CountDownLatch(1)
         val customerRequested = CountDownLatch(1)
         val fakeStoreAdapter = FakeStoreAdapter(
-            resolvedProducts = listOf(
-                AppActorStoreProduct(
-                    productId = "com.appactor.pro.monthly",
-                    productType = AppActorProductType.Subscription,
-                    basePlanId = "monthly001",
-                    offerId = "intro7d",
-                    localizedPrice = "$4.99",
-                ),
-                AppActorStoreProduct(
-                    productId = "com.appactor.coins.100",
-                    productType = AppActorProductType.Consumable,
-                    localizedPrice = "$1.99",
-                ),
-            ),
+            resolvedProducts = startupFixtureProducts(),
         )
         AppActor.storeAdapterFactory = { fakeStoreAdapter }
 
@@ -383,6 +358,31 @@ class AppActorStartupTests {
 
         assertTrue(awaitMainThreadCallback(callbackLatch))
         assertTrue(deliveredUserIds.contains("user_reset_b"))
+    }
+
+    @Test
+    fun `fallback offerings set before configure are still served after reset`() = runBlocking {
+        AppActor.setFallbackOfferings(startupOfferingsFixture().toByteArray())
+
+        offlineOfferingsBackend().use { backend ->
+            backend.configure("user_fallback_a")
+            AppActor.reset()
+            backend.configure("user_fallback_b")
+
+            assertEquals("off_main_android", AppActor.offerings().current?.id)
+        }
+    }
+
+    @Test
+    fun `fallback offerings set after configure are still served after reset`() = runBlocking {
+        offlineOfferingsBackend().use { backend ->
+            backend.configure("user_fallback_a")
+            AppActor.setFallbackOfferings(startupOfferingsFixture().toByteArray())
+            AppActor.reset()
+            backend.configure("user_fallback_b")
+
+            assertEquals("off_main_android", AppActor.offerings().current?.id)
+        }
     }
 
     @Test
@@ -611,6 +611,56 @@ class AppActorStartupTests {
             assertEquals("local_user_123", postedAppUserId.get())
         }
     }
+
+    /**
+     * A backend whose offerings always fail over to the cache: a 304 to a request without an ETag
+     * is refused at once, where a 5xx would be retried for seconds.
+     */
+    private fun offlineOfferingsBackend(): TestBackendServer {
+        val fakeStoreAdapter = FakeStoreAdapter(resolvedProducts = startupFixtureProducts())
+        AppActor.storeAdapterFactory = { fakeStoreAdapter }
+        return TestBackendServer { request ->
+            val path = request.path?.substringBefore("?").orEmpty()
+            when {
+                path == "/v1/payment/offerings" -> MockResponse().setResponseCode(304)
+                path.startsWith("/v1/customers/") -> jsonResponse(
+                    customerEnvelope(
+                        requestId = "req_customer_fallback",
+                        appUserId = path.substringAfter("/v1/customers/"),
+                    ),
+                )
+                else -> jsonResponse("{}", 404)
+            }
+        }
+    }
+
+    private suspend fun TestBackendServer.configure(appUserId: String) {
+        AppActor.configure(
+            AppActorConfiguration(
+                context = ApplicationProvider.getApplicationContext<Context>(),
+                apiKey = "pk_test_123",
+                appUserId = appUserId,
+                baseUrl = baseUrl,
+                options = testOptionsForLocalBackend(),
+            )
+        )
+    }
+
+    /** The Play products of offerings_android_sample.json, so its packages survive enrichment. */
+    private fun startupFixtureProducts(): List<AppActorStoreProduct> = listOf(
+        AppActorStoreProduct(
+            productId = "com.appactor.pro.monthly",
+            productType = AppActorProductType.Subscription,
+            basePlanId = "monthly001",
+            offerId = "intro7d",
+            localizedPrice = "$4.99",
+        ),
+        AppActorStoreProduct(
+            productId = "com.appactor.coins.100",
+            productType = AppActorProductType.Consumable,
+            localizedPrice = "$1.99",
+        ),
+    )
 
     private fun startupOfferingsFixture(): String {
         return requireNotNull(

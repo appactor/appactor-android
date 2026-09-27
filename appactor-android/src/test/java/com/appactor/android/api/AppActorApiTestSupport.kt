@@ -39,6 +39,7 @@ internal fun resetApiTestState() = runBlocking {
     if (appactorDir.exists()) appactorDir.deleteRecursively()
     AppActor.storeAdapterFactory = { appContext -> GooglePlayStoreAdapter(appContext) }
     AppActor.reset()
+    AppActor.clearFallbackOfferings()
 }
 
 internal fun queueItem(
