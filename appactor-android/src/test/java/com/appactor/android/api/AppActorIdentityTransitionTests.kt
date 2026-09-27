@@ -30,6 +30,7 @@ import java.util.Collections
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
 @RunWith(RobolectricTestRunner::class)
@@ -798,15 +799,17 @@ class AppActorIdentityTransitionTests {
 
     @Test
     fun `a purchase an anonymous user left queued shows for the user logged in to once posted`() = runBlocking {
-        withPendingPurchaseOfAnonymousBuyer(pendingPurchase = false, failFirstReceiptPost = true) { purchaseUpdates, observed ->
+        withPendingPurchaseOfAnonymousBuyer(pendingPurchase = false, failReceiptPostsUntilLoggedIn = true) { purchaseUpdates, observed ->
             purchaseUpdates.emit(listOf(approvedPendingPurchase()))
             assertTrue(observed.receiptPosted.await(5, TimeUnit.SECONDS))
             AppActor.logIn(LOGGED_IN_USER)
+            observed.loggedIn.set(true)
 
-            // The retry wake posts it under the anonymous id, the backend credits the user logged
-            // in to, and their info, fetched fresh, is published.
+            // A retry wake after the login posts it under the anonymous id, the backend credits the
+            // user logged in to, and their info, fetched fresh, is published.
             assertTrue(awaitMainThreadCallback(observed.creditedInfoPublished, 15_000L))
-            assertEquals(listOf(ANONYMOUS_BUYER, ANONYMOUS_BUYER), observed.receiptAppUserIds)
+            assertTrue(observed.receiptAppUserIds.size >= 2)
+            assertTrue(observed.receiptAppUserIds.all { it == ANONYMOUS_BUYER })
             assertEquals(1L, observed.deferredResolved.count)
         }
     }
@@ -836,6 +839,7 @@ class AppActorIdentityTransitionTests {
         val receiptPosted = CountDownLatch(1)
         val creditedInfoPublished = CountDownLatch(1)
         val creditedReceipts = AtomicInteger(0)
+        val loggedIn = AtomicBoolean(false)
         val deferredPurchases = CopyOnWriteArrayList<Triple<String, String?, String?>>()
         val receiptAppUserIds = CopyOnWriteArrayList<String>()
 
@@ -860,13 +864,15 @@ class AppActorIdentityTransitionTests {
      * then runs [scenario]. Login answers as [LOGGED_IN_USER], held by [loginGate] when given.
      * [relaunchedAfterLogin] configures instead as a previous session left it after logging the
      * buyer in, with the purchase approved and listed by Play. [failFirstReceiptPost] answers the
-     * first receipt post with a retryable error. Without [pendingPurchase] the purchase was never
-     * left pending, so nothing records it.
+     * first receipt post with a retryable error, [failReceiptPostsUntilLoggedIn] every post until
+     * the scenario sets [PendingPurchaseObservations.loggedIn]. Without [pendingPurchase] the
+     * purchase was never left pending, so nothing records it.
      */
     private suspend fun withPendingPurchaseOfAnonymousBuyer(
         loginGate: Pair<CountDownLatch, CountDownLatch>? = null,
         relaunchedAfterLogin: Boolean = false,
         failFirstReceiptPost: Boolean = false,
+        failReceiptPostsUntilLoggedIn: Boolean = false,
         pendingPurchase: Boolean = true,
         scenario: suspend (MutableSharedFlow<List<AppActorStorePurchase>>, PendingPurchaseObservations) -> Unit,
     ) {
@@ -933,7 +939,10 @@ class AppActorIdentityTransitionTests {
                     observed.receiptAppUserIds += AppActorBackendJson.instance
                         .decodeFromString<AppActorGoogleReceiptRequestDTO>(request.body.readUtf8()).appUserId
                     observed.receiptPosted.countDown()
-                    if (failFirstReceiptPost && observed.receiptAppUserIds.size == 1) {
+                    if (
+                        (failFirstReceiptPost && observed.receiptAppUserIds.size == 1) ||
+                        (failReceiptPostsUntilLoggedIn && !observed.loggedIn.get())
+                    ) {
                         jsonResponse("""{"status":"retryable_error","requestId":"req_receipt_retry","error":{"code":"UPSTREAM","message":"Try again."}}""")
                     } else {
                         observed.creditedReceipts.incrementAndGet()

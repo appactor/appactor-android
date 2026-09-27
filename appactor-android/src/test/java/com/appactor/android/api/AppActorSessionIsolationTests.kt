@@ -155,7 +155,8 @@ class AppActorSessionIsolationTests {
             assertTrue(restoreStarted.await(5, TimeUnit.SECONDS))
             val epochBeforeLogout = identityEpoch()
             val logout = async(Dispatchers.Default) { AppActor.logOut() }
-            // Let logOut switch the identity while the restore is still in flight.
+            // Let logOut start (it bumps the epoch, then waits for the restore) while the restore
+            // is still in flight.
             withTimeout(5_000L) {
                 while (identityEpoch() == epochBeforeLogout) delay(10)
             }

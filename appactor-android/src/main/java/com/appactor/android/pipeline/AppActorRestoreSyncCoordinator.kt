@@ -486,8 +486,8 @@ internal class AppActorRestoreSyncCoordinator(
                 )
             } else if (history != null) {
                 // History-only purchase with Unknown type — cannot be sent in bulk
-                // restore. Defer to follow-up sync which will pick it up if the
-                // product metadata becomes available.
+                // restore. Defer to the follow-up sync, which posts what Play still
+                // lists as a one-time receipt for the backend to type.
                 followUpSyncRequired = true
             }
         }

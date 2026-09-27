@@ -1147,14 +1147,10 @@ public object AppActor {
         }
 
     private suspend fun refreshCustomerInfoAfterStep(snapshot: AppActorOperationSnapshot): AppActorCustomerInfo {
-        // The step may have adopted a canonical id, so fetch for whoever is current now, unless
-        // the user changed meanwhile: a sync done for the previous user reports theirs.
-        val appUserId = if (isSnapshotCurrent(snapshot)) {
-            snapshot.runtime.identityStore.currentAppUserId ?: snapshot.appUserId
-        } else {
-            snapshot.appUserId
-        }
-        val info = snapshot.runtime.customerManager.getCustomerInfo(appUserId = appUserId)
+        // The step may have adopted a canonical id, so fetch for whoever is current now.
+        val info = snapshot.runtime.customerManager.getCustomerInfo(
+            appUserId = snapshot.runtime.identityStore.currentAppUserId ?: snapshot.appUserId,
+        )
         if (persistCustomerInfoIfCurrent(snapshot, info)) {
             publishCustomerInfoIfCurrent(
                 snapshot = snapshot,
@@ -1489,10 +1485,21 @@ public object AppActor {
     // A restore or sync posts the Play purchases for the user current when it starts, and, as on
     // iOS, is not re-run after an identity change: the re-run would post them for the next user,
     // whom the backend then merges into their owner, undoing a logOut.
-    private suspend fun <T> executeStoreSync(operation: suspend (AppActorOperationSnapshot) -> T): T =
-        executeWrite { snapshot ->
-            throwingPublicErrors("AppActor request failed.") { operation(snapshot) }
+    private suspend fun <T> executeStoreSync(operation: suspend (AppActorOperationSnapshot) -> T): T {
+        val snapshot = captureOperationSnapshot(resolveAppUserId = true)
+        return try {
+            operation(snapshot)
+        } catch (throwable: Throwable) {
+            // A caller cancelled itself is not mapped. A reset() that cut the call short, ending
+            // its Play or backend work with a cancellation or a shut-down error, is NotConfigured.
+            currentCoroutineContext().ensureActive()
+            if (currentRuntimeSnapshot()?.sessionId != snapshot.runtime.sessionId) {
+                throw AppActorError.NotConfigured
+            }
+            throwIfCancellation(throwable)
+            throw throwable.toPublicAppActorError()
         }
+    }
 
     /**
      * Runs [block], turning what it throws into a public [AppActorError], as the Bridge and the
