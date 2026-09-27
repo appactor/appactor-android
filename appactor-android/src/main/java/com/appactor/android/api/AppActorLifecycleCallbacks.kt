@@ -43,12 +43,19 @@ internal class AppActorLifecycleCallbacks(
         }
     }
 
-    override fun onActivityResumed(activity: Activity) {
-        startedActivities += activity
-    }
+    override fun onActivityResumed(activity: Activity) = track(activity)
 
-    override fun onActivityPaused(activity: Activity) {
+    override fun onActivityPaused(activity: Activity) = track(activity)
+
+    // The first activity found this way was started before registration. Registration assumed the
+    // foreground but couldn't act on it; the foreground's work (the 5-minute refresh among it) runs
+    // now.
+    private fun track(activity: Activity) {
+        val discovered = startedActivities.isEmpty()
         startedActivities += activity
+        if (discovered) {
+            onForeground()
+        }
     }
 
     override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
@@ -57,5 +64,10 @@ internal class AppActorLifecycleCallbacks(
 
     override fun onActivityDestroyed(activity: Activity) {
         startedActivities -= activity
+        // The recreated instance finished before it started, so nothing shows.
+        if (recreatingLastActivity && !activity.isChangingConfigurations && startedActivities.isEmpty()) {
+            recreatingLastActivity = false
+            onBackground()
+        }
     }
 }

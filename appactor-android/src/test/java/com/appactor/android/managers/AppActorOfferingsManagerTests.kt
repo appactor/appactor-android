@@ -1122,10 +1122,82 @@ class AppActorOfferingsManagerTests {
 
         now += 6 * 60 * 1_000
         manager.getOfferings()
+        assertEquals(AppActorDiagnosticsDataSource.Cache, manager.lastLoadSource())
         manager.getOfferings()
 
         coVerify(exactly = 2) { mockClient.getOfferings(any()) }
         coVerify(exactly = 1) { mockStoreAdapter.queryProductDetails(any()) }
+    }
+
+    @Test
+    fun `a 304 does not confirm offerings in memory built for another locale`() = runBlocking {
+        val originalLocale = Locale.getDefault()
+        try {
+            Locale.setDefault(Locale.forLanguageTag("en-US"))
+            val mockClient = mockk<AppActorBackendClient>(relaxed = true)
+            // The backend isn't sent the locale, so both locales' payloads share the ETag.
+            coEvery { mockClient.getOfferings(any()) } answers {
+                if (firstArg<String?>() == null) {
+                    freshOfferingsResponse(fixtureOfferings(), eTag = "\"e1\"")
+                } else {
+                    notModifiedResponse(eTag = "\"e1\"")
+                }
+            }
+            val productQueries = AtomicInteger(0)
+            val mockStoreAdapter = mockk<AppActorStoreAdapter>(relaxed = true)
+            coEvery { mockStoreAdapter.queryProductDetails(any()) } answers {
+                if (productQueries.incrementAndGet() == 2) throw IllegalStateException("Billing unavailable")
+                val requests = firstArg<List<AppActorStoreProductRequest>>()
+                requests.mapNotNull { request -> pricedProducts()[requestKey(request)] }
+            }
+            val manager = AppActorOfferingsManager(
+                backendClient = mockClient,
+                cacheStore = offeringsCacheStore("offerings-304-other-locale"),
+                offlineProductCatalogStore = offlineProductCatalogStore("offerings-304-other-locale"),
+                storeAdapter = mockStoreAdapter,
+            )
+            manager.getOfferings()
+
+            Locale.setDefault(Locale.forLanguageTag("tr-TR"))
+            // The tr payload is saved, but enriching it fails.
+            assertNotNull(runCatching { manager.getOfferings() }.exceptionOrNull())
+            manager.getOfferings()
+            manager.getOfferings()
+
+            // The 304 enriched the tr entry, so the last call found fresh tr offerings in memory.
+            coVerify(exactly = 3) { mockClient.getOfferings(any()) }
+        } finally {
+            Locale.setDefault(originalLocale)
+        }
+    }
+
+    @Test
+    fun `offline, offerings in memory beat the bundled fallback when the disk entry can't be enriched`() = runBlocking {
+        var now = 1_710_000_000_000L
+        val dto = fixtureOfferings()
+        val mockClient = mockk<AppActorBackendClient>(relaxed = true)
+        coEvery { mockClient.getOfferings(any()) } returns freshOfferingsResponse(dto) andThenThrows
+            AppActorBackendException.Network("offline")
+        val productQueries = AtomicInteger(0)
+        val mockStoreAdapter = mockk<AppActorStoreAdapter>(relaxed = true)
+        coEvery { mockStoreAdapter.queryProductDetails(any()) } answers {
+            if (productQueries.incrementAndGet() > 1) throw IllegalStateException("Billing unavailable")
+            val requests = firstArg<List<AppActorStoreProductRequest>>()
+            requests.mapNotNull { request -> pricedProducts()[requestKey(request)] }
+        }
+        val manager = AppActorOfferingsManager(
+            backendClient = mockClient,
+            cacheStore = offeringsCacheStore("offerings-offline-memory-last-resort"),
+            offlineProductCatalogStore = offlineProductCatalogStore("offerings-offline-memory-last-resort"),
+            storeAdapter = mockStoreAdapter,
+            dateProviderMillis = { now },
+        )
+        manager.setFallbackOfferings(dto.copy(data = dto.data.copy(currentOffering = null, offerings = emptyList())))
+        manager.getOfferings()
+
+        now += 6 * 60 * 1_000
+
+        assertEquals("Main", manager.getOfferings().current?.displayName)
     }
 
     @Test

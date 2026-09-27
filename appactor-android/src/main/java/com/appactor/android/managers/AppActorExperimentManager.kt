@@ -56,7 +56,7 @@ internal class AppActorExperimentManager(
         return request.await()
     }
 
-    /** Starts a fetch every caller of [experimentKey] shares, as its inFlight request. Under stateLock. */
+    /** Starts a fetch every caller of [experimentKey] for [appUserId] shares, as its inFlight request. Under stateLock. */
     private fun startFetchLocked(
         experimentKey: String,
         appUserId: String,
@@ -124,17 +124,16 @@ internal class AppActorExperimentManager(
             )
         } catch (throwable: Throwable) {
             throwIfCancellation(throwable)
+            if (!shouldFallbackToCache(throwable)) {
+                throw throwable.toAppActorError("Failed to fetch experiment assignment.")
+            }
             val cached = stateLock.withLock {
                 ensureGenerationLocked(requestGeneration)
                 useAssignmentsOfLocked(appUserId)
                 cachedAssignments[experimentKey]
-            }
-            if (cached != null && shouldFallbackToCache(throwable)) {
-                ensureGeneration(requestGeneration)
-                cached.assignment?.toPublic()
-            } else {
-                throw throwable.toAppActorError("Failed to fetch experiment assignment.")
-            }
+            } ?: throw throwable.toAppActorError("Failed to fetch experiment assignment.")
+            ensureGeneration(requestGeneration)
+            cached.assignment?.toPublic()
         }
     }
 

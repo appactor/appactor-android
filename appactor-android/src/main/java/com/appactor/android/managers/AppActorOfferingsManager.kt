@@ -303,26 +303,10 @@ internal class AppActorOfferingsManager(
                         rotatedETag = response.eTag,
                         currentLocales = requestLocales,
                     ) ?: cacheStore.loadLocaleCompatible(requestLocales)
-                    memoryConfirmedBy(sentETag, cachedValue, generation) ?: run {
-                        val decoded = cachedValue?.let {
-                            try {
-                                decodeAndEnrich(it, generation)
-                            } catch (ce: kotlinx.coroutines.CancellationException) {
-                                throw ce
-                            } catch (_: Exception) {
-                                null
-                            }
+                    memoryConfirmedBy(sentETag, cachedValue, requestLocales, generation)
+                        ?: offeringsWithoutPayload(cachedValue, generation) {
+                            IllegalStateException("Offerings cache missing for 304 response with no fallback.")
                         }
-                        // The offerings in memory, though built from an older entry, beat the bundled fallback.
-                        decoded ?: cached() ?: run {
-                            val fallback = fallbackDTO
-                            if (fallback != null) {
-                                enrichAndCache(fallback, 0L, generation, AppActorDiagnosticsDataSource.Cache)
-                            } else {
-                                throw IllegalStateException("Offerings cache missing for 304 response with no fallback.")
-                            }
-                        }
-                    }
                 }
 
                 else -> {
@@ -345,29 +329,40 @@ internal class AppActorOfferingsManager(
             if (forceRefresh || !shouldFallbackToCache(throwable)) {
                 throw throwable.toAppActorError("Failed to fetch offerings.")
             }
-            // Fallback chain: disk cache → bundled fallback DTO → throw
-            val cachedValue = cacheStore.loadLocaleCompatible(requestLocales)
-            val diskOfferings = if (cachedValue != null) {
-                try {
-                    decodeAndEnrich(cachedValue, generation)
-                } catch (ce: kotlinx.coroutines.CancellationException) {
-                    throw ce
-                } catch (_: Exception) {
-                    null
-                }
-            } else null
-            if (diskOfferings != null) {
-                diskOfferings
-            } else {
-                val fallback = fallbackDTO
-                if (fallback != null) {
-                    // Use 0L (epoch) so the cache is immediately stale — next call triggers SWR refresh
-                    enrichAndCache(fallback, 0L, generation, AppActorDiagnosticsDataSource.Cache)
-                } else {
-                    throw throwable.toAppActorError("Failed to fetch offerings.")
-                }
+            offeringsWithoutPayload(cacheStore.loadLocaleCompatible(requestLocales), generation) {
+                throwable.toAppActorError("Failed to fetch offerings.")
             }
         }
+    }
+
+    /**
+     * Offerings when the backend sent no payload to use: [cachedValue], else the offerings in memory
+     * (though built from an older entry), else the bundled fallback, else [noOfferings].
+     */
+    private suspend fun offeringsWithoutPayload(
+        cachedValue: AppActorCachedValue?,
+        generation: Long,
+        noOfferings: () -> Throwable,
+    ): AppActorOfferings {
+        val decoded = cachedValue?.let {
+            try {
+                decodeAndEnrich(it, generation)
+            } catch (ce: kotlinx.coroutines.CancellationException) {
+                throw ce
+            } catch (_: Exception) {
+                null
+            }
+        }
+        if (decoded != null) return decoded
+        stateMutex.withLock {
+            suitableInMemoryCacheLocked()?.let { memory ->
+                lastLoadSource = AppActorDiagnosticsDataSource.Cache
+                return memory
+            }
+        }
+        // Use 0L (epoch) so the cache is immediately stale — next call triggers SWR refresh
+        val fallback = fallbackDTO ?: throw noOfferings()
+        return enrichAndCache(fallback, 0L, generation, AppActorDiagnosticsDataSource.Cache)
     }
 
     private suspend fun fetchBootstrapSeed(): BootstrapSeed {
@@ -509,10 +504,14 @@ internal class AppActorOfferingsManager(
     private suspend fun memoryConfirmedBy(
         sentETag: String?,
         confirmed: AppActorCachedValue?,
+        requestLocales: List<String>,
         generation: Long,
     ): AppActorOfferings? = stateMutex.withLock {
         val offerings = cachedOfferings
-        if (offerings == null || sentETag == null || cachedETag != sentETag || cacheGeneration != generation) {
+        // The locales too: the backend isn't sent them, so another locale's entry can share the ETag.
+        if (offerings == null || sentETag == null || cachedETag != sentETag ||
+            cachedLocales != requestLocales || cacheGeneration != generation
+        ) {
             return@withLock null
         }
         cachedAtMillis = dateProviderMillis()

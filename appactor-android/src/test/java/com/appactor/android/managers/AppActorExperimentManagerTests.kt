@@ -3,6 +3,7 @@ package com.appactor.android.managers
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.appactor.android.backend.client.AppActorBackendClient
+import com.appactor.android.backend.client.AppActorBackendException
 import com.appactor.android.backend.client.AppActorBackendHttpResponse
 import com.appactor.android.backend.dto.AppActorExperimentAssignmentEnvelopeDTO
 import com.appactor.android.backend.dto.AppActorExperimentAssignmentResponseDTO
@@ -173,6 +174,21 @@ class AppActorExperimentManagerTests {
         previous.await()
 
         coVerify(exactly = 1) { mock.postExperimentAssignment("paywall_copy", "user_android_B", any(), any()) }
+    }
+
+    @Test
+    fun `an error with no cache fallback leaves the assignments in memory alone`() = runBlocking {
+        val mock = mockk<AppActorBackendClient>(relaxed = true)
+        coEvery { mock.postExperimentAssignment(any(), "user_android_A", any(), any()) } returns successResponse()
+        coEvery { mock.postExperimentAssignment(any(), "user_android_B", any(), any()) } throws
+            AppActorBackendException.Http(statusCode = 400)
+        val manager = createManager(mock)
+        manager.getAssignment("paywall_copy", "user_android_A")
+
+        runCatching { manager.getAssignment("paywall_copy", "user_android_B") }
+        manager.getAssignment("paywall_copy", "user_android_A")
+
+        coVerify(exactly = 1) { mock.postExperimentAssignment("paywall_copy", "user_android_A", any(), any()) }
     }
 
     @Test

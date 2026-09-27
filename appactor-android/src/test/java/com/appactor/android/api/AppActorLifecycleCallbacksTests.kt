@@ -6,8 +6,8 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 
-// Each test starts with host already started and resumed, as when configure() registers the
-// callbacks from an activity or from Flutter/React Native/Capacitor.
+// Each test starts with host already started and resumed, as when configure() runs again after
+// reset() while an activity shows. The first callback host gets reports the foreground.
 @RunWith(RobolectricTestRunner::class)
 class AppActorLifecycleCallbacksTests {
 
@@ -27,7 +27,7 @@ class AppActorLifecycleCallbacksTests {
         callbacks.onActivityResumed(next)
         callbacks.onActivityStopped(host)
 
-        assertEquals(emptyList<String>(), transitions)
+        assertEquals(listOf("foreground"), transitions)
     }
 
     @Test
@@ -42,22 +42,35 @@ class AppActorLifecycleCallbacksTests {
         callbacks.onActivityResumed(host)
         callbacks.onActivityStopped(proxy)
 
-        assertEquals(emptyList<String>(), transitions)
+        assertEquals(listOf("foreground"), transitions)
     }
 
     @Test
     fun `recreating the only activity for a configuration change is not a background`() {
-        // Stands in for host, being recreated.
-        val rotating = object : Activity() {
-            override fun isChangingConfigurations() = true
-        }
+        val recreated = Activity()
 
-        callbacks.onActivityPaused(rotating)
-        callbacks.onActivityStopped(rotating)
-        callbacks.onActivityDestroyed(rotating)
-        callbacks.onActivityStarted(Activity())
+        rotateHost()
+        callbacks.onActivityStarted(recreated)
+        callbacks.onActivityResumed(recreated)
 
-        assertEquals(emptyList<String>(), transitions)
+        assertEquals(listOf("foreground"), transitions)
+
+        callbacks.onActivityPaused(recreated)
+        callbacks.onActivityStopped(recreated)
+        callbacks.onActivityStarted(recreated)
+
+        assertEquals(listOf("foreground", "background", "foreground"), transitions)
+    }
+
+    @Test
+    fun `a recreated activity that finishes before it starts is a background`() {
+        val recreated = Activity()
+
+        rotateHost()
+        callbacks.onActivityCreated(recreated, null)
+        callbacks.onActivityDestroyed(recreated)
+
+        assertEquals(listOf("foreground", "background"), transitions)
     }
 
     @Test
@@ -66,6 +79,16 @@ class AppActorLifecycleCallbacksTests {
         callbacks.onActivityStopped(host)
         callbacks.onActivityStarted(host)
 
-        assertEquals(listOf("background", "foreground"), transitions)
+        assertEquals(listOf("foreground", "background", "foreground"), transitions)
+    }
+
+    /** Host (a stand-in reporting a configuration change) stops to be recreated. */
+    private fun rotateHost() {
+        val rotating = object : Activity() {
+            override fun isChangingConfigurations() = true
+        }
+        callbacks.onActivityPaused(rotating)
+        callbacks.onActivityStopped(rotating)
+        callbacks.onActivityDestroyed(rotating)
     }
 }
