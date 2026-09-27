@@ -140,7 +140,7 @@ internal class AppActorOfferingsManager(
         return when (action) {
             is OfferingsAction.Await -> action.deferred.await()
             is OfferingsAction.ReturnCachedPayload -> try {
-                decodeAndEnrich(action.cachedValue, action.generation)
+                enrichAndCache(seedOf(action.cachedValue), action.generation)
             } finally {
                 // The refresh is the only code that completes and clears the inFlight request
                 // planted in phase 1, so it must start even when enrichment throws or the caller
@@ -303,10 +303,9 @@ internal class AppActorOfferingsManager(
                         rotatedETag = response.eTag,
                         currentLocales = requestLocales,
                     ) ?: cacheStore.loadLocaleCompatible(requestLocales)
-                    memoryConfirmedBy(sentETag, cachedValue, requestLocales, generation)
-                        ?: offeringsWithoutPayload(cachedValue, generation) {
-                            IllegalStateException("Offerings cache missing for 304 response with no fallback.")
-                        }
+                    memoryConfirmedBy(sentETag, cachedValue?.eTag, requestLocales, generation)
+                        ?: offeringsWithoutPayload(cachedValue, generation)
+                        ?: throw IllegalStateException("Offerings cache missing for 304 response with no fallback.")
                 }
 
                 else -> {
@@ -320,8 +319,14 @@ internal class AppActorOfferingsManager(
                         verified = response.signatureVerified,
                         preferredLocales = requestLocales,
                     )
-                    val verification = AppActorVerificationResult.from(response.signatureVerified)
-                    decodeAndEnrich(payload, dateProviderMillis(), generation, AppActorDiagnosticsDataSource.Network, verification, response.eTag)
+                    val seed = OfferingsSeed(
+                        dto = AppActorBackendJson.instance.decodeFromString<AppActorOfferingsEnvelopeDTO>(payload),
+                        cachedAtMillis = dateProviderMillis(),
+                        source = AppActorDiagnosticsDataSource.Network,
+                        verification = AppActorVerificationResult.from(response.signatureVerified),
+                        eTag = response.eTag,
+                    )
+                    enrichAndCache(seed, generation)
                 }
             }
         } catch (throwable: Throwable) {
@@ -329,43 +334,36 @@ internal class AppActorOfferingsManager(
             if (forceRefresh || !shouldFallbackToCache(throwable)) {
                 throw throwable.toAppActorError("Failed to fetch offerings.")
             }
-            offeringsWithoutPayload(cacheStore.loadLocaleCompatible(requestLocales), generation) {
-                throwable.toAppActorError("Failed to fetch offerings.")
-            }
+            offeringsWithoutPayload(cacheStore.loadLocaleCompatible(requestLocales), generation)
+                ?: throw throwable.toAppActorError("Failed to fetch offerings.")
         }
     }
 
     /**
      * Offerings when the backend sent no payload to use: [cachedValue], else the offerings in memory
-     * (though built from an older entry), else the bundled fallback, else [noOfferings].
+     * (though built from an older entry), else the bundled fallback; null without any of them.
      */
     private suspend fun offeringsWithoutPayload(
         cachedValue: AppActorCachedValue?,
         generation: Long,
-        noOfferings: () -> Throwable,
-    ): AppActorOfferings {
-        val decoded = cachedValue?.let {
+    ): AppActorOfferings? {
+        if (cachedValue != null) {
             try {
-                decodeAndEnrich(it, generation)
-            } catch (ce: kotlinx.coroutines.CancellationException) {
-                throw ce
-            } catch (_: Exception) {
-                null
+                return enrichAndCache(seedOf(cachedValue), generation)
+            } catch (e: Exception) {
+                throwIfCancellation(e)
             }
         }
-        if (decoded != null) return decoded
         stateMutex.withLock {
             suitableInMemoryCacheLocked()?.let { memory ->
                 lastLoadSource = AppActorDiagnosticsDataSource.Cache
                 return memory
             }
         }
-        // Use 0L (epoch) so the cache is immediately stale — next call triggers SWR refresh
-        val fallback = fallbackDTO ?: throw noOfferings()
-        return enrichAndCache(fallback, 0L, generation, AppActorDiagnosticsDataSource.Cache)
+        return fallbackDTO?.let { enrichAndCache(fallbackSeed(it), generation) }
     }
 
-    private suspend fun fetchBootstrapSeed(): BootstrapSeed {
+    private suspend fun fetchBootstrapSeed(): OfferingsSeed {
         val requestLocales = currentLocales()
         return try {
             val response = backendClient.getOfferings(
@@ -377,16 +375,9 @@ internal class AppActorOfferingsManager(
                         rotatedETag = response.eTag,
                         currentLocales = requestLocales,
                     ) ?: cacheStore.loadLocaleCompatible(requestLocales)
-                    val fallback = fallbackDTO
-                    when {
-                        cachedValue != null -> decodeBootstrapSeed(cachedValue)
-
-                        fallback != null -> fallbackBootstrapSeed(fallback)
-
-                        else -> throw IllegalStateException(
-                            "Offerings cache missing for 304 response with no fallback."
-                        )
-                    }
+                    cachedValue?.let(::seedOf)
+                        ?: fallbackDTO?.let(::fallbackSeed)
+                        ?: throw IllegalStateException("Offerings cache missing for 304 response with no fallback.")
                 }
 
                 else -> {
@@ -400,7 +391,7 @@ internal class AppActorOfferingsManager(
                         verified = response.signatureVerified,
                         preferredLocales = requestLocales,
                     )
-                    BootstrapSeed(
+                    OfferingsSeed(
                         dto = body,
                         cachedAtMillis = dateProviderMillis(),
                         source = AppActorDiagnosticsDataSource.Network,
@@ -414,13 +405,9 @@ internal class AppActorOfferingsManager(
             if (!shouldFallbackToCache(throwable)) {
                 throw throwable.toAppActorError("Failed to fetch offerings.")
             }
-            val cachedValue = cacheStore.loadLocaleCompatible(requestLocales)
-            when {
-                cachedValue != null -> decodeBootstrapSeed(cachedValue)
-
-                else -> fallbackDTO?.let(::fallbackBootstrapSeed)
-                    ?: throw throwable.toAppActorError("Failed to fetch offerings.")
-            }
+            cacheStore.loadLocaleCompatible(requestLocales)?.let(::seedOf)
+                ?: fallbackDTO?.let(::fallbackSeed)
+                ?: throw throwable.toAppActorError("Failed to fetch offerings.")
         }
     }
 
@@ -447,19 +434,10 @@ internal class AppActorOfferingsManager(
 
     private fun launchBootstrapEnrichment(
         request: CompletableDeferred<AppActorOfferings>,
-        seed: BootstrapSeed,
+        seed: OfferingsSeed,
         generation: Long,
     ) {
-        launchRequest(request) {
-            enrichAndCache(
-                dto = seed.dto,
-                cachedAtMillis = seed.cachedAtMillis,
-                generation = generation,
-                source = seed.source,
-                verification = seed.verification,
-                eTag = seed.eTag,
-            )
-        }
+        launchRequest(request) { enrichAndCache(seed, generation) }
     }
 
     /** Runs [block] in the background for every caller of [request], clearing it from inFlight first. */
@@ -480,21 +458,18 @@ internal class AppActorOfferingsManager(
         }
     }
 
-    private fun decodeBootstrapSeed(cachedValue: AppActorCachedValue): BootstrapSeed {
-        val dto = AppActorBackendJson.instance.decodeFromString<AppActorOfferingsEnvelopeDTO>(cachedValue.payload)
-        return BootstrapSeed(
-            dto = dto,
-            cachedAtMillis = cachedValue.cachedAtMillis,
-            source = AppActorDiagnosticsDataSource.Cache,
-            verification = cachedValue.verification,
-            eTag = cachedValue.eTag,
-        )
-    }
+    private fun seedOf(cachedValue: AppActorCachedValue): OfferingsSeed = OfferingsSeed(
+        dto = AppActorBackendJson.instance.decodeFromString<AppActorOfferingsEnvelopeDTO>(cachedValue.payload),
+        cachedAtMillis = cachedValue.cachedAtMillis,
+        source = AppActorDiagnosticsDataSource.Cache,
+        verification = cachedValue.verification,
+        eTag = cachedValue.eTag,
+    )
 
-    // Stamped 0L (epoch) like the fallback on the fetch path: stale at once, so the next call
-    // goes to the backend instead of serving the bundled offerings for a whole TTL.
-    private fun fallbackBootstrapSeed(dto: AppActorOfferingsEnvelopeDTO): BootstrapSeed =
-        BootstrapSeed(dto = dto, cachedAtMillis = 0L, source = AppActorDiagnosticsDataSource.Cache)
+    // Stamped 0L (epoch): stale at once, so the next call goes to the backend instead of serving
+    // the bundled offerings for a whole TTL.
+    private fun fallbackSeed(dto: AppActorOfferingsEnvelopeDTO): OfferingsSeed =
+        OfferingsSeed(dto = dto, cachedAtMillis = 0L, source = AppActorDiagnosticsDataSource.Cache)
 
     /**
      * The offerings in memory, with their freshness restarted, when a 304 for [sentETag] confirms
@@ -503,7 +478,7 @@ internal class AppActorOfferingsManager(
      */
     private suspend fun memoryConfirmedBy(
         sentETag: String?,
-        confirmed: AppActorCachedValue?,
+        confirmedETag: String?,
         requestLocales: List<String>,
         generation: Long,
     ): AppActorOfferings? = stateMutex.withLock {
@@ -516,50 +491,21 @@ internal class AppActorOfferingsManager(
         }
         cachedAtMillis = dateProviderMillis()
         // The entry's ETag as the 304 left it, which the next request sends.
-        cachedETag = confirmed?.eTag ?: sentETag
+        cachedETag = confirmedETag ?: sentETag
         lastLoadSource = AppActorDiagnosticsDataSource.Cache
         offerings
     }
 
-    private suspend fun decodeAndEnrich(cachedValue: AppActorCachedValue, generation: Long): AppActorOfferings =
-        decodeAndEnrich(
-            payload = cachedValue.payload,
-            cachedAtMillis = cachedValue.cachedAtMillis,
-            generation = generation,
-            source = AppActorDiagnosticsDataSource.Cache,
-            verification = cachedValue.verification,
-            eTag = cachedValue.eTag,
-        )
-
-    private suspend fun decodeAndEnrich(
-        payload: String,
-        cachedAtMillis: Long,
-        generation: Long,
-        source: AppActorDiagnosticsDataSource,
-        verification: AppActorVerificationResult,
-        eTag: String?,
-    ): AppActorOfferings {
-        val dto = AppActorBackendJson.instance.decodeFromString<AppActorOfferingsEnvelopeDTO>(payload)
-        return enrichAndCache(dto, cachedAtMillis, generation, source, verification, eTag)
-    }
-
-    private suspend fun enrichAndCache(
-        dto: AppActorOfferingsEnvelopeDTO,
-        cachedAtMillis: Long,
-        generation: Long,
-        source: AppActorDiagnosticsDataSource,
-        verification: AppActorVerificationResult = AppActorVerificationResult.NotRequested,
-        eTag: String? = null,
-    ): AppActorOfferings {
-        val offerings = enrich(dto).copy(verification = verification)
+    private suspend fun enrichAndCache(seed: OfferingsSeed, generation: Long): AppActorOfferings {
+        val offerings = enrich(seed.dto).copy(verification = seed.verification)
         stateMutex.withLock {
             if (cacheGeneration == generation) {
                 offlineProductCatalogStore.save(offerings.toOfflineProductCatalog())
                 cachedOfferings = offerings
-                this.cachedAtMillis = cachedAtMillis
-                cachedETag = eTag
+                cachedAtMillis = seed.cachedAtMillis
+                cachedETag = seed.eTag
                 cachedLocales = currentLocales()
-                lastLoadSource = source
+                lastLoadSource = seed.source
             }
         }
         return offerings
@@ -821,11 +767,13 @@ internal class AppActorOfferingsManager(
         ) : BootstrapPrefetchAction
     }
 
-    private data class BootstrapSeed(
+    /** What memory is built from: an offerings DTO and the entry it came from. */
+    private data class OfferingsSeed(
         val dto: AppActorOfferingsEnvelopeDTO,
         val cachedAtMillis: Long,
         val source: AppActorDiagnosticsDataSource,
         val verification: AppActorVerificationResult = AppActorVerificationResult.NotRequested,
+        // Null for the bundled fallback.
         val eTag: String? = null,
     )
 

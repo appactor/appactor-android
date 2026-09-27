@@ -1022,32 +1022,11 @@ class AppActorOfferingsManagerTests {
     @Test
     fun `a 304 after a new payload failed to enrich serves that payload, not the older one in memory`() = runBlocking {
         var now = 1_710_000_000_000L
-        val first = fixtureOfferings()
-        val second = first.copy(
-            data = first.data.copy(currentOffering = first.data.currentOffering?.copy(displayName = "Updated")),
-        )
-        val mockClient = mockk<AppActorBackendClient>(relaxed = true)
-        // The backend answers by the ETag it is sent, as its content-hash ETag does.
-        coEvery { mockClient.getOfferings(any()) } answers {
-            when (firstArg<String?>()) {
-                null -> freshOfferingsResponse(first, eTag = "\"e1\"")
-                "\"e1\"" -> freshOfferingsResponse(second, eTag = "\"e2\"")
-                else -> notModifiedResponse(eTag = "\"e2\"")
-            }
-        }
-        val productQueries = AtomicInteger(0)
-        val mockStoreAdapter = mockk<AppActorStoreAdapter>(relaxed = true)
-        coEvery { mockStoreAdapter.queryProductDetails(any()) } answers {
-            if (productQueries.incrementAndGet() == 2) throw IllegalStateException("Billing unavailable")
-            val requests = firstArg<List<AppActorStoreProductRequest>>()
-            requests.mapNotNull { request -> pricedProducts()[requestKey(request)] }
-        }
-        val manager = AppActorOfferingsManager(
-            backendClient = mockClient,
-            cacheStore = offeringsCacheStore("offerings-304-after-failed-enrich"),
-            offlineProductCatalogStore = offlineProductCatalogStore("offerings-304-after-failed-enrich"),
-            storeAdapter = mockStoreAdapter,
-            dateProviderMillis = { now },
+        val manager = offeringsManager(
+            name = "offerings-304-after-failed-enrich",
+            backendClient = clientServingNewPayloadAfterE1(),
+            storeAdapter = pricedStoreAdapter(failsOnQuery = { it == 2 }),
+            now = { now },
         )
         assertEquals("Main", manager.getOfferings().current?.displayName)
 
@@ -1061,33 +1040,13 @@ class AppActorOfferingsManagerTests {
     @Test
     fun `a 304 whose payload can't be enriched serves the older offerings in memory`() = runBlocking {
         var now = 1_710_000_000_000L
-        val first = fixtureOfferings()
-        val second = first.copy(
-            data = first.data.copy(currentOffering = first.data.currentOffering?.copy(displayName = "Updated")),
+        val manager = offeringsManager(
+            name = "offerings-304-memory-last-resort",
+            backendClient = clientServingNewPayloadAfterE1(),
+            storeAdapter = pricedStoreAdapter(failsOnQuery = { it > 1 }),
+            now = { now },
         )
-        val mockClient = mockk<AppActorBackendClient>(relaxed = true)
-        coEvery { mockClient.getOfferings(any()) } answers {
-            when (firstArg<String?>()) {
-                null -> freshOfferingsResponse(first, eTag = "\"e1\"")
-                "\"e1\"" -> freshOfferingsResponse(second, eTag = "\"e2\"")
-                else -> notModifiedResponse(eTag = "\"e2\"")
-            }
-        }
-        val productQueries = AtomicInteger(0)
-        val mockStoreAdapter = mockk<AppActorStoreAdapter>(relaxed = true)
-        coEvery { mockStoreAdapter.queryProductDetails(any()) } answers {
-            if (productQueries.incrementAndGet() > 1) throw IllegalStateException("Billing unavailable")
-            val requests = firstArg<List<AppActorStoreProductRequest>>()
-            requests.mapNotNull { request -> pricedProducts()[requestKey(request)] }
-        }
-        val manager = AppActorOfferingsManager(
-            backendClient = mockClient,
-            cacheStore = offeringsCacheStore("offerings-304-memory-last-resort"),
-            offlineProductCatalogStore = offlineProductCatalogStore("offerings-304-memory-last-resort"),
-            storeAdapter = mockStoreAdapter,
-            dateProviderMillis = { now },
-        )
-        manager.setFallbackOfferings(first.copy(data = first.data.copy(currentOffering = null, offerings = emptyList())))
+        manager.setFallbackOfferings(emptyOfferings())
         manager.getOfferings()
         now += 6 * 60 * 1_000
         runCatching { manager.getOfferings() }
@@ -1098,26 +1057,9 @@ class AppActorOfferingsManagerTests {
     @Test
     fun `a 304 confirming the offerings in memory restarts their freshness`() = runBlocking {
         var now = 1_710_000_000_000L
-        val mockClient = mockk<AppActorBackendClient>(relaxed = true)
-        coEvery { mockClient.getOfferings(any()) } answers {
-            if (firstArg<String?>() == null) {
-                freshOfferingsResponse(fixtureOfferings(), eTag = "\"e1\"")
-            } else {
-                notModifiedResponse(eTag = "\"e1\"")
-            }
-        }
-        val mockStoreAdapter = mockk<AppActorStoreAdapter>(relaxed = true)
-        coEvery { mockStoreAdapter.queryProductDetails(any()) } answers {
-            val requests = firstArg<List<AppActorStoreProductRequest>>()
-            requests.mapNotNull { request -> pricedProducts()[requestKey(request)] }
-        }
-        val manager = AppActorOfferingsManager(
-            backendClient = mockClient,
-            cacheStore = offeringsCacheStore("offerings-304-restarts-ttl"),
-            offlineProductCatalogStore = offlineProductCatalogStore("offerings-304-restarts-ttl"),
-            storeAdapter = mockStoreAdapter,
-            dateProviderMillis = { now },
-        )
+        val backendClient = clientConfirmingE1()
+        val storeAdapter = pricedStoreAdapter()
+        val manager = offeringsManager("offerings-304-restarts-ttl", backendClient, storeAdapter, now = { now })
         manager.getOfferings()
 
         now += 6 * 60 * 1_000
@@ -1125,8 +1067,8 @@ class AppActorOfferingsManagerTests {
         assertEquals(AppActorDiagnosticsDataSource.Cache, manager.lastLoadSource())
         manager.getOfferings()
 
-        coVerify(exactly = 2) { mockClient.getOfferings(any()) }
-        coVerify(exactly = 1) { mockStoreAdapter.queryProductDetails(any()) }
+        coVerify(exactly = 2) { backendClient.getOfferings(any()) }
+        coVerify(exactly = 1) { storeAdapter.queryProductDetails(any()) }
     }
 
     @Test
@@ -1134,27 +1076,12 @@ class AppActorOfferingsManagerTests {
         val originalLocale = Locale.getDefault()
         try {
             Locale.setDefault(Locale.forLanguageTag("en-US"))
-            val mockClient = mockk<AppActorBackendClient>(relaxed = true)
             // The backend isn't sent the locale, so both locales' payloads share the ETag.
-            coEvery { mockClient.getOfferings(any()) } answers {
-                if (firstArg<String?>() == null) {
-                    freshOfferingsResponse(fixtureOfferings(), eTag = "\"e1\"")
-                } else {
-                    notModifiedResponse(eTag = "\"e1\"")
-                }
-            }
-            val productQueries = AtomicInteger(0)
-            val mockStoreAdapter = mockk<AppActorStoreAdapter>(relaxed = true)
-            coEvery { mockStoreAdapter.queryProductDetails(any()) } answers {
-                if (productQueries.incrementAndGet() == 2) throw IllegalStateException("Billing unavailable")
-                val requests = firstArg<List<AppActorStoreProductRequest>>()
-                requests.mapNotNull { request -> pricedProducts()[requestKey(request)] }
-            }
-            val manager = AppActorOfferingsManager(
-                backendClient = mockClient,
-                cacheStore = offeringsCacheStore("offerings-304-other-locale"),
-                offlineProductCatalogStore = offlineProductCatalogStore("offerings-304-other-locale"),
-                storeAdapter = mockStoreAdapter,
+            val backendClient = clientConfirmingE1()
+            val manager = offeringsManager(
+                name = "offerings-304-other-locale",
+                backendClient = backendClient,
+                storeAdapter = pricedStoreAdapter(failsOnQuery = { it == 2 }),
             )
             manager.getOfferings()
 
@@ -1165,7 +1092,7 @@ class AppActorOfferingsManagerTests {
             manager.getOfferings()
 
             // The 304 enriched the tr entry, so the last call found fresh tr offerings in memory.
-            coVerify(exactly = 3) { mockClient.getOfferings(any()) }
+            coVerify(exactly = 3) { backendClient.getOfferings(any()) }
         } finally {
             Locale.setDefault(originalLocale)
         }
@@ -1174,25 +1101,16 @@ class AppActorOfferingsManagerTests {
     @Test
     fun `offline, offerings in memory beat the bundled fallback when the disk entry can't be enriched`() = runBlocking {
         var now = 1_710_000_000_000L
-        val dto = fixtureOfferings()
-        val mockClient = mockk<AppActorBackendClient>(relaxed = true)
-        coEvery { mockClient.getOfferings(any()) } returns freshOfferingsResponse(dto) andThenThrows
+        val backendClient = mockk<AppActorBackendClient>(relaxed = true)
+        coEvery { backendClient.getOfferings(any()) } returns freshOfferingsResponse(fixtureOfferings()) andThenThrows
             AppActorBackendException.Network("offline")
-        val productQueries = AtomicInteger(0)
-        val mockStoreAdapter = mockk<AppActorStoreAdapter>(relaxed = true)
-        coEvery { mockStoreAdapter.queryProductDetails(any()) } answers {
-            if (productQueries.incrementAndGet() > 1) throw IllegalStateException("Billing unavailable")
-            val requests = firstArg<List<AppActorStoreProductRequest>>()
-            requests.mapNotNull { request -> pricedProducts()[requestKey(request)] }
-        }
-        val manager = AppActorOfferingsManager(
-            backendClient = mockClient,
-            cacheStore = offeringsCacheStore("offerings-offline-memory-last-resort"),
-            offlineProductCatalogStore = offlineProductCatalogStore("offerings-offline-memory-last-resort"),
-            storeAdapter = mockStoreAdapter,
-            dateProviderMillis = { now },
+        val manager = offeringsManager(
+            name = "offerings-offline-memory-last-resort",
+            backendClient = backendClient,
+            storeAdapter = pricedStoreAdapter(failsOnQuery = { it > 1 }),
+            now = { now },
         )
-        manager.setFallbackOfferings(dto.copy(data = dto.data.copy(currentOffering = null, offerings = emptyList())))
+        manager.setFallbackOfferings(emptyOfferings())
         manager.getOfferings()
 
         now += 6 * 60 * 1_000
@@ -1202,28 +1120,80 @@ class AppActorOfferingsManagerTests {
 
     @Test
     fun `bundled fallback offerings seeded at bootstrap are stale at once`() = runBlocking {
-        val mockClient = mockk<AppActorBackendClient>(relaxed = true)
-        coEvery { mockClient.getOfferings(any()) } throws
+        val backendClient = mockk<AppActorBackendClient>(relaxed = true)
+        coEvery { backendClient.getOfferings(any()) } throws
             AppActorBackendException.Network("offline") andThen freshOfferingsResponse(fixtureOfferings())
-        val mockStoreAdapter = mockk<AppActorStoreAdapter>(relaxed = true)
-        coEvery { mockStoreAdapter.queryProductDetails(any()) } answers {
-            val requests = firstArg<List<AppActorStoreProductRequest>>()
-            requests.mapNotNull { request -> pricedProducts()[requestKey(request)] }
-        }
-        val manager = AppActorOfferingsManager(
-            backendClient = mockClient,
-            cacheStore = offeringsCacheStore("offerings-bootstrap-fallback-stale"),
-            offlineProductCatalogStore = offlineProductCatalogStore("offerings-bootstrap-fallback-stale"),
-            storeAdapter = mockStoreAdapter,
-        )
+        val manager = offeringsManager("offerings-bootstrap-fallback-stale", backendClient, pricedStoreAdapter())
         manager.setFallbackOfferings(fixtureOfferings())
 
         assertEquals(AppActorDiagnosticsDataSource.Cache, manager.prefetchForBootstrap())
         manager.getOfferings() // joins the bootstrap enrichment of the fallback, or refetches after it
         manager.getOfferings()
 
-        coVerify(exactly = 2) { mockClient.getOfferings(any()) }
+        coVerify(exactly = 2) { backendClient.getOfferings(any()) }
     }
+
+    // The two backends below answer by the ETag they are sent, as the backend's content-hash ETag does.
+
+    /** The fixture as e1; for e1 a new payload (current offering "Updated") as e2; then 304s for e2. */
+    private fun clientServingNewPayloadAfterE1(): AppActorBackendClient {
+        val first = fixtureOfferings()
+        val second = first.copy(
+            data = first.data.copy(currentOffering = first.data.currentOffering?.copy(displayName = "Updated")),
+        )
+        return mockk<AppActorBackendClient>(relaxed = true).also { client ->
+            coEvery { client.getOfferings(any()) } answers {
+                when (firstArg<String?>()) {
+                    null -> freshOfferingsResponse(first, eTag = "\"e1\"")
+                    "\"e1\"" -> freshOfferingsResponse(second, eTag = "\"e2\"")
+                    else -> notModifiedResponse(eTag = "\"e2\"")
+                }
+            }
+        }
+    }
+
+    /** The fixture as e1, then 304s confirming e1. */
+    private fun clientConfirmingE1(): AppActorBackendClient =
+        mockk<AppActorBackendClient>(relaxed = true).also { client ->
+            coEvery { client.getOfferings(any()) } answers {
+                if (firstArg<String?>() == null) {
+                    freshOfferingsResponse(fixtureOfferings(), eTag = "\"e1\"")
+                } else {
+                    notModifiedResponse(eTag = "\"e1\"")
+                }
+            }
+        }
+
+    /** A bundled fallback with no offerings, telling it apart from the fixture. */
+    private fun emptyOfferings(): AppActorOfferingsEnvelopeDTO {
+        val dto = fixtureOfferings()
+        return dto.copy(data = dto.data.copy(currentOffering = null, offerings = emptyList()))
+    }
+
+    /** Resolves [pricedProducts]; the product queries [failsOnQuery] picks (counted from 1) fail as Play can. */
+    private fun pricedStoreAdapter(failsOnQuery: (Int) -> Boolean = { false }): AppActorStoreAdapter {
+        val productQueries = AtomicInteger(0)
+        return mockk<AppActorStoreAdapter>(relaxed = true).also { adapter ->
+            coEvery { adapter.queryProductDetails(any()) } answers {
+                if (failsOnQuery(productQueries.incrementAndGet())) throw IllegalStateException("Billing unavailable")
+                val requests = firstArg<List<AppActorStoreProductRequest>>()
+                requests.mapNotNull { request -> pricedProducts()[requestKey(request)] }
+            }
+        }
+    }
+
+    private fun offeringsManager(
+        name: String,
+        backendClient: AppActorBackendClient,
+        storeAdapter: AppActorStoreAdapter,
+        now: () -> Long = { System.currentTimeMillis() },
+    ) = AppActorOfferingsManager(
+        backendClient = backendClient,
+        cacheStore = offeringsCacheStore(name),
+        offlineProductCatalogStore = offlineProductCatalogStore(name),
+        storeAdapter = storeAdapter,
+        dateProviderMillis = now,
+    )
 
     /**
      * A manager with offerings cached on disk only, whose first Play product query fails (as with
