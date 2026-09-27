@@ -10,7 +10,7 @@
 
 <p align="center">
 <a href="https://github.com/appactor/appactor-android/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
-<img src="https://img.shields.io/badge/Android-24%2B-green.svg">
+<img src="https://img.shields.io/badge/Android-26%2B-green.svg">
 <img src="https://img.shields.io/badge/Kotlin-2.0%2B-purple.svg">
 </p>
 

@@ -414,12 +414,10 @@ internal object AppActorAttributesValidation {
 
 internal object AppActorIso8601 {
     // SimpleDateFormat isn't thread-safe; one per thread spares the log path a shared lock.
-    // (Not ThreadLocal.withInitial, which Android has only from API 26.)
-    private val formatter = object : ThreadLocal<SimpleDateFormat>() {
-        override fun initialValue(): SimpleDateFormat =
-            SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
-                timeZone = TimeZone.getTimeZone("UTC")
-            }
+    private val formatter = ThreadLocal.withInitial {
+        SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
+            timeZone = TimeZone.getTimeZone("UTC")
+        }
     }
 
     fun format(date: Date): String = formatter.get()!!.format(date)

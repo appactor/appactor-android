@@ -91,8 +91,9 @@ public object AppActor {
     private var runtime: AppActorRuntimeState? = null
     private val transitionMutex = Mutex()
     private var preconfiguredCallbacks = AppActorCallbackState()
-    @Volatile
-    private var preconfiguredFallbackOfferingsDTO: AppActorOfferingsEnvelopeDTO? = null
+    // The app's bundled fallback offerings, for the whole process as on iOS: every runtime gets
+    // it when installed, so it outlives reset(). Under the lock installRuntime takes.
+    private var fallbackOfferingsDTO: AppActorOfferingsEnvelopeDTO? = null
     private var callbackScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     // One flow for the whole process, as iOS publishes customerInfo, so a collector taken before
     // configure() or held across a reset() keeps receiving.
@@ -111,6 +112,9 @@ public object AppActor {
     internal var storeAdapterFactory: (Context) -> AppActorStoreAdapter = { context ->
         GooglePlayStoreAdapter(context)
     }
+
+    /** For tests, which share this object: reset() keeps the fallback offerings. */
+    internal fun clearFallbackOfferings(): Unit = synchronized(this) { fallbackOfferingsDTO = null }
 
     private val runtimeFactory: AppActorRuntimeFactory
         get() = AppActorRuntimeFactory(
@@ -433,7 +437,6 @@ public object AppActor {
             bumpIdentityEpochLocked()
             // Under the lock the callback setters take too, so none can write the runtime back.
             val currentRuntime = synchronized(this@AppActor) {
-                preconfiguredFallbackOfferingsDTO = null
                 runtime?.also {
                     runtime = null
                     customerInfoStateFlow.value = AppActorCustomerInfo.empty
@@ -673,7 +676,7 @@ public object AppActor {
      * The fallback is used only when both network and disk cache fail.
      * Fallback offerings are immediately stale — the next call triggers a network refresh.
      *
-     * Can be called before or after [configure].
+     * Can be called before or after [configure]. The fallback stays set across [reset].
      */
     public fun setFallbackOfferings(jsonData: ByteArray) {
         val dto = try {
@@ -682,8 +685,8 @@ public object AppActor {
             throw AppActorError.Decoding(error.message ?: "Invalid fallback offerings JSON", error)
         }
         synchronized(this) {
+            fallbackOfferingsDTO = dto
             runtime?.offeringsManager?.setFallbackOfferings(dto)
-                ?: run { preconfiguredFallbackOfferingsDTO = dto }
         }
     }
 
@@ -1177,10 +1180,6 @@ public object AppActor {
         )
         customerInfoStateFlow.value = newRuntime.lastCustomerInfo
         newRuntime.paymentProcessor.onRetryWakeDrained = { info -> publishDrainedCustomerInfo(runtimeSessionId, info) }
-        preconfiguredFallbackOfferingsDTO?.let { dto ->
-            newRuntime.offeringsManager.setFallbackOfferings(dto)
-            preconfiguredFallbackOfferingsDTO = null
-        }
         val lifecycleCallbacks = lifecycleCoordinator.registerLifecycleCallbacksIfNeeded(newRuntime)
         if (lifecycleCallbacks != null) {
             newRuntime = installRuntime(newRuntime.copy(lifecycleCallbacks = lifecycleCallbacks))
@@ -1218,13 +1217,14 @@ public object AppActor {
     }
 
     /**
-     * Makes [newRuntime] current, with the listeners as they are now. Under the lock the listener
-     * setters take, so a listener set while configure() builds the runtime is not lost.
+     * Makes [newRuntime] current, with the listeners and fallback offerings as they are now. Under
+     * the lock their setters take, so one set while configure() builds the runtime is not lost.
      */
     private fun installRuntime(newRuntime: AppActorRuntimeState): AppActorRuntimeState =
         synchronized(this) { installRuntimeLocked(newRuntime) }
 
     private fun installRuntimeLocked(newRuntime: AppActorRuntimeState): AppActorRuntimeState {
+        fallbackOfferingsDTO?.let(newRuntime.offeringsManager::setFallbackOfferings)
         val callbacks = preconfiguredCallbacks
         val sessionId = newRuntime.sessionId
         newRuntime.paymentProcessor.onDeferredPurchaseResolved = callbacks.onDeferredPurchaseResolved?.let { callback ->
