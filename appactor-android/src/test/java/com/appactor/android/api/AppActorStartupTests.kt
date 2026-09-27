@@ -364,10 +364,10 @@ class AppActorStartupTests {
     fun `fallback offerings set before configure are still served after reset`() = runBlocking {
         AppActor.setFallbackOfferings(startupOfferingsFixture().toByteArray())
 
-        withOfflineOfferings { configure ->
-            configure("user_fallback_a")
+        offlineOfferingsBackend().use { backend ->
+            backend.configure("user_fallback_a")
             AppActor.reset()
-            configure("user_fallback_b")
+            backend.configure("user_fallback_b")
 
             assertEquals("off_main_android", AppActor.offerings().current?.id)
         }
@@ -375,11 +375,11 @@ class AppActorStartupTests {
 
     @Test
     fun `fallback offerings set after configure are still served after reset`() = runBlocking {
-        withOfflineOfferings { configure ->
-            configure("user_fallback_a")
+        offlineOfferingsBackend().use { backend ->
+            backend.configure("user_fallback_a")
             AppActor.setFallbackOfferings(startupOfferingsFixture().toByteArray())
             AppActor.reset()
-            configure("user_fallback_b")
+            backend.configure("user_fallback_b")
 
             assertEquals("off_main_android", AppActor.offerings().current?.id)
         }
@@ -613,41 +613,37 @@ class AppActorStartupTests {
     }
 
     /**
-     * Runs [block] against a backend whose offerings always fail over to the cache: a 304 to a
-     * request without an ETag is refused at once, where a 5xx would be retried for seconds.
+     * A backend whose offerings always fail over to the cache: a 304 to a request without an ETag
+     * is refused at once, where a 5xx would be retried for seconds.
      */
-    private suspend fun withOfflineOfferings(block: suspend (configure: suspend (String) -> Unit) -> Unit) {
-        val context = ApplicationProvider.getApplicationContext<Context>()
+    private fun offlineOfferingsBackend(): TestBackendServer {
         val fakeStoreAdapter = FakeStoreAdapter(resolvedProducts = startupFixtureProducts())
         AppActor.storeAdapterFactory = { fakeStoreAdapter }
-
-        TestBackendServer { request ->
-            when (val path = request.path?.substringBefore("?")) {
-                "/v1/payment/offerings" -> MockResponse().setResponseCode(304)
-
-                else -> if (path?.startsWith("/v1/customers/") == true) {
-                    val appUserId = path.substringAfter("/v1/customers/")
+        return TestBackendServer { request ->
+            val path = request.path?.substringBefore("?").orEmpty()
+            when {
+                path == "/v1/payment/offerings" -> MockResponse().setResponseCode(304)
+                path.startsWith("/v1/customers/") -> jsonResponse(
                     customerEnvelope(
-                        requestId = "req_customer_fallback_$appUserId",
-                        appUserId = appUserId,
-                    ).let(::jsonResponse)
-                } else {
-                    jsonResponse("{}", 404)
-                }
-            }
-        }.use { backend ->
-            block { appUserId ->
-                AppActor.configure(
-                    AppActorConfiguration(
-                        context = context,
-                        apiKey = "pk_test_123",
-                        appUserId = appUserId,
-                        baseUrl = backend.baseUrl,
-                        options = testOptionsForLocalBackend(),
-                    )
+                        requestId = "req_customer_fallback",
+                        appUserId = path.substringAfter("/v1/customers/"),
+                    ),
                 )
+                else -> jsonResponse("{}", 404)
             }
         }
+    }
+
+    private suspend fun TestBackendServer.configure(appUserId: String) {
+        AppActor.configure(
+            AppActorConfiguration(
+                context = ApplicationProvider.getApplicationContext<Context>(),
+                apiKey = "pk_test_123",
+                appUserId = appUserId,
+                baseUrl = baseUrl,
+                options = testOptionsForLocalBackend(),
+            )
+        )
     }
 
     /** The Play products of offerings_android_sample.json, so its packages survive enrichment. */
