@@ -46,6 +46,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
 import kotlin.math.min
@@ -71,7 +72,7 @@ internal class GooglePlayBillingClientBridge(
     private val purchaseUpdatesChannel = Channel<AppActorBillingPurchaseUpdate>(capacity = Channel.UNLIMITED)
     private val purchasesUpdatedListener = PurchasesUpdatedListener { billingResult, purchases ->
         val resolvedProductType = pendingPurchaseProductType ?: AppActorProductType.Unknown
-        val purchasePayloads = purchases.orEmpty().map { it.toPayload(resolvedProductType) }
+        val purchasePayloads = purchases.orEmpty().map { it.toUpdatePayload(resolvedProductType) }
 
         val continuation = purchaseContinuation
         purchaseContinuation = null
@@ -91,7 +92,8 @@ internal class GooglePlayBillingClientBridge(
                     purchases = purchasePayloads,
                 )
             )
-            if (sent.isFailure && sent.exceptionOrNull() == null) {
+            // After shutdown the next session's startup sync picks the purchase up.
+            if (sent.isFailure && sent.exceptionOrNull() == null && !isShutDown) {
                 throw IllegalStateException("Billing purchase update was dropped before the SDK could process it.")
             }
         }
@@ -163,8 +165,15 @@ internal class GooglePlayBillingClientBridge(
     override fun shutdown() {
         isShutDown = true
         markDisconnected()
+        // A purchase waiting on the Play sheet would otherwise never return: nothing resumes it
+        // once the listener is gone. What the user still buys there, the next session syncs.
+        val continuation = purchaseContinuation
         purchaseContinuation = null
         pendingPurchaseProductType = null
+        resumePurchaseContinuationIfActive(
+            continuation,
+            AppActorBillingLaunchResult.Failed(error = AppActorError.NotConfigured),
+        )
         synchronized(requestDrainLock) {
             requestDrainJob?.cancel()
             requestDrainJob = null
@@ -257,52 +266,58 @@ internal class GooglePlayBillingClientBridge(
             "Billing product details are unavailable for purchase launch."
         )
 
-        return suspendCancellableCoroutine { continuation ->
-            val productDetailsParamsBuilder = BillingFlowParams.ProductDetailsParams.newBuilder()
-                .setProductDetails(resolvedProductDetails)
+        // Google requires launchBillingFlow on the main thread. There the failure the library also
+        // posts to the listener runs after this returns, instead of racing it.
+        return withContext(Dispatchers.Main.immediate) {
+            suspendCancellableCoroutine { continuation ->
+                val productDetailsParamsBuilder = BillingFlowParams.ProductDetailsParams.newBuilder()
+                    .setProductDetails(resolvedProductDetails)
 
-            if (!offerToken.isNullOrBlank()) {
-                productDetailsParamsBuilder.setOfferToken(offerToken)
-            }
-
-            val paramsBuilder = BillingFlowParams.newBuilder()
-                .setProductDetailsParamsList(listOf(productDetailsParamsBuilder.build()))
-
-            if (!obfuscatedAccountId.isNullOrBlank()) {
-                paramsBuilder.setObfuscatedAccountId(obfuscatedAccountId)
-            }
-
-            if (!oldPurchaseToken.isNullOrBlank()) {
-                val subscriptionUpdateParams = BillingFlowParams.SubscriptionUpdateParams.newBuilder()
-                    .setOldPurchaseToken(oldPurchaseToken)
-                if (replacementMode != null) {
-                    subscriptionUpdateParams.setSubscriptionReplacementMode(replacementMode)
+                if (!offerToken.isNullOrBlank()) {
+                    productDetailsParamsBuilder.setOfferToken(offerToken)
                 }
-                paramsBuilder.setSubscriptionUpdateParams(subscriptionUpdateParams.build())
-            }
 
-            purchaseContinuation = continuation
-            pendingPurchaseProductType = productType
-            continuation.invokeOnCancellation {
-                if (purchaseContinuation === continuation) {
-                    purchaseContinuation = null
-                    pendingPurchaseProductType = null
+                val paramsBuilder = BillingFlowParams.newBuilder()
+                    .setProductDetailsParamsList(listOf(productDetailsParamsBuilder.build()))
+
+                if (!obfuscatedAccountId.isNullOrBlank()) {
+                    paramsBuilder.setObfuscatedAccountId(obfuscatedAccountId)
                 }
-            }
-            val launchResult = billingClient.launchBillingFlow(activity, paramsBuilder.build())
-            if (launchResult.responseCode != BillingResponseCode.OK) {
-                purchaseContinuation = null
-                pendingPurchaseProductType = null
-                var failure = launchResult
-                if (launchResult.responseCode == BillingResponseCode.SERVICE_DISCONNECTED) {
-                    // Below API 29 the library doesn't wait for its reconnect here. Connect again
-                    // for the next launch, and report a device without Play billing as such, not
-                    // as a network error.
-                    markDisconnected()
-                    scheduleReconnect()
-                    lastSetupResult?.takeIf { isBillingUnavailable() }?.let { failure = it }
+
+                if (!oldPurchaseToken.isNullOrBlank()) {
+                    val subscriptionUpdateParams = BillingFlowParams.SubscriptionUpdateParams.newBuilder()
+                        .setOldPurchaseToken(oldPurchaseToken)
+                    if (replacementMode != null) {
+                        subscriptionUpdateParams.setSubscriptionReplacementMode(replacementMode)
+                    }
+                    paramsBuilder.setSubscriptionUpdateParams(subscriptionUpdateParams.build())
                 }
-                continuation.resume(failure.toLaunchResult(productType = productType))
+
+                purchaseContinuation = continuation
+                pendingPurchaseProductType = productType
+                continuation.invokeOnCancellation {
+                    if (purchaseContinuation === continuation) {
+                        purchaseContinuation = null
+                        pendingPurchaseProductType = null
+                    }
+                }
+                val launchResult = billingClient.launchBillingFlow(activity, paramsBuilder.build())
+                if (launchResult.responseCode != BillingResponseCode.OK) {
+                    if (purchaseContinuation === continuation) {
+                        purchaseContinuation = null
+                        pendingPurchaseProductType = null
+                    }
+                    var failure = launchResult
+                    if (launchResult.responseCode == BillingResponseCode.SERVICE_DISCONNECTED) {
+                        // Below API 29 the library doesn't wait for its reconnect here. Connect again
+                        // for the next launch, and report a device without Play billing as such, not
+                        // as a network error.
+                        markDisconnected()
+                        scheduleReconnect()
+                        lastSetupResult?.takeIf { isBillingUnavailable() }?.let { failure = it }
+                    }
+                    resumePurchaseContinuationIfActive(continuation, failure.toLaunchResult(productType = productType))
+                }
             }
         }
     }
@@ -392,7 +407,12 @@ internal class GooglePlayBillingClientBridge(
                     .build()
 
                 consumeAsync(params) { billingResult, _ ->
-                    if (billingResult.responseCode == BillingResponseCode.OK) {
+                    // After a bulk sync or restore the backend has consumed it already. Google:
+                    // "if the updated purchase information says it is already consumed, you can
+                    // ignore the error" (BillingResponseCode.ITEM_NOT_OWNED).
+                    if (billingResult.responseCode == BillingResponseCode.OK ||
+                        billingResult.responseCode == BillingResponseCode.ITEM_NOT_OWNED
+                    ) {
                         continuation.resume(Unit)
                     } else {
                         continuation.resumeWith(
@@ -793,6 +813,10 @@ private fun Purchase.toPayload(productType: AppActorProductType): AppActorBillin
         purchaseSignature = signature,
     )
 }
+
+// A live update reads a pending plan update the way the launch that bought it does.
+private fun Purchase.toUpdatePayload(productType: AppActorProductType): AppActorBillingPurchasePayload =
+    pendingPurchaseUpdate?.let { update -> toPendingUpdatePayload(update, productType) } ?: toPayload(productType)
 
 internal fun BillingResult.toLaunchResult(
     productType: AppActorProductType,

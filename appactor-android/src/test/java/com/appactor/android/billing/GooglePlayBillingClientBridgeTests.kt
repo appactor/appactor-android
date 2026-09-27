@@ -30,10 +30,13 @@ import com.android.billingclient.api.QueryProductDetailsResult
 import com.android.billingclient.api.QueryPurchasesParams
 import com.android.billingclient.api.UnfetchedProduct
 import com.appactor.android.internal.logging.AppActorLogger
+import com.appactor.android.models.AppActorError
 import com.appactor.android.models.AppActorProductType
+import io.mockk.mockk
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -72,23 +75,80 @@ class GooglePlayBillingClientBridgeTests {
 
     @Test
     fun `a pending prepaid plan update is a pending purchase of the new token`() {
-        // Play hands back the old subscription (token_old) with the pending update inside.
-        val purchase = com.android.billingclient.api.Purchase(
-            """
-                {"orderId":"GPA.old","productIds":["prepaid.monthly"],"purchaseToken":"token_old",
-                 "purchaseState":0,"purchaseTime":1710000000000,"acknowledged":true,
-                 "pendingPurchaseUpdate":{"purchaseToken":"token_new","productIds":["prepaid.yearly"]}}
-            """.trimIndent(),
-            "signature",
-        )
-
         val result = billingResult(BillingClient.BillingResponseCode.OK)
-            .toLaunchResult(AppActorProductType.Subscription, listOf(purchase))
+            .toLaunchResult(AppActorProductType.Subscription, listOf(pendingPrepaidUpdatePurchase()))
 
         val pending = (result as AppActorBillingLaunchResult.Pending).purchases.single()
         assertEquals("token_new", pending.purchaseToken)
         assertEquals(listOf("prepaid.yearly"), pending.products)
         assertEquals(AppActorStorePurchaseState.Pending, pending.purchaseState)
+    }
+
+    @Test
+    fun `a live pending prepaid plan update is reported under the new token`() = runBlocking {
+        var listener: com.android.billingclient.api.PurchasesUpdatedListener? = null
+        val bridge = GooglePlayBillingClientBridge(
+            context = context,
+            billingClientFactory = { _, purchasesUpdatedListener ->
+                listener = purchasesUpdatedListener
+                FakeBillingClient()
+            },
+        )
+
+        // No purchase flow is waiting: the update arrives after the launch continuation is gone.
+        requireNotNull(listener).onPurchasesUpdated(
+            billingResult(BillingClient.BillingResponseCode.OK),
+            mutableListOf(pendingPrepaidUpdatePurchase()),
+        )
+
+        val update = kotlinx.coroutines.withTimeout(5_000) { bridge.purchaseUpdates().first() }
+        val pending = update.purchases.single()
+        assertEquals(setOf("token_new"), update.purchaseTokens)
+        assertEquals(listOf("prepaid.yearly"), pending.products)
+        assertEquals(AppActorStorePurchaseState.Pending, pending.purchaseState)
+        bridge.shutdown()
+    }
+
+    @Test
+    fun `shutdown fails a purchase still waiting on the play sheet`() = runBlocking {
+        val fakeBillingClient = FakeBillingClient()
+        val bridge = GooglePlayBillingClientBridge(
+            context = context,
+            billingClientFactory = { _, _ -> fakeBillingClient },
+        )
+        val purchase = async {
+            bridge.launchPurchase(
+                activity = mockk(relaxed = true),
+                productDetails = inAppProductDetails("coins_100"),
+                productType = AppActorProductType.Consumable,
+                offerToken = null,
+                obfuscatedAccountId = null,
+                oldPurchaseToken = null,
+                replacementMode = null,
+            )
+        }
+        kotlinx.coroutines.withTimeout(5_000) {
+            while (fakeBillingClient.launchBillingFlowCalls == 0) delay(10)
+        }
+
+        bridge.shutdown()
+
+        val result = kotlinx.coroutines.withTimeout(5_000) { purchase.await() }
+        assertEquals(AppActorError.NotConfigured, (result as AppActorBillingLaunchResult.Failed).error)
+    }
+
+    @Test
+    fun `consuming a purchase play no longer owns counts as consumed`() = runBlocking {
+        val bridge = GooglePlayBillingClientBridge(
+            context = context,
+            billingClientFactory = { _, _ ->
+                FakeBillingClient(consumeResponseCode = BillingClient.BillingResponseCode.ITEM_NOT_OWNED)
+            },
+        )
+
+        // Already consumed by the backend after a bulk sync; this must not throw.
+        bridge.consumePurchase("token_consumed_by_backend")
+        bridge.shutdown()
     }
 
     @Test
@@ -337,9 +397,12 @@ class GooglePlayBillingClientBridgeTests {
         ),
         val connectRelease: CountDownLatch? = null,
         initialReady: Boolean = true,
+        private val consumeResponseCode: Int = BillingClient.BillingResponseCode.OK,
     ) : BillingClient() {
 
         var ready: Boolean = initialReady
+        @Volatile
+        var launchBillingFlowCalls: Int = 0
         var startConnectionCalls: Int = 0
         var queryProductDetailsCalls: Int = 0
         val connectionStarted = CountDownLatch(1)
@@ -357,6 +420,7 @@ class GooglePlayBillingClientBridgeTests {
         }
 
         override fun launchBillingFlow(activity: android.app.Activity, params: BillingFlowParams): BillingResult {
+            launchBillingFlowCalls += 1
             return billingResult(BillingClient.BillingResponseCode.OK)
         }
 
@@ -384,7 +448,7 @@ class GooglePlayBillingClientBridgeTests {
         }
 
         override fun consumeAsync(params: ConsumeParams, listener: ConsumeResponseListener) {
-            listener.onConsumeResponse(billingResult(BillingClient.BillingResponseCode.OK), params.purchaseToken)
+            listener.onConsumeResponse(billingResult(consumeResponseCode), params.purchaseToken)
         }
 
         override fun createAlternativeBillingOnlyReportingDetailsAsync(
@@ -469,6 +533,26 @@ class GooglePlayBillingClientBridgeTests {
             stateListener?.onBillingServiceDisconnected()
         }
     }
+}
+
+// Play hands back the old subscription (token_old) with the pending update inside.
+private fun pendingPrepaidUpdatePurchase(): com.android.billingclient.api.Purchase =
+    com.android.billingclient.api.Purchase(
+        """
+            {"orderId":"GPA.old","productIds":["prepaid.monthly"],"purchaseToken":"token_old",
+             "purchaseState":0,"purchaseTime":1710000000000,"acknowledged":true,
+             "pendingPurchaseUpdate":{"purchaseToken":"token_new","productIds":["prepaid.yearly"]}}
+        """.trimIndent(),
+        "signature",
+    )
+
+private fun inAppProductDetails(productId: String): com.android.billingclient.api.ProductDetails {
+    val constructor = com.android.billingclient.api.ProductDetails::class.java
+        .getDeclaredConstructor(String::class.java)
+    constructor.isAccessible = true
+    return constructor.newInstance(
+        """{"productId":"$productId","type":"inapp","title":"Coins","name":"Coins","description":"100 coins"}""",
+    )
 }
 
 private fun billingResult(responseCode: Int, debugMessage: String = "test"): BillingResult {
