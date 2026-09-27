@@ -145,6 +145,29 @@ class GooglePlayBillingClientBridgeTests {
     }
 
     @Test
+    fun `item not owned still fails a consume while play lists the purchase`() = runBlocking {
+        val stillOwned = com.android.billingclient.api.Purchase(
+            """{"orderId":"GPA.coins","productIds":["coins_100"],"purchaseToken":"token_still_owned",
+               "purchaseState":0,"purchaseTime":1710000000000,"acknowledged":false}""",
+            "signature",
+        )
+        val bridge = GooglePlayBillingClientBridge(
+            context = context,
+            billingClientFactory = { _, _ ->
+                FakeBillingClient(
+                    consumeResponseCode = BillingClient.BillingResponseCode.ITEM_NOT_OWNED,
+                    ownedPurchases = listOf(stillOwned),
+                )
+            },
+        )
+
+        val error = runCatching { bridge.consumePurchase("token_still_owned") }.exceptionOrNull()
+
+        assertNotNull(error)
+        bridge.shutdown()
+    }
+
+    @Test
     fun `consuming a purchase play no longer owns counts as consumed`() = runBlocking {
         val bridge = GooglePlayBillingClientBridge(
             context = context,
@@ -405,6 +428,7 @@ class GooglePlayBillingClientBridgeTests {
         val connectRelease: CountDownLatch? = null,
         initialReady: Boolean = true,
         private val consumeResponseCode: Int = BillingClient.BillingResponseCode.OK,
+        private val ownedPurchases: List<com.android.billingclient.api.Purchase> = emptyList(),
     ) : BillingClient() {
 
         var ready: Boolean = initialReady
@@ -516,7 +540,7 @@ class GooglePlayBillingClientBridgeTests {
             params: QueryPurchasesParams,
             listener: PurchasesResponseListener,
         ) {
-            listener.onQueryPurchasesResponse(billingResult(BillingClient.BillingResponseCode.OK), emptyList())
+            listener.onQueryPurchasesResponse(billingResult(BillingClient.BillingResponseCode.OK), ownedPurchases)
         }
 
         override fun startConnection(listener: com.android.billingclient.api.BillingClientStateListener) {

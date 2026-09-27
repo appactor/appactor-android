@@ -17,6 +17,7 @@ import com.android.billingclient.api.QueryProductDetailsParams
 import com.android.billingclient.api.QueryPurchasesParams
 import com.appactor.android.internal.logging.AppActorLogger
 import com.appactor.android.internal.runtime.appActorBackgroundExceptionHandler
+import com.appactor.android.internal.runtime.throwIfCancellation
 import com.appactor.android.models.AppActorError
 import com.appactor.android.models.AppActorPricingPhase
 import com.appactor.android.models.AppActorProductType
@@ -418,30 +419,30 @@ internal class GooglePlayBillingClientBridge(
     }
 
     override suspend fun consumePurchase(purchaseToken: String) {
-        executeWhenReady {
-            suspendCancellableCoroutine<Unit> { continuation ->
+        val billingResult = executeWhenReady {
+            suspendCancellableCoroutine<BillingResult> { continuation ->
                 val params = ConsumeParams.newBuilder()
                     .setPurchaseToken(purchaseToken)
                     .build()
 
-                consumeAsync(params) { billingResult, _ ->
-                    // ITEM_NOT_OWNED: nothing left to consume. After a bulk sync or restore the
-                    // backend has consumed it, and Google lets an already consumed purchase's
-                    // error be ignored. Were Play's cache stale, the next startup sync finds it.
-                    if (billingResult.responseCode == BillingResponseCode.OK ||
-                        billingResult.responseCode == BillingResponseCode.ITEM_NOT_OWNED
-                    ) {
-                        continuation.resume(Unit)
-                    } else {
-                        continuation.resumeWith(
-                            Result.failure(
-                                billingResult.toBillingError("Failed to consume purchase.")
-                            )
-                        )
-                    }
-                }
+                consumeAsync(params) { billingResult, _ -> continuation.resume(billingResult) }
             }
         }
+        if (billingResult.responseCode == BillingResponseCode.OK || isConsumedAlready(billingResult, purchaseToken)) {
+            return
+        }
+        throw billingResult.toBillingError("Failed to consume purchase.")
+    }
+
+    // After a bulk sync or restore the backend has consumed the purchase. ITEM_NOT_OWNED refreshes
+    // Play's cache; Google: "if you are trying to consume an item and if the updated purchase
+    // information says it is already consumed, you can ignore the error now."
+    private suspend fun isConsumedAlready(billingResult: BillingResult, purchaseToken: String): Boolean {
+        if (billingResult.responseCode != BillingResponseCode.ITEM_NOT_OWNED) return false
+        val owned = runCatching { queryPurchases(AppActorProductType.Consumable) }
+            .onFailure(::throwIfCancellation)
+            .getOrNull() ?: return false
+        return owned.none { it.purchaseToken == purchaseToken }
     }
 
     private suspend fun queryStorefront(): AppActorStorefront? {

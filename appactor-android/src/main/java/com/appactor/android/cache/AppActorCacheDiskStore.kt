@@ -3,7 +3,6 @@ package com.appactor.android.cache
 import android.content.Context
 import com.appactor.android.backend.client.AppActorBackendJson
 import com.appactor.android.internal.logging.AppActorLogger
-import com.appactor.android.models.AppActorVerificationResult
 import java.io.File
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
@@ -100,17 +99,25 @@ internal class AppActorCacheDiskStore(
         directory.deleteRecursively()
     }
 
+    /**
+     * Removes every entry that doesn't hold a verified response: failed ones, and the unverified
+     * offerings and remote-config entries older versions stored from unsigned responses. The
+     * offline product catalog is derived from the offerings, so it goes with them.
+     */
     fun clearAllUnverified() = lock.withLock {
+        var offeringsPurged = false
         val files = directory.listFiles().orEmpty()
         files.filter { it.extension == "json" }.forEach { file ->
             val entry = runCatching {
                 AppActorBackendJson.instance.decodeFromString<AppActorCacheEntry>(file.readText())
             }.onFailure { AppActorLogger.warn("[$TAG] Cache entry decode failed during cleanup: ${it.message}") }
                 .getOrNull()
-            if (entry == null || entry.resolvedStatus == AppActorVerificationResult.Failed) {
+            if (entry == null || !entry.resolvedStatus.isVerified) {
+                if (file.nameWithoutExtension == AppActorCacheResource.Offerings.cacheKey) offeringsPurged = true
                 file.delete()
             }
         }
+        if (offeringsPurged) fileFor(AppActorCacheResource.OfflineProductCatalog).delete()
     }
 
     private fun fileFor(resource: AppActorCacheResource): File {

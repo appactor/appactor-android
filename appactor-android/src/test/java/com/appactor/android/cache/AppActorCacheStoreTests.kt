@@ -199,7 +199,7 @@ class AppActorCacheStoreTests {
     }
 
     @Test
-    fun `clearAllUnverified deletes Failed but keeps NotRequested and Verified`() {
+    fun `clearAllUnverified keeps only Verified entries`() {
         val directory = tempDirectory("cache-clear-unverified")
         val diskStore = AppActorCacheDiskStore(context, directory)
         val manager = AppActorETagManager(diskStore = diskStore, responseVerificationEnabled = true)
@@ -232,8 +232,28 @@ class AppActorCacheStoreTests {
         manager.clearUnverifiedIfNeeded()
 
         assertNotNull("Verified entry should survive", diskStore.load(AppActorCacheResource.Offerings))
-        assertNotNull("NotRequested entry should survive", diskStore.load(AppActorCacheResource.RemoteConfigs("user1")))
+        // Older versions stored unsigned salt-route responses as NotRequested.
+        assertNull("NotRequested entry should be deleted", diskStore.load(AppActorCacheResource.RemoteConfigs("user1")))
         assertNull("Failed entry should be deleted", diskStore.load(AppActorCacheResource.Customer("failed_user")))
+    }
+
+    @Test
+    fun `clearAllUnverified drops the offline catalog with unverified offerings`() {
+        val directory = tempDirectory("cache-clear-unverified-offerings")
+        val diskStore = AppActorCacheDiskStore(context, directory)
+        val manager = AppActorETagManager(diskStore = diskStore, responseVerificationEnabled = true)
+        manager.storeFresh(
+            resource = AppActorCacheResource.Offerings,
+            payload = """{"not_requested":"true"}""",
+            eTag = "\"etag_nr\"",
+            verified = false,
+        )
+        AppActorOfflineProductCatalogStore(manager).save(AppActorOfflineProductCatalog())
+
+        manager.clearUnverifiedIfNeeded()
+
+        assertNull(diskStore.load(AppActorCacheResource.Offerings))
+        assertNull(diskStore.load(AppActorCacheResource.OfflineProductCatalog))
     }
 
     private fun tempDirectory(name: String): File {
