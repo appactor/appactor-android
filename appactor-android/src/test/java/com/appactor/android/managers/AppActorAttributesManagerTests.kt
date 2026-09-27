@@ -36,7 +36,11 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
 
+// Robolectric, because the paths that drop a rejected write log a warning through android.util.Log.
+@RunWith(RobolectricTestRunner::class)
 class AppActorAttributesManagerTests {
 
     @Test
