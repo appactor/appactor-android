@@ -1,5 +1,44 @@
 # Changelog
 
+## Unreleased
+
+Fixes from the 2026-09-26 SDK audit (#14, #16, #17, #18, #19 and the last Android batch). Audit ids in parentheses. The version is set when the release is cut.
+
+Behaviour changes apps can see:
+
+- Changed: placeholder appUserIds (`"null"`, `"guest"`, `"0"`, ...) given to `configure()` mean signed out: it keeps an anonymous id or starts a new one and never inherits the last signed-in user. Ids with `/` or control characters throw from `configure()`, and `logIn()` rejects both. A stored id that breaks the backend's rules is replaced with a new anonymous id. (D1)
+- Changed: a launch no longer restores acknowledged Play purchases on its own. After a reinstall, or a logout and relaunch, a subscriber shows no premium until they tap Restore or the app calls `syncPurchases()`, as the README documents and as on iOS. `syncPurchases()` and `restorePurchases()` still sync everything. (D4)
+- Changed: `reset()` can't be cancelled, so a `withTimeout` or `viewModelScope` around it no longer cuts the wipe short. It also waits for fetches the app started, and cancels their HTTP calls. (C3, D5b, C31)
+- Changed: attribute writes (`setAttribute` and the helpers) return normally when the server rejects a value for good (400, 409, 413, 422) and log a warning; before, they threw and the queue stayed jammed. 401/403 still throw and keep the queue. A key the backend defined as `string_array` now rejects empty typed arrays too. (C2, C29)
+- Changed: public error types. Kotlin callers of `logIn`, `configure`, `setFallbackOfferings`, `syncPurchases`, `drainReceiptQueueAndRefreshCustomer` and `restorePurchases` get `InvalidConfiguration`, `Decoding`, `Network` or `Server` instead of `IllegalArgumentException`, `SerializationException` or internal backend exceptions. A restore 5xx/429 is a transient `Server` error with its status and retry-after; a restore signature failure is its typed error. Wrapper codes: a queued receipt 2012 (was 2005), a second purchase 2013 (was 2003), a blank key or invalid id 2003 and bad fallback JSON 2006 (were 2099), a restore 5xx/429 2007 (was 2099), a restore signature failure 2015. (C5, D12, D21)
+- Changed: a second concurrent `purchase()` throws `PurchaseAlreadyInProgress`; a paid purchase whose receipt is queued with no offline info throws `ReceiptQueuedForRetry`; `purchase()` during `reset()` throws `NotConfigured` instead of hanging. Bridge and Java purchase callbacks still don't fire across a reset. (D12, C26)
+- Changed: an unsigned offerings or remote config response fails with `SignatureMissing`, even when a cache exists. Unverified cache entries written by older versions are deleted at the first `configure()`, together with the offline product catalog derived from the offerings, so a user who upgrades while offline has no offline entitlements until the next offerings fetch (as on iOS). (E5a)
+- Changed: a 304 counts only when it answers the ETag the SDK sent and its signature verifies; otherwise the SDK asks once more without the ETag. A 304 to a request without an ETag is refused (`CACHE_INCONSISTENCY`), and offerings then serve their cache. (D31)
+- Changed: `onCustomerInfoChanged` and the plugin's `customer_info_updated` no longer fire for unchanged info. The first delivery after an identity change or a listener swap still fires. (D19)
+- Changed: `canMakePurchases()` and `getStoreCapabilities()` are false/empty on devices without working Play billing, and the first store call of a session can wait up to 4 s for the billing setup. `launchBillingFlow` runs on the main thread, as Google requires. (C23, C24)
+- Changed: `logIn()` retries the backend's "concurrent identity merge in progress" 409 (up to 3 attempts, about 1-6 s) before failing as before. (D30)
+- Changed: offline, a subscription seen outside the purchase flow gets entitlements only from the cached customer, since Play doesn't report its base plan. A live Play purchase that carries a pending prepaid plan update is ignored until the update is paid; a waiting purchase flow reports it as pending. (C21, D8b)
+- Changed: restore and sync send at most 20 purchases per request, so they may send several. (D9)
+- Changed: logged timestamps, `millisToIso8601` and restore `observedAt` always print milliseconds (`...:00.000Z`). (K2)
+- Changed: the published POM declares `kotlinx-coroutines-android` (it used to come through `androidx.core`).
+
+Fixes:
+
+- Fixed: the app crashed when the attribute flush after `configure()` failed for good, e.g. a wrong API key's 401. Exceptions from the SDK's background work are now logged instead of reaching the app. (K1)
+- Fixed: crashes on API 24-25 from `java.time`, which the SDK no longer uses itself. The public `*Instant` helpers still need API 26 or core library desugaring. (K2)
+- Fixed: receipts. A 429 or 408 on a receipt POST stays queued with the server's Retry-After instead of being dead-lettered; dead letters are re-posted at launch for up to 30 days and never consumed or acknowledged twice; a consume that gets ITEM_NOT_OWNED counts as done when Play no longer lists the purchase; the retry wake no longer cancels its own drain. (C1, D2, C8, D17)
+- Fixed: purchases. A DEFERRED plan change is no longer posted as the new product; a subscription seen outside the purchase flow is posted without a guessed plan, offer or price; a package purchase launches the offer the package shows; a synchronous launch failure no longer ends in "Already resumed". (D8a, C21, C10, C24)
+- Fixed: one user's state leaking into the next user's session. Customer info never moves the identity, and drains, syncs and purchase updates report only the current user's; attribute writes and queued receipts stay with the user they were made for; `customerInfoFlow` is one process-wide flow that keeps working across `reset()`; `reset()` is no longer undone by in-flight work; a listener set while `configure()` runs is no longer lost. (C16, C7, C27, D3, D6, D5a, C17)
+- Fixed: a failed `logIn()` no longer clears the current user's caches. (D15)
+- Fixed: offerings. Calls no longer hang after a failed enrichment, a cancelled caller or a reset; a 304 after a new payload failed to enrich serves that payload instead of the older one in memory, and a 304 that confirms the offerings in memory restarts their freshness; bundled fallback offerings used at startup are stale at once, so the next call asks the backend. (C9, C31, C13, C14)
+- Fixed: experiments. A later session no longer erases assignments stored by an earlier one, and a user adopted by restore or sync no longer gets the previous user's cached assignments, online or offline. (D16, C15)
+- Fixed: remote config on an offline cold start; a 429 on customer info keeps the cached entitlements; offline entitlements use purchased (not pending) purchases only; a queued purchase no longer hides the user's other entitlements; the backend's `grace` status reads as `GracePeriod`; a `null` productId no longer breaks customer decoding. (C11, D14, C12, C22, D28, C19)
+- Fixed: background drains publish the customer info the backend returned, and no false "deferred purchase resolved" is reported after a sync. (D20, C6)
+- Fixed: an activity started before `configure()` (Flutter, React Native, Capacitor, or a reset and reconfigure) no longer makes an in-app activity switch or the Play purchase sheet look like the app going to the background, which kept the offerings cache for 24 hours and stopped the 5-minute customer refresh. (C18)
+- Fixed: a signed response can't be relayed to another user's request, and a nonce replayed by OkHttp's silent retry is sent once more with a fresh nonce. (D25, D11)
+- Fixed: attribution fields are cut to the backend's limits instead of the whole attribution being rejected; the device country goes out only as an ISO alpha-2 code; pending entries and remote config keep the appUserId verbatim instead of trimmed. (C30, C20, D22)
+- Fixed: receipt-queue and ledger warnings no longer log Play purchase tokens. (D24)
+
 ## 2.3.15
 
 - Added: `AppActorOffering.offeringKey` (the dashboard lookup key, falling back to `id`), `AppActorOfferings.getOffering(offeringKey)` / `offerings["key"]` / `allOfferings` (current first), and `AppActor.getOffering(offeringKey, fetchPolicy)` to fetch and look up in one call. Also on `AppActorBridge` and `AppActorJava.getOfferingAsync`.
