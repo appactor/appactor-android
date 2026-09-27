@@ -1123,8 +1123,8 @@ public object AppActor {
         return result
     }
 
-    public suspend fun restorePurchases(): AppActorCustomerInfo {
-        return executeGuardedRead(resolveAppUserId = true) { snapshot ->
+    public suspend fun restorePurchases(): AppActorCustomerInfo =
+        executeStoreSync { snapshot ->
             val info = snapshot.runtime.paymentProcessor.restorePurchases(
                 appUserIdOverride = snapshot.appUserId,
             )
@@ -1133,34 +1133,36 @@ public object AppActor {
             }
             info
         }
-    }
 
     public suspend fun drainReceiptQueueAndRefreshCustomer(): AppActorCustomerInfo =
-        refreshCustomerInfoAfter { snapshot -> snapshot.runtime.paymentProcessor.drainAll() }
+        executeGuardedRead(resolveAppUserId = true) { snapshot ->
+            snapshot.runtime.paymentProcessor.drainAll()
+            refreshCustomerInfoAfterStep(snapshot)
+        }
 
     public suspend fun syncPurchases(): AppActorCustomerInfo =
-        refreshCustomerInfoAfter { snapshot ->
+        executeStoreSync { snapshot ->
             snapshot.runtime.paymentProcessor.syncCurrentPurchases(appUserIdOverride = snapshot.appUserId)
+            refreshCustomerInfoAfterStep(snapshot)
         }
 
-    private suspend fun refreshCustomerInfoAfter(
-        step: suspend (AppActorOperationSnapshot) -> Unit,
-    ): AppActorCustomerInfo {
-        return executeGuardedRead(resolveAppUserId = true) { snapshot ->
-            step(snapshot)
-            // The step may have adopted a canonical id, so fetch for whoever is current now.
-            val info = snapshot.runtime.customerManager.getCustomerInfo(
-                appUserId = snapshot.runtime.identityStore.currentAppUserId ?: snapshot.appUserId,
-            )
-            if (persistCustomerInfoIfCurrent(snapshot, info)) {
-                publishCustomerInfoIfCurrent(
-                    snapshot = snapshot,
-                    info = info,
-                    source = snapshot.runtime.customerManager.lastLoadSource(),
-                )
-            }
-            info
+    private suspend fun refreshCustomerInfoAfterStep(snapshot: AppActorOperationSnapshot): AppActorCustomerInfo {
+        // The step may have adopted a canonical id, so fetch for whoever is current now, unless
+        // the user changed meanwhile: a sync done for the previous user reports theirs.
+        val appUserId = if (isSnapshotCurrent(snapshot)) {
+            snapshot.runtime.identityStore.currentAppUserId ?: snapshot.appUserId
+        } else {
+            snapshot.appUserId
         }
+        val info = snapshot.runtime.customerManager.getCustomerInfo(appUserId = appUserId)
+        if (persistCustomerInfoIfCurrent(snapshot, info)) {
+            publishCustomerInfoIfCurrent(
+                snapshot = snapshot,
+                info = info,
+                source = snapshot.runtime.customerManager.lastLoadSource(),
+            )
+        }
+        return info
     }
 
     private fun configureInternal(configuration: AppActorConfiguration) {
@@ -1483,6 +1485,14 @@ public object AppActor {
     // identity change, which would copy that user's data onto the next one.
     private suspend fun <T> executeWrite(operation: suspend (AppActorOperationSnapshot) -> T): T =
         operation(captureOperationSnapshot(resolveAppUserId = true))
+
+    // A restore or sync posts the Play purchases for the user current when it starts, and, as on
+    // iOS, is not re-run after an identity change: the re-run would post them for the next user,
+    // whom the backend then merges into their owner, undoing a logOut.
+    private suspend fun <T> executeStoreSync(operation: suspend (AppActorOperationSnapshot) -> T): T =
+        executeWrite { snapshot ->
+            throwingPublicErrors("AppActor request failed.") { operation(snapshot) }
+        }
 
     /**
      * Runs [block], turning what it throws into a public [AppActorError], as the Bridge and the

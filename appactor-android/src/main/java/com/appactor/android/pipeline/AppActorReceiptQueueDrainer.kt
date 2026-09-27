@@ -215,16 +215,9 @@ internal class AppActorReceiptQueueDrainer(
         item: AppActorReceiptQueueItem,
         productEntitlements: Map<String, List<String>>,
     ): ProcessingOutcome {
+        // Still Unknown here is a one-time purchase the catalog doesn't type; it is posted anyway
+        // (see AppActorReceiptRequestBuilder).
         val normalizedItem = normalizeQueueItemForPosting(item, productEntitlements)
-        if (normalizedItem.productType == AppActorProductType.Unknown.wireValue) {
-            return scheduleRetryOrDeadLetter(
-                item = normalizedItem,
-                retryAfterSeconds = null,
-                errorCode = "unknown_product_type",
-                errorMessage = "Unable to resolve Google Play one-time product type for ${normalizedItem.productId}.",
-            )
-        }
-
         if (normalizedItem != item) {
             queueStore.update(normalizedItem)
         }

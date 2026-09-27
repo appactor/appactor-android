@@ -707,16 +707,16 @@ internal class AppActorPaymentProcessor(
         emitCallback: Boolean,
     ): AppActorCustomerInfo? {
         // Made under the anonymous id a logIn folded into the current user, so [customerInfo] is
-        // the anonymous id's, or empty. As on iOS, the callback gets the current user's, fetched
-        // fresh so it holds the purchase, and is skipped when the fetch fails or the user changed
-        // meanwhile. The entry then stays, for the app's next syncPurchases() or restore.
+        // the anonymous id's, or empty. As on iOS, the current user's is fetched fresh, so it
+        // holds the purchase, and returned whether or not the purchase was deferred. Nothing is
+        // returned or fired when the fetch fails or the user changed meanwhile; a pending entry
+        // then stays, for the app's next syncPurchases() or restore.
         val fold = identityStore.foldedAppUser?.takeIf {
             emitCallback && it.anonymousId == receiptAppUserId && it.into == identityStore.currentAppUserId
         }
         val callbackInfo = if (fold == null) {
             customerInfo
         } else {
-            pendingPurchaseRegistry.takePendingEntryIfValid(purchaseToken) ?: return null
             val refreshed = try {
                 customerManager.getCustomerInfo(fold.into, forceRefresh = true)
             } catch (throwable: Throwable) {
@@ -726,8 +726,8 @@ internal class AppActorPaymentProcessor(
             if (identityStore.currentAppUserId != fold.into) return null
             refreshed
         }
-        val resolvedProductId = pendingPurchaseRegistry.resolveDeferredEntry(purchaseToken) ?: return null
-        if (emitCallback) {
+        val resolvedProductId = pendingPurchaseRegistry.resolveDeferredEntry(purchaseToken)
+        if (resolvedProductId != null && emitCallback) {
             onDeferredPurchaseResolved?.invoke(resolvedProductId, callbackInfo)
         }
         return callbackInfo.takeIf { fold != null }

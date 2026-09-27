@@ -4,6 +4,8 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.appactor.android.backend.client.AppActorBackendJson
 import com.appactor.android.backend.dto.AppActorGoogleReceiptRequestDTO
+import com.appactor.android.backend.dto.AppActorGoogleRestoreRequestDTO
+import com.appactor.android.internal.runtime.runtimeTestPurchase
 import com.appactor.android.models.AppActorBridgeError
 import com.appactor.android.models.AppActorBridgeErrorCallback
 import com.appactor.android.models.AppActorCompletionCallback
@@ -120,6 +122,51 @@ class AppActorSessionIsolationTests {
             val nextAppUserId = AppActor.appUserId.orEmpty()
             assertTrue(nextAppUserId.startsWith("appactor-anon-"))
             assertTrue(attributeRequests.none { (path, body) -> nextAppUserId in path && body.contains(EMAIL) })
+        }
+    }
+
+    @Test
+    fun `a restore in flight during logout is not run again for the next user`() = runBlocking {
+        // Acknowledged, so only the restore sends it, not the launch sweep.
+        AppActor.storeAdapterFactory = {
+            FakeStoreAdapter(activePurchases = listOf(runtimeTestPurchase(obfuscatedAccountId = null).copy(isAcknowledged = true)))
+        }
+        val restoredAppUserIds = CopyOnWriteArrayList<String>()
+        val restoreStarted = CountDownLatch(1)
+        val releaseRestore = CountDownLatch(1)
+
+        TestBackendServer { request ->
+            if (request.path?.substringBefore("?") == "/v1/payment/restore/google") {
+                restoredAppUserIds += AppActorBackendJson.instance
+                    .decodeFromString<AppActorGoogleRestoreRequestDTO>(request.body.readUtf8())
+                    .appUserId
+                restoreStarted.countDown()
+                releaseRestore.await(5, TimeUnit.SECONDS)
+                // The purchase is user_restore_a's, whoever restores it: the backend merges the
+                // one asking into them.
+                jsonResponse(googleRestoreEnvelope(requestId = "req_restore", appUserId = "user_restore_a"))
+            } else {
+                customerBackend(request)
+            }
+        }.use { backend ->
+            AppActor.configure(configuration(backend, appUserId = "user_restore_a"))
+
+            val restore = async(Dispatchers.Default) { AppActor.restorePurchases() }
+            assertTrue(restoreStarted.await(5, TimeUnit.SECONDS))
+            val epochBeforeLogout = identityEpoch()
+            val logout = async(Dispatchers.Default) { AppActor.logOut() }
+            // Let logOut switch the identity while the restore is still in flight.
+            withTimeout(5_000L) {
+                while (identityEpoch() == epochBeforeLogout) delay(10)
+            }
+            releaseRestore.countDown()
+            withTimeout(10_000L) {
+                restore.await()
+                logout.await()
+            }
+
+            assertEquals(listOf("user_restore_a"), restoredAppUserIds)
+            assertTrue(AppActor.appUserId.orEmpty().startsWith("appactor-anon-"))
         }
     }
 

@@ -2377,6 +2377,40 @@ class AppActorPaymentProcessorTests {
     }
 
     @Test
+    fun `an untyped one time purchase is posted as one and finished as the backend says`() = runBlocking {
+        // The backend types it from its own catalog: here a consumable, so it says to consume it.
+        val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
+            .copy(acknowledgePurchase = false, consumePurchase = true)
+        val purchase = AppActorStorePurchase(
+            productId = "com.appactor.coins.100",
+            productType = AppActorProductType.Unknown,
+            purchaseToken = "token_untyped_coins_123",
+            orderId = "GPA.untyped.coins.1234",
+            purchaseTimeMillis = 1_710_000_000_000,
+            purchaseState = com.appactor.android.billing.AppActorStorePurchaseState.Purchased,
+            isAcknowledged = false,
+            rawPurchaseData = "{\"purchaseToken\":\"token_untyped_coins_123\"}",
+            purchaseSignature = "signature_untyped_coins_123",
+        )
+        val dependencies = createDependencies(
+            receiptResponse = AppActorBackendHttpResponse(
+                body = receiptResponse,
+                statusCode = 200,
+                requestId = receiptResponse.requestId,
+                signatureVerified = true,
+            ),
+            offeringsEnvelope = fixtureOfferingsWithoutProduct("com.appactor.coins.100"),
+        )
+
+        dependencies.processor.processPurchaseUpdates(listOf(purchase))
+
+        assertEquals("non_consumable", dependencies.postedReceipts.single().productType)
+        assertEquals(listOf("token_untyped_coins_123"), dependencies.consumedTokens)
+        assertTrue(dependencies.acknowledgedTokens.isEmpty())
+        assertTrue(dependencies.queueStore.snapshot().isEmpty())
+    }
+
+    @Test
     fun `replayed unknown inapp update revives dead letter once offerings metadata becomes available`() = runBlocking {
         val receiptResponse = fixtureReceiptResponse("fixtures/backend/google_receipt_ok.json")
         val activePurchase = AppActorStorePurchase(
@@ -2560,17 +2594,31 @@ class AppActorPaymentProcessorTests {
             activePurchases = listOf(purchase),
         )
 
-        firstBoot.processor.syncCurrentPurchases()
-        val unresolved = firstBoot.queueStore.snapshot().single()
-        assertEquals(com.appactor.android.storage.AppActorReceiptQueuePhase.NeedsPost, unresolved.phase)
-        assertEquals("sync", unresolved.sourceIntent)
-
-        firstBoot.queueStore.update(
-            unresolved.copy(
+        // As an older version left it.
+        firstBoot.queueStore.upsert(
+            AppActorReceiptQueueItem(
+                key = AppActorReceiptQueueItem.makeKey(
+                    purchaseToken = purchase.purchaseToken,
+                    productId = purchase.productId,
+                ),
+                appUserId = "user_android_123",
+                packageName = context.packageName,
+                environment = "production",
+                productId = purchase.productId,
+                productType = AppActorProductType.Unknown.wireValue,
+                purchaseToken = purchase.purchaseToken,
+                purchaseTime = purchase.purchaseTimeMillis.toString(),
+                purchaseState = "PURCHASED",
+                orderId = purchase.orderId,
+                sourceIntent = "sync",
+                idempotencyKey = "google:${purchase.productId}:${purchase.purchaseToken}",
+                createdAtMillis = 1_710_000_000_000,
+                lastUpdatedAtMillis = 1_710_000_000_000,
                 retryCount = 3,
                 phase = com.appactor.android.storage.AppActorReceiptQueuePhase.DeadLettered,
-                nextRetryAtMillis = 0L,
                 lastError = "unknown_product_type: dead-lettered before restart",
+                rawPurchaseData = purchase.rawPurchaseData,
+                purchaseSignature = purchase.purchaseSignature,
             )
         )
 
@@ -2991,7 +3039,7 @@ class AppActorPaymentProcessorTests {
     }
 
     @Test
-    fun `restore purchases leaves unresolved active purchases to sync path without reposting restored ones`() = runBlocking {
+    fun `restore purchases posts untyped active purchases as receipts without reposting restored ones`() = runBlocking {
         val restoreResponse = fixtureRestoreResponse("fixtures/backend/google_restore_sample.json")
         val restoredSubscription = AppActorStorePurchase(
             productId = "com.appactor.pro.monthly",
@@ -3041,11 +3089,16 @@ class AppActorPaymentProcessorTests {
         val restorePurchases = dependencies.restoreRequests.single().purchases
         assertEquals(1, restorePurchases.size)
         assertEquals("token_restore_followup_123", restorePurchases.single().purchaseToken)
-        assertTrue(dependencies.postedReceipts.isEmpty())
+        // The backend types the coins from its catalog.
+        val coinsReceipt = dependencies.postedReceipts.single()
+        assertEquals("token_restore_followup_coins_123", coinsReceipt.purchaseToken)
+        assertEquals("non_consumable", coinsReceipt.productType)
         assertTrue(dependencies.syncRequests.isEmpty())
-        assertEquals(listOf("token_restore_followup_123"), dependencies.acknowledgedTokens)
-        assertEquals(1, dependencies.queueStore.snapshot().size)
-        assertEquals("com.appactor.coins.100", dependencies.queueStore.snapshot().single().productId)
+        assertEquals(
+            listOf("token_restore_followup_123", "token_restore_followup_coins_123"),
+            dependencies.acknowledgedTokens,
+        )
+        assertTrue(dependencies.queueStore.snapshot().isEmpty())
         assertTrue(dependencies.ledgerStore.isPosted("google:com.appactor.pro.monthly:monthly001:token_restore_followup_123"))
     }
 

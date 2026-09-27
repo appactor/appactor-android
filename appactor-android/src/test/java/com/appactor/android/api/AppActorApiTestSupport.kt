@@ -286,9 +286,12 @@ internal fun logoutEnvelope(
 
 internal fun googleRestoreEnvelope(
     requestId: String,
+    appUserId: String? = null,
 ): String {
+    val appUserIdField = appUserId?.let { "\"appUserId\": \"$it\"," }.orEmpty()
     return """
         {
+          $appUserIdField
           "customer": {
             "entitlements": {},
             "subscriptions": {},
