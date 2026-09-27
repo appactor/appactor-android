@@ -1,11 +1,14 @@
 package com.appactor.android.api
 
 import android.content.Context
+import android.os.Looper
 import androidx.test.core.app.ApplicationProvider
 import com.appactor.android.backend.client.AppActorBackendJson
+import com.appactor.android.backend.dto.AppActorGoogleReceiptRequestDTO
 import com.appactor.android.billing.AppActorStorePurchase
 import com.appactor.android.billing.AppActorStorePurchaseState
 import com.appactor.android.models.AppActorConfiguration
+import com.appactor.android.internal.runtime.runtimeTestPurchase
 import com.appactor.android.pipeline.AppActorClientPurchaseContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -14,8 +17,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -24,6 +25,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import java.util.Collections
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.CopyOnWriteArrayList
@@ -751,7 +753,6 @@ class AppActorIdentityTransitionTests {
             purchaseUpdates.emit(listOf(approvedPendingPurchase()))
 
             observed.assertResolvedForLoggedInUser()
-            assertTrue(awaitMainThreadCallback(observed.refreshedInfoPublished))
         }
     }
 
@@ -774,7 +775,6 @@ class AppActorIdentityTransitionTests {
             }
 
             observed.assertResolvedForLoggedInUser()
-            assertTrue(awaitMainThreadCallback(observed.refreshedInfoPublished))
         }
     }
 
@@ -782,7 +782,6 @@ class AppActorIdentityTransitionTests {
     fun `a pending purchase approved after a relaunch still resolves for the user logged in to`() = runBlocking {
         withPendingPurchaseOfAnonymousBuyer(relaunchedAfterLogin = true) { _, observed ->
             observed.assertResolvedForLoggedInUser()
-            assertTrue(awaitMainThreadCallback(observed.refreshedInfoPublished))
         }
     }
 
@@ -794,7 +793,6 @@ class AppActorIdentityTransitionTests {
 
             // The retry wake posts it again after the backoff.
             observed.assertResolvedForLoggedInUser(timeoutMillis = 15_000L, receiptPosts = 2)
-            assertTrue(awaitMainThreadCallback(observed.refreshedInfoPublished))
         }
     }
 
@@ -804,9 +802,12 @@ class AppActorIdentityTransitionTests {
             AppActor.logIn(LOGGED_IN_USER)
             AppActor.logOut()
             purchaseUpdates.emit(listOf(approvedPendingPurchase()))
+            // Handled one at a time: once the second empty update is taken, the purchase is done.
+            purchaseUpdates.emit(emptyList())
+            purchaseUpdates.emit(emptyList())
+            shadowOf(Looper.getMainLooper()).idle()
 
-            assertTrue(observed.receiptPosted.await(5, TimeUnit.SECONDS))
-            assertFalse(awaitMainThreadCallback(observed.deferredResolved, timeoutMillis = 500L))
+            assertEquals(1L, observed.deferredResolved.count)
             assertEquals(listOf(ANONYMOUS_BUYER), observed.receiptAppUserIds)
             val identity = ApplicationProvider.getApplicationContext<Context>()
                 .getSharedPreferences("appactor_identity", Context.MODE_PRIVATE)
@@ -815,7 +816,6 @@ class AppActorIdentityTransitionTests {
     }
 
     private class PendingPurchaseObservations {
-        @Volatile var deferredRequestId: String? = null
         val deferredResolved = CountDownLatch(1)
         val refreshedInfoPublished = CountDownLatch(1)
         val receiptPosted = CountDownLatch(1)
@@ -824,7 +824,8 @@ class AppActorIdentityTransitionTests {
 
         /**
          * The receipt went to the backend under the anonymous id, which decides whose it is, and
-         * the callback got the logged-in user's info, fetched fresh rather than relabelled.
+         * the callback got the logged-in user's info, fetched fresh rather than relabelled, which
+         * the listener then got too.
          */
         fun assertResolvedForLoggedInUser(timeoutMillis: Long = 5_000L, receiptPosts: Int = 1) {
             assertTrue(awaitMainThreadCallback(deferredResolved, timeoutMillis))
@@ -833,6 +834,7 @@ class AppActorIdentityTransitionTests {
             assertEquals(LOGGED_IN_USER, appUserId)
             assertTrue(requestId.orEmpty(), requestId.orEmpty().startsWith(REFRESHED_REQUEST_ID))
             assertEquals(List(receiptPosts) { ANONYMOUS_BUYER }, receiptAppUserIds)
+            assertTrue(awaitMainThreadCallback(refreshedInfoPublished))
         }
     }
 
@@ -877,7 +879,6 @@ class AppActorIdentityTransitionTests {
                     .toPendingEntry(productId = PENDING_PRODUCT_ID, recordedAtMillis = now, appUserId = ANONYMOUS_BUYER),
             )
             .commit()
-        val receiptPosts = AtomicInteger(0)
         val customerFetches = AtomicInteger(0)
 
         TestBackendServer { request ->
@@ -907,10 +908,10 @@ class AppActorIdentityTransitionTests {
                     jsonResponse(loginEnvelope(requestId = "req_login_pending", appUserId = LOGGED_IN_USER))
                 }
                 path == "/v1/payment/receipts/google" -> {
-                    observed.receiptAppUserIds += AppActorBackendJson.instance.parseToJsonElement(request.body.readUtf8())
-                        .jsonObject.getValue("appUserId").jsonPrimitive.content
+                    observed.receiptAppUserIds += AppActorBackendJson.instance
+                        .decodeFromString<AppActorGoogleReceiptRequestDTO>(request.body.readUtf8()).appUserId
                     observed.receiptPosted.countDown()
-                    if (failFirstReceiptPost && receiptPosts.incrementAndGet() == 1) {
+                    if (failFirstReceiptPost && observed.receiptAppUserIds.size == 1) {
                         jsonResponse("""{"status":"retryable_error","requestId":"req_receipt_retry","error":{"code":"UPSTREAM","message":"Try again."}}""")
                     } else {
                         jsonResponse(googleReceiptEnvelope(requestId = "req_receipt_pending", appUserId = ANONYMOUS_BUYER))
@@ -922,11 +923,10 @@ class AppActorIdentityTransitionTests {
             // Both on the main thread, the callback first.
             AppActor.onDeferredPurchaseResolved = { productId, customerInfo ->
                 observed.deferredPurchases += Triple(productId, customerInfo.appUserId, customerInfo.requestId)
-                observed.deferredRequestId = customerInfo.requestId
                 observed.deferredResolved.countDown()
             }
             AppActor.onCustomerInfoChanged = { info ->
-                if (info.requestId != null && info.requestId == observed.deferredRequestId) {
+                if (info.requestId != null && info.requestId == observed.deferredPurchases.lastOrNull()?.third) {
                     observed.refreshedInfoPublished.countDown()
                 }
             }
@@ -942,19 +942,8 @@ class AppActorIdentityTransitionTests {
         }
     }
 
-    private fun approvedPendingPurchase(): AppActorStorePurchase = AppActorStorePurchase(
-        productId = PENDING_PRODUCT_ID,
-        productType = com.appactor.android.models.AppActorProductType.Subscription,
-        purchaseToken = PENDING_TOKEN,
-        orderId = "GPA.pending.approved.1234",
-        purchaseTimeMillis = 1_710_000_000_000,
-        purchaseState = AppActorStorePurchaseState.Purchased,
-        basePlanId = "monthly001",
-        isAcknowledged = false,
-        isAutoRenewing = true,
-        rawPurchaseData = "{\"purchaseToken\":\"$PENDING_TOKEN\"}",
-        purchaseSignature = "signature_pending_approved",
-    )
+    private fun approvedPendingPurchase(): AppActorStorePurchase =
+        runtimeTestPurchase(productId = PENDING_PRODUCT_ID, purchaseToken = PENDING_TOKEN, obfuscatedAccountId = null)
 
     private companion object {
         const val ANONYMOUS_BUYER = "appactor-anon-pending-buyer"

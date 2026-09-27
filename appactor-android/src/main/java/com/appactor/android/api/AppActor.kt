@@ -61,7 +61,6 @@ import com.appactor.android.models.AppActorStoreCapability
 import com.appactor.android.models.AppActorStorefront
 import com.appactor.android.models.AppActorValidation
 import com.appactor.android.pipeline.AppActorPurchaseUpdateProcessingResult
-import com.appactor.android.storage.AppActorFoldedAppUser
 import com.appactor.android.storage.isAnonymousAppUserId
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -530,19 +529,9 @@ public object AppActor {
                     newAppUserId = newAppUserId,
                 )
                 val source = currentRuntime.customerManager.lastLoadSource()
-                val loggedInAppUserId = currentRuntime.identityStore.currentAppUserId
-                // Before the endIdentityTransition below posts what arrived meanwhile, so its
-                // deferred-purchase check counts a purchase the anonymous ID made as this user's.
-                if (isAnonymousAppUserId(currentAppUserId) && loggedInAppUserId != null &&
-                    loggedInAppUserId != currentAppUserId
-                ) {
-                    currentRuntime.identityStore.setFoldedAppUser(
-                        AppActorFoldedAppUser(anonymousId = currentAppUserId, into = loggedInAppUserId),
-                    )
-                }
                 // Only once the login has succeeded: a failed one leaves the user as they were,
                 // caches included.
-                if (currentAppUserId != loggedInAppUserId) {
+                if (currentAppUserId != currentRuntime.identityStore.currentAppUserId) {
                     currentRuntime.customerManager.clearCache(currentAppUserId)
                 }
                 currentRuntime.remoteConfigManager.clearCache(currentAppUserId)

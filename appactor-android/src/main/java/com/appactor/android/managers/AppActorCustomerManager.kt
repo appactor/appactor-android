@@ -18,6 +18,8 @@ import com.appactor.android.models.AppActorConfiguration
 import com.appactor.android.models.AppActorCustomerInfo
 import com.appactor.android.models.AppActorDiagnosticsDataSource
 import com.appactor.android.models.AppActorVerificationResult
+import com.appactor.android.storage.AppActorFoldedAppUser
+import com.appactor.android.storage.isAnonymousAppUserId
 import com.appactor.android.internal.runtime.appActorBackgroundScope
 import com.appactor.android.internal.runtime.launchSharedRequest
 import com.appactor.android.internal.runtime.throwIfCancellation
@@ -103,6 +105,10 @@ internal class AppActorCustomerManager(
             productEntitlements = offeringsManager.currentProductEntitlements(),
         )
         identityStore.setAppUserId(finalAppUserId)
+        // The backend folds an anonymous user into the one logged in to (see foldedAppUser).
+        if (isAnonymousAppUserId(currentAppUserId) && finalAppUserId != currentAppUserId) {
+            identityStore.setFoldedAppUser(AppActorFoldedAppUser(anonymousId = currentAppUserId, into = finalAppUserId))
+        }
         identityStore.setLastRequestId(response.requestId ?: body.requestId)
         saveEnvelope(
             appUserId = finalAppUserId,

@@ -58,6 +58,7 @@ internal class AppActorReceiptQueueDrainer(
     // Returns the current user's customer info when it fetched it.
     private val resolveDeferredPurchaseCallbackIfNeeded: suspend (
         purchaseToken: String,
+        receiptAppUserId: String,
         customerInfo: AppActorCustomerInfo,
         emitCallback: Boolean,
     ) -> AppActorCustomerInfo?,
@@ -104,6 +105,7 @@ internal class AppActorReceiptQueueDrainer(
             }
             resolveDeferredPurchaseCallbackIfNeeded(
                 item.purchaseToken,
+                item.appUserId,
                 customerInfo,
                 identityStore.isCurrentUsersPurchase(item.appUserId),
             )?.let { latestCustomer = it }

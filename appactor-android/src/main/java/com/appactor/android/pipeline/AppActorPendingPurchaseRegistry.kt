@@ -97,12 +97,6 @@ internal class AppActorPendingPurchaseRegistry(
         return resolvedProductId
     }
 
-    /** Whether [purchaseToken] has a pending entry [resolveDeferredEntry] would resolve now. */
-    fun hasDeferredEntry(purchaseToken: String): Boolean {
-        val entry = pendingPurchaseTokens[purchaseToken]?.let(PendingPurchaseEntry::parse) ?: return false
-        return dateProviderMillis() - entry.recordedAtMillis <= PENDING_EXPIRY_MILLIS
-    }
-
     /**
      * Returns the still-valid [PendingPurchaseEntry] for [purchaseToken] paired
      * with the clock sample used for its expiry check, so the caller can reuse the

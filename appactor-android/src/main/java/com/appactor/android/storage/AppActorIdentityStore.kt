@@ -124,15 +124,13 @@ internal class AppActorSharedPrefsIdentityStore(
         }
 
     override fun setFoldedAppUser(fold: AppActorFoldedAppUser?) {
-        synchronized(WRITE_LOCK) {
-            preferences.edit().apply {
-                if (fold == null) {
-                    remove(KEY_FOLDED_APP_USER)
-                } else {
-                    putString(KEY_FOLDED_APP_USER, AppActorBackendJson.instance.encodeToString(AppActorFoldedAppUser.serializer(), fold))
-                }
-            }.apply()
-        }
+        preferences.edit().apply {
+            if (fold == null) {
+                remove(KEY_FOLDED_APP_USER)
+            } else {
+                putString(KEY_FOLDED_APP_USER, AppActorBackendJson.instance.encodeToString(AppActorFoldedAppUser.serializer(), fold))
+            }
+        }.apply()
     }
 
     override fun setLastRequestId(requestId: String?) {
