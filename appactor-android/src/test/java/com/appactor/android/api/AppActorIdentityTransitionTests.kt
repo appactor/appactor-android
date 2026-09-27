@@ -788,7 +788,7 @@ class AppActorIdentityTransitionTests {
 
     @Test
     fun `a pending purchase whose receipt is retried after the login resolves for the user`() = runBlocking {
-        withPendingPurchaseOfAnonymousBuyer(failFirstReceiptPost = true) { purchaseUpdates, observed ->
+        withPendingPurchaseOfAnonymousBuyer(failReceiptPost = { it.receiptAppUserIds.size == 1 }) { purchaseUpdates, observed ->
             AppActor.logIn(LOGGED_IN_USER)
             purchaseUpdates.emit(listOf(approvedPendingPurchase()))
 
@@ -799,11 +799,12 @@ class AppActorIdentityTransitionTests {
 
     @Test
     fun `a purchase an anonymous user left queued shows for the user logged in to once posted`() = runBlocking {
-        withPendingPurchaseOfAnonymousBuyer(pendingPurchase = false, failReceiptPostsUntilLoggedIn = true) { purchaseUpdates, observed ->
+        val loggedIn = AtomicBoolean(false)
+        withPendingPurchaseOfAnonymousBuyer(pendingPurchase = false, failReceiptPost = { !loggedIn.get() }) { purchaseUpdates, observed ->
             purchaseUpdates.emit(listOf(approvedPendingPurchase()))
             assertTrue(observed.receiptPosted.await(5, TimeUnit.SECONDS))
             AppActor.logIn(LOGGED_IN_USER)
-            observed.loggedIn.set(true)
+            loggedIn.set(true)
 
             // A retry wake after the login posts it under the anonymous id, the backend credits the
             // user logged in to, and their info, fetched fresh, is published.
@@ -838,8 +839,7 @@ class AppActorIdentityTransitionTests {
         val refreshedInfoPublished = CountDownLatch(1)
         val receiptPosted = CountDownLatch(1)
         val creditedInfoPublished = CountDownLatch(1)
-        val creditedReceipts = AtomicInteger(0)
-        val loggedIn = AtomicBoolean(false)
+        val credited = AtomicBoolean(false)
         val deferredPurchases = CopyOnWriteArrayList<Triple<String, String?, String?>>()
         val receiptAppUserIds = CopyOnWriteArrayList<String>()
 
@@ -863,16 +863,14 @@ class AppActorIdentityTransitionTests {
      * Configures [ANONYMOUS_BUYER], who has a purchase pending approval from an earlier session,
      * then runs [scenario]. Login answers as [LOGGED_IN_USER], held by [loginGate] when given.
      * [relaunchedAfterLogin] configures instead as a previous session left it after logging the
-     * buyer in, with the purchase approved and listed by Play. [failFirstReceiptPost] answers the
-     * first receipt post with a retryable error, [failReceiptPostsUntilLoggedIn] every post until
-     * the scenario sets [PendingPurchaseObservations.loggedIn]. Without [pendingPurchase] the
-     * purchase was never left pending, so nothing records it.
+     * buyer in, with the purchase approved and listed by Play. [failReceiptPost] answers a receipt
+     * post with a retryable error when true, called once the post is recorded. Without
+     * [pendingPurchase] the purchase was never left pending, so nothing records it.
      */
     private suspend fun withPendingPurchaseOfAnonymousBuyer(
         loginGate: Pair<CountDownLatch, CountDownLatch>? = null,
         relaunchedAfterLogin: Boolean = false,
-        failFirstReceiptPost: Boolean = false,
-        failReceiptPostsUntilLoggedIn: Boolean = false,
+        failReceiptPost: (PendingPurchaseObservations) -> Boolean = { false },
         pendingPurchase: Boolean = true,
         scenario: suspend (MutableSharedFlow<List<AppActorStorePurchase>>, PendingPurchaseObservations) -> Unit,
     ) {
@@ -922,7 +920,7 @@ class AppActorIdentityTransitionTests {
                     customerEnvelope(
                         requestId = "$REFRESHED_REQUEST_ID-${customerFetches.incrementAndGet()}",
                         appUserId = LOGGED_IN_USER,
-                        managementUrl = MANAGEMENT_URL.takeIf { observed.creditedReceipts.get() > 0 },
+                        managementUrl = MANAGEMENT_URL.takeIf { observed.credited.get() },
                     ),
                 )
                 path.startsWith("/v1/customers/") -> jsonResponse(
@@ -939,13 +937,10 @@ class AppActorIdentityTransitionTests {
                     observed.receiptAppUserIds += AppActorBackendJson.instance
                         .decodeFromString<AppActorGoogleReceiptRequestDTO>(request.body.readUtf8()).appUserId
                     observed.receiptPosted.countDown()
-                    if (
-                        (failFirstReceiptPost && observed.receiptAppUserIds.size == 1) ||
-                        (failReceiptPostsUntilLoggedIn && !observed.loggedIn.get())
-                    ) {
+                    if (failReceiptPost(observed)) {
                         jsonResponse("""{"status":"retryable_error","requestId":"req_receipt_retry","error":{"code":"UPSTREAM","message":"Try again."}}""")
                     } else {
-                        observed.creditedReceipts.incrementAndGet()
+                        observed.credited.set(true)
                         jsonResponse(googleReceiptEnvelope(requestId = "req_receipt_pending", appUserId = ANONYMOUS_BUYER))
                     }
                 }

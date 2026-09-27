@@ -714,23 +714,21 @@ internal class AppActorPaymentProcessor(
         val fold = identityStore.foldedAppUser?.takeIf {
             emitCallback && it.anonymousId == receiptAppUserId && it.into == identityStore.currentAppUserId
         }
-        val callbackInfo = if (fold == null) {
-            customerInfo
-        } else {
-            val refreshed = try {
-                customerManager.getCustomerInfo(fold.into, forceRefresh = true)
+        val refreshed = fold?.let {
+            val info = try {
+                customerManager.getCustomerInfo(it.into, forceRefresh = true)
             } catch (throwable: Throwable) {
                 throwIfCancellation(throwable)
                 return null
             }
-            if (identityStore.currentAppUserId != fold.into) return null
-            refreshed
+            if (identityStore.currentAppUserId != it.into) return null
+            info
         }
         val resolvedProductId = pendingPurchaseRegistry.resolveDeferredEntry(purchaseToken)
         if (resolvedProductId != null && emitCallback) {
-            onDeferredPurchaseResolved?.invoke(resolvedProductId, callbackInfo)
+            onDeferredPurchaseResolved?.invoke(resolvedProductId, refreshed ?: customerInfo)
         }
-        return callbackInfo.takeIf { fold != null }
+        return refreshed
     }
 
     private fun resolvePurchaseUpdateContext(purchase: AppActorStorePurchase): PurchaseUpdateContext {

@@ -2582,20 +2582,8 @@ class AppActorPaymentProcessorTests {
             rawPurchaseData = "{\"purchaseToken\":\"token_unknown_restart_123\"}",
             purchaseSignature = "signature_unknown_restart_123",
         )
-        val firstBoot = createDependencies(
-            receiptResponse = AppActorBackendHttpResponse(
-                body = receiptResponse,
-                statusCode = 200,
-                requestId = receiptResponse.requestId,
-                signatureVerified = true,
-            ),
-            offeringsEnvelope = fixtureOfferingsWithoutProduct("com.appactor.coins.100"),
-            directory = sharedDirectory,
-            activePurchases = listOf(purchase),
-        )
-
         // As an older version left it.
-        firstBoot.queueStore.upsert(
+        AppActorAtomicJsonReceiptQueueStore(context, sharedDirectory).upsert(
             AppActorReceiptQueueItem(
                 key = AppActorReceiptQueueItem.makeKey(
                     purchaseToken = purchase.purchaseToken,
