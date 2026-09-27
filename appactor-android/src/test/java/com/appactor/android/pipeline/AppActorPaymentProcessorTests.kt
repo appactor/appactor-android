@@ -3603,18 +3603,6 @@ class AppActorPaymentProcessorTests {
 
     // endregion
 
-    // TODO(android-6 coverage): the retry-wake scheduler takes its scope and drain callback in
-    // its constructor, so its invariants are tested on the scheduler itself
-    // (AppActorRetryWakeSchedulerTests, which covers a drain re-arming the wake). Still to pin
-    // there:
-    //   (a) launchRetryWake's completion cleanup must only clear retryWakeJob /
-    //       scheduledRetryAtMillis when `retryWakeJob === thisJob`, so a newer
-    //       schedule that replaced retryWakeJob after this wake started is never
-    //       clobbered (no lost-cancel / orphaned-coroutine).
-    //   (b) scheduleNextRetryWake's dedup-skip (scheduledRetryAtMillis == nextReadyAt
-    //       && retryWakeJob.isActive) must not spawn a duplicate concurrent wake job.
-    //   (c) a wake replaced after its delay ended doesn't drain.
-
     // region — Dependencies
 
     private fun createDependencies(

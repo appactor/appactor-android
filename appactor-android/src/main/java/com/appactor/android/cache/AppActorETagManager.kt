@@ -79,9 +79,9 @@ internal class AppActorETagManager(
     }
 
     /**
-     * Removes failed entries, and the unverified offerings and remote-config entries older versions
-     * stored from unsigned responses. The offline product catalog is derived from the offerings, so
-     * it goes with them.
+     * Removes every entry that doesn't hold a verified response: failed ones, and the unverified
+     * offerings and remote-config entries older versions stored from unsigned responses. The offline
+     * product catalog is derived from the offerings, so it goes with them.
      */
     fun clearUnverifiedIfNeeded() {
         if (!responseVerificationEnabled) return

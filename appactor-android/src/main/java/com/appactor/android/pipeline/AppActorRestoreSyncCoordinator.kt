@@ -690,10 +690,8 @@ internal class AppActorRestoreSyncCoordinator(
 // the Signature errors), and the restore's own message where the exception's would say less.
 private fun restoreFailure(throwable: Throwable, defaultMessage: String): AppActorError = when (throwable) {
     is AppActorBackendException.Network -> AppActorError.Network(defaultMessage, throwable)
-    is AppActorError,
-    is AppActorBackendException.Http,
-    is AppActorBackendException.Signature,
-    is AppActorBackendException.CustomerNotFound -> throwable.toAppActorError(defaultMessage)
+    is AppActorBackendException.Decoding -> AppActorError.Unknown(defaultMessage, throwable)
+    is AppActorError, is AppActorBackendException -> throwable.toAppActorError(defaultMessage)
     else -> AppActorError.Unknown(defaultMessage, throwable)
 }
 

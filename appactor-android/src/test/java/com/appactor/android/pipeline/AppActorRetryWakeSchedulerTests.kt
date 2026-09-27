@@ -10,9 +10,10 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
+// TODO(android-6 coverage): also pin that the dedup-skip (scheduledRetryAtMillis == nextReadyAt
+// with an active job) spawns no second wake, and that a wake replaced after its delay doesn't drain.
 class AppActorRetryWakeSchedulerTests {
 
     @Test
@@ -21,7 +22,7 @@ class AppActorRetryWakeSchedulerTests {
         val queueStore = mockk<AppActorReceiptQueueStore>()
         every { queueStore.snapshot() } returns listOf(queueItem().copy(nextRetryAtMillis = now))
         val scope = appActorBackgroundScope()
-        val drainFinished = CompletableDeferred<Boolean>()
+        val drainFinished = CompletableDeferred<Unit>()
         lateinit var scheduler: AppActorRetryWakeScheduler
         scheduler = AppActorRetryWakeScheduler(
             queueStore = queueStore,
@@ -34,13 +35,13 @@ class AppActorRetryWakeSchedulerTests {
                 scheduler.scheduleNextRetryWake()
                 // Posting the next claimed receipt suspends.
                 delay(50)
-                drainFinished.complete(true)
+                drainFinished.complete(Unit)
             },
         )
 
         scheduler.scheduleNextRetryWake()
 
-        assertTrue(withTimeout(5_000) { drainFinished.await() })
+        withTimeout(5_000) { drainFinished.await() }
         scope.cancel()
     }
 }

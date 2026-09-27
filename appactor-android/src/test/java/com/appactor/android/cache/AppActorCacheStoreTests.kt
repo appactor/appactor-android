@@ -199,7 +199,7 @@ class AppActorCacheStoreTests {
     }
 
     @Test
-    fun `clearAllUnverified keeps only Verified entries`() {
+    fun `clearAllUnverified removes failed and unverified entries`() {
         val directory = tempDirectory("cache-clear-unverified")
         val diskStore = AppActorCacheDiskStore(context, directory)
         val manager = AppActorETagManager(diskStore = diskStore, responseVerificationEnabled = true)

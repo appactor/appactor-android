@@ -96,7 +96,7 @@ internal class AppActorRetryWakeScheduler(
 
     fun scheduleNextRetryWake(limit: Int = 20) {
         val now = dateProviderMillis()
-        // All inspection and mutation of retryWakeJob/scheduledRetryAtMillis is
+        // All inspection and mutation of retryWakeJob/scheduledRetryAtMillis/drainingJob is
         // funnelled through this monitor so the cancel+assign is atomic and
         // visible across the coroutine Mutex callers, the lock-free callers, and
         // the background wake threads. The drain itself is launched (not run)
@@ -111,8 +111,8 @@ internal class AppActorRetryWakeScheduler(
             }
 
             if (nextReadyAt <= now) {
-                val runningImmediateDrain = scheduledRetryAtMillis == null && retryWakeJob?.isActive == true
-                if (runningImmediateDrain) {
+                val immediateWakeArmed = scheduledRetryAtMillis == null && retryWakeJob?.isActive == true
+                if (immediateWakeArmed) {
                     return
                 }
                 retryWakeJob?.cancel()
@@ -136,14 +136,15 @@ internal class AppActorRetryWakeScheduler(
      * [retryWakeJob]. Must be called while holding [retryWakeLock].
      *
      * The completion cleanup re-acquires [retryWakeLock] and only clears the
-     * scheduler fields when they still reference *this* job, so a newer schedule
-     * that replaced [retryWakeJob] after this one started is never clobbered —
-     * preventing the lost-cancel / orphaned-coroutine race (audit android-6).
+     * scheduler fields while they still reference *this* job. A wake is replaced
+     * only before it drains (it then returns without draining) or after a reset
+     * cancelled it, so a newer schedule is never clobbered — preventing the
+     * lost-cancel / orphaned-coroutine race (audit android-6).
      */
     private fun launchRetryWake(limit: Int, delayMillis: Long) {
         // Started lazily so the field assignment below completes before the
-        // coroutine body can read `thisJob`, guaranteeing the identity check in
-        // the completion cleanup observes an initialized reference.
+        // coroutine body can read `thisJob`, guaranteeing its identity checks
+        // observe an initialized reference.
         lateinit var thisJob: Job
         thisJob = backgroundScope.launch(start = CoroutineStart.LAZY) {
             if (delayMillis > 0L) {

@@ -426,7 +426,7 @@ internal class AppActorHttpBackendClient(
                             rawBodyLength = rawResponse.rawBody?.length,
                         )
                         // The backend asks the SDK to re-drive a login that met a merge in progress.
-                        if (errorEnvelope.isConcurrentMergeConflict(rawResponse.statusCode) &&
+                        if (errorEnvelope.isConflict(rawResponse.statusCode, "Concurrent identity merge in progress") &&
                             attempt < totalAttempts - 1
                         ) {
                             lastError = httpError
@@ -736,13 +736,12 @@ internal class AppActorHttpBackendClient(
         return if (query.isNullOrEmpty()) encodedPath else "$encodedPath?$query"
     }
 
-    private fun AppActorBackendErrorEnvelopeDTO?.isConcurrentMergeConflict(statusCode: Int): Boolean =
-        statusCode == 409 &&
-            this?.error?.message?.contains("Concurrent identity merge in progress", ignoreCase = true) == true
+    // A 409 the backend marks only by its message.
+    private fun AppActorBackendErrorEnvelopeDTO?.isConflict(statusCode: Int, message: String): Boolean =
+        statusCode == 409 && this?.error?.message?.contains(message, ignoreCase = true) == true
 
     private fun RawBackendResponse.isReplayedNonce(): Boolean =
-        statusCode == 409 &&
-            parseErrorEnvelope(rawBody)?.error?.message?.contains("nonce has already been used", ignoreCase = true) == true
+        statusCode == 409 && parseErrorEnvelope(rawBody).isConflict(statusCode, "nonce has already been used")
 
     private fun parseBooleanHeader(value: String?): Boolean? {
         return when (value?.trim()?.lowercase()) {

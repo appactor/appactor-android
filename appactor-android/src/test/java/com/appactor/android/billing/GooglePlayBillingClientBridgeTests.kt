@@ -23,7 +23,10 @@ import com.android.billingclient.api.InAppMessageParams
 import com.android.billingclient.api.InAppMessageResponseListener
 import com.android.billingclient.api.LaunchExternalLinkParams
 import com.android.billingclient.api.LaunchExternalLinkResponseListener
+import com.android.billingclient.api.ProductDetails
 import com.android.billingclient.api.ProductDetailsResponseListener
+import com.android.billingclient.api.Purchase
+import com.android.billingclient.api.PurchasesUpdatedListener
 import com.android.billingclient.api.PurchasesResponseListener
 import com.android.billingclient.api.QueryProductDetailsParams
 import com.android.billingclient.api.QueryProductDetailsResult
@@ -87,7 +90,7 @@ class GooglePlayBillingClientBridgeTests {
 
     @Test
     fun `a live pending prepaid plan update is not reported as a purchase`() = runBlocking {
-        var listener: com.android.billingclient.api.PurchasesUpdatedListener? = null
+        var listener: PurchasesUpdatedListener? = null
         val bridge = GooglePlayBillingClientBridge(
             context = context,
             billingClientFactory = { _, purchasesUpdatedListener ->
@@ -95,11 +98,7 @@ class GooglePlayBillingClientBridgeTests {
                 FakeBillingClient()
             },
         )
-        val completed = com.android.billingclient.api.Purchase(
-            """{"orderId":"GPA.new","productIds":["prepaid.yearly"],"purchaseToken":"token_new",
-               "purchaseState":0,"purchaseTime":1710000100000,"acknowledged":false}""",
-            "signature",
-        )
+        val completed = playPurchase(token = "token_new", productId = "prepaid.yearly")
 
         // No purchase flow is waiting: the pending update arrives, then later the paid update.
         requireNotNull(listener).onPurchasesUpdated(
@@ -147,11 +146,7 @@ class GooglePlayBillingClientBridgeTests {
 
     @Test
     fun `item not owned still fails a consume while play lists the purchase`() = runBlocking {
-        val stillOwned = com.android.billingclient.api.Purchase(
-            """{"orderId":"GPA.coins","productIds":["coins_100"],"purchaseToken":"token_still_owned",
-               "purchaseState":0,"purchaseTime":1710000000000,"acknowledged":false}""",
-            "signature",
-        )
+        val stillOwned = playPurchase(token = "token_still_owned", productId = "coins_100")
         val bridge = GooglePlayBillingClientBridge(
             context = context,
             billingClientFactory = { _, _ ->
@@ -429,7 +424,7 @@ class GooglePlayBillingClientBridgeTests {
         val connectRelease: CountDownLatch? = null,
         initialReady: Boolean = true,
         private val consumeResponseCode: Int = BillingClient.BillingResponseCode.OK,
-        private val ownedPurchases: List<com.android.billingclient.api.Purchase> = emptyList(),
+        private val ownedPurchases: List<Purchase> = emptyList(),
     ) : BillingClient() {
 
         var ready: Boolean = initialReady
@@ -567,19 +562,22 @@ class GooglePlayBillingClientBridgeTests {
     }
 }
 
-// Play hands back the old subscription (token_old) with the pending update inside.
-private fun pendingPrepaidUpdatePurchase(): com.android.billingclient.api.Purchase =
-    com.android.billingclient.api.Purchase(
-        """
-            {"orderId":"GPA.old","productIds":["prepaid.monthly"],"purchaseToken":"token_old",
-             "purchaseState":0,"purchaseTime":1710000000000,"acknowledged":true,
-             "pendingPurchaseUpdate":{"purchaseToken":"token_new","productIds":["prepaid.yearly"]}}
-        """.trimIndent(),
-        "signature",
-    )
+// A purchased Play purchase; [extraJson] adds fields to its JSON.
+private fun playPurchase(token: String, productId: String, extraJson: String = ""): Purchase = Purchase(
+    """{"orderId":"GPA.$token","productIds":["$productId"],"purchaseToken":"$token",
+       "purchaseState":0,"purchaseTime":1710000000000,"acknowledged":false$extraJson}""",
+    "signature",
+)
 
-private fun inAppProductDetails(productId: String): com.android.billingclient.api.ProductDetails {
-    val constructor = com.android.billingclient.api.ProductDetails::class.java
+// Play hands back the old subscription (token_old) with the pending update inside.
+private fun pendingPrepaidUpdatePurchase(): Purchase = playPurchase(
+    token = "token_old",
+    productId = "prepaid.monthly",
+    extraJson = ""","pendingPurchaseUpdate":{"purchaseToken":"token_new","productIds":["prepaid.yearly"]}""",
+)
+
+private fun inAppProductDetails(productId: String): ProductDetails {
+    val constructor = ProductDetails::class.java
         .getDeclaredConstructor(String::class.java)
     constructor.isAccessible = true
     return constructor.newInstance(
