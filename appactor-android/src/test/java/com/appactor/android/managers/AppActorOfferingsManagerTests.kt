@@ -1019,6 +1019,103 @@ class AppActorOfferingsManagerTests {
         assertFalse(waiting.exceptionOrNull() is CancellationException)
     }
 
+    @Test
+    fun `a 304 after a new payload failed to enrich serves that payload, not the older one in memory`() = runBlocking {
+        var now = 1_710_000_000_000L
+        val first = fixtureOfferings()
+        val second = first.copy(
+            data = first.data.copy(currentOffering = first.data.currentOffering?.copy(displayName = "Updated")),
+        )
+        val mockClient = mockk<AppActorBackendClient>(relaxed = true)
+        // The backend answers by the ETag it is sent, as its content-hash ETag does.
+        coEvery { mockClient.getOfferings(any()) } answers {
+            when (firstArg<String?>()) {
+                null -> freshOfferingsResponse(first, eTag = "\"e1\"")
+                "\"e1\"" -> freshOfferingsResponse(second, eTag = "\"e2\"")
+                else -> notModifiedResponse(eTag = "\"e2\"")
+            }
+        }
+        val productQueries = AtomicInteger(0)
+        val mockStoreAdapter = mockk<AppActorStoreAdapter>(relaxed = true)
+        coEvery { mockStoreAdapter.queryProductDetails(any()) } answers {
+            if (productQueries.incrementAndGet() == 2) throw IllegalStateException("Billing unavailable")
+            val requests = firstArg<List<AppActorStoreProductRequest>>()
+            requests.mapNotNull { request -> pricedProducts()[requestKey(request)] }
+        }
+        val manager = AppActorOfferingsManager(
+            backendClient = mockClient,
+            cacheStore = offeringsCacheStore("offerings-304-after-failed-enrich"),
+            offlineProductCatalogStore = offlineProductCatalogStore("offerings-304-after-failed-enrich"),
+            storeAdapter = mockStoreAdapter,
+            dateProviderMillis = { now },
+        )
+        assertEquals("Main", manager.getOfferings().current?.displayName)
+
+        now += 6 * 60 * 1_000
+        // The new payload and its ETag are on disk, but enriching it fails.
+        assertNotNull(runCatching { manager.getOfferings() }.exceptionOrNull())
+
+        assertEquals("Updated", manager.getOfferings().current?.displayName)
+    }
+
+    @Test
+    fun `a 304 confirming the offerings in memory restarts their freshness`() = runBlocking {
+        var now = 1_710_000_000_000L
+        val mockClient = mockk<AppActorBackendClient>(relaxed = true)
+        coEvery { mockClient.getOfferings(any()) } answers {
+            if (firstArg<String?>() == null) {
+                freshOfferingsResponse(fixtureOfferings(), eTag = "\"e1\"")
+            } else {
+                notModifiedResponse(eTag = "\"e1\"")
+            }
+        }
+        val mockStoreAdapter = mockk<AppActorStoreAdapter>(relaxed = true)
+        coEvery { mockStoreAdapter.queryProductDetails(any()) } answers {
+            val requests = firstArg<List<AppActorStoreProductRequest>>()
+            requests.mapNotNull { request -> pricedProducts()[requestKey(request)] }
+        }
+        val manager = AppActorOfferingsManager(
+            backendClient = mockClient,
+            cacheStore = offeringsCacheStore("offerings-304-restarts-ttl"),
+            offlineProductCatalogStore = offlineProductCatalogStore("offerings-304-restarts-ttl"),
+            storeAdapter = mockStoreAdapter,
+            dateProviderMillis = { now },
+        )
+        manager.getOfferings()
+
+        now += 6 * 60 * 1_000
+        manager.getOfferings()
+        manager.getOfferings()
+
+        coVerify(exactly = 2) { mockClient.getOfferings(any()) }
+        coVerify(exactly = 1) { mockStoreAdapter.queryProductDetails(any()) }
+    }
+
+    @Test
+    fun `bundled fallback offerings seeded at bootstrap are stale at once`() = runBlocking {
+        val mockClient = mockk<AppActorBackendClient>(relaxed = true)
+        coEvery { mockClient.getOfferings(any()) } throws
+            AppActorBackendException.Network("offline") andThen freshOfferingsResponse(fixtureOfferings())
+        val mockStoreAdapter = mockk<AppActorStoreAdapter>(relaxed = true)
+        coEvery { mockStoreAdapter.queryProductDetails(any()) } answers {
+            val requests = firstArg<List<AppActorStoreProductRequest>>()
+            requests.mapNotNull { request -> pricedProducts()[requestKey(request)] }
+        }
+        val manager = AppActorOfferingsManager(
+            backendClient = mockClient,
+            cacheStore = offeringsCacheStore("offerings-bootstrap-fallback-stale"),
+            offlineProductCatalogStore = offlineProductCatalogStore("offerings-bootstrap-fallback-stale"),
+            storeAdapter = mockStoreAdapter,
+        )
+        manager.setFallbackOfferings(fixtureOfferings())
+
+        assertEquals(AppActorDiagnosticsDataSource.Cache, manager.prefetchForBootstrap())
+        manager.getOfferings() // joins the bootstrap enrichment of the fallback, or refetches after it
+        manager.getOfferings()
+
+        coVerify(exactly = 2) { mockClient.getOfferings(any()) }
+    }
+
     /**
      * A manager with offerings cached on disk only, whose first Play product query fails (as with
      * BILLING_UNAVAILABLE), so serving the cached payload fails and leaves the refresh to run.
@@ -1053,13 +1150,27 @@ class AppActorOfferingsManagerTests {
         )
     }
 
-    private fun freshOfferingsResponse(dto: AppActorOfferingsEnvelopeDTO): AppActorBackendHttpResponse<AppActorOfferingsEnvelopeDTO> {
+    private fun freshOfferingsResponse(
+        dto: AppActorOfferingsEnvelopeDTO,
+        eTag: String = "\"etag_123\"",
+    ): AppActorBackendHttpResponse<AppActorOfferingsEnvelopeDTO> {
         return AppActorBackendHttpResponse(
             body = dto,
             statusCode = 200,
             requestId = dto.requestId,
-            eTag = "\"etag_123\"",
+            eTag = eTag,
             isNotModified = false,
+            signatureVerified = true,
+        )
+    }
+
+    private fun notModifiedResponse(eTag: String): AppActorBackendHttpResponse<AppActorOfferingsEnvelopeDTO> {
+        return AppActorBackendHttpResponse(
+            body = null,
+            statusCode = 304,
+            requestId = "req_304",
+            eTag = eTag,
+            isNotModified = true,
             signatureVerified = true,
         )
     }
