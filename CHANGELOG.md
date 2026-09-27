@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased
+## 2.4.1
 
-Fixes from the 2026-09-27 re-audit of 2.4.0. Re-audit ids in parentheses. The version is set when the release is cut.
+Fixes from the 2026-09-27 re-audit of 2.4.0. Re-audit ids in parentheses.
 
 - Fixed: a `logOut()`, or a `reset()` and `configure()`, while `restorePurchases()` or `syncPurchases()` ran made the SDK run them again for the next user. The backend then merged that user into the purchases' owner, and the SDK signed the owner back in. They now run once, for the user current when they start, as on iOS. (R-1)
 - Fixed: a one-time purchase the SDK couldn't type was never posted, so Play refunded it after 3 days. This happens when its product is in no package the device has seen, for example a package deactivated while its purchase was pending. It is now posted as a one-time purchase: the backend types it from its catalog and says whether to consume or acknowledge it. (R-2)
