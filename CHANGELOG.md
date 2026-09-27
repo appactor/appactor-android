@@ -6,7 +6,7 @@ Fixes from the 2026-09-26 SDK audit (#14 and #16 to #21). Audit ids in parenthes
 
 Behaviour changes apps can see:
 
-- Changed: minSdk is 26 (Android 8.0), up from 24. An app with a lower minSdk must raise its own to use this version. The `*Instant` helpers no longer need core library desugaring. (K2)
+- Changed, breaking: minSdk is 26 (Android 8.0), up from 24. An app with a lower minSdk fails to build with this version until it raises its own. The `*Instant` helpers no longer need core library desugaring. (K2)
 - Changed: placeholder appUserIds (`"null"`, `"guest"`, `"0"`, ...) given to `configure()` mean signed out: it keeps an anonymous id or starts a new one and never inherits the last signed-in user. Ids with `/` or control characters throw from `configure()`, and `logIn()` rejects both. A stored id that breaks the backend's rules is replaced with a new anonymous id. (D1)
 - Changed: a launch no longer restores acknowledged Play purchases on its own. After a reinstall, or a logout and relaunch, a subscriber shows no premium until they tap Restore or the app calls `syncPurchases()`, as the README documents and as on iOS. `syncPurchases()` and `restorePurchases()` still sync everything. (D4)
 - Changed: `reset()` can't be cancelled, so a `withTimeout` or `viewModelScope` around it no longer cuts the wipe short. It also waits for fetches the app started, and cancels their HTTP calls; a caller still waiting on offerings then gets `NotConfigured` instead of a `CancellationException`. (C3, D5b, C31, C9)

@@ -4,10 +4,10 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import java.text.SimpleDateFormat
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
 import java.util.Date
 import java.util.Locale
-import java.util.TimeZone
 
 public sealed class AppActorAttributeValue {
     internal abstract fun toJsonElement(): JsonElement
@@ -413,12 +413,9 @@ internal object AppActorAttributesValidation {
 }
 
 internal object AppActorIso8601 {
-    // SimpleDateFormat isn't thread-safe; one per thread spares the log path a shared lock.
-    private val formatter = ThreadLocal.withInitial {
-        SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
-            timeZone = TimeZone.getTimeZone("UTC")
-        }
-    }
+    // Always prints milliseconds, unlike Instant.toString(). Immutable, so shared across threads.
+    private val formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US)
+        .withZone(ZoneOffset.UTC)
 
-    fun format(date: Date): String = formatter.get()!!.format(date)
+    fun format(date: Date): String = formatter.format(date.toInstant())
 }

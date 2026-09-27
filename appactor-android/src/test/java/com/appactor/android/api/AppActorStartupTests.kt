@@ -114,20 +114,7 @@ class AppActorStartupTests {
         val fakeStoreAdapter = FakeStoreAdapter(
             queryProductDetailsStarted = queryStarted,
             releaseQueryProductDetails = releaseQuery,
-            resolvedProducts = listOf(
-                AppActorStoreProduct(
-                    productId = "com.appactor.pro.monthly",
-                    productType = AppActorProductType.Subscription,
-                    basePlanId = "monthly001",
-                    offerId = "intro7d",
-                    localizedPrice = "$4.99",
-                ),
-                AppActorStoreProduct(
-                    productId = "com.appactor.coins.100",
-                    productType = AppActorProductType.Consumable,
-                    localizedPrice = "$1.99",
-                ),
-            ),
+            resolvedProducts = startupFixtureProducts(),
         )
         AppActor.storeAdapterFactory = { fakeStoreAdapter }
 
@@ -192,20 +179,7 @@ class AppActorStartupTests {
         val releaseOfferings = CountDownLatch(1)
         val customerRequested = CountDownLatch(1)
         val fakeStoreAdapter = FakeStoreAdapter(
-            resolvedProducts = listOf(
-                AppActorStoreProduct(
-                    productId = "com.appactor.pro.monthly",
-                    productType = AppActorProductType.Subscription,
-                    basePlanId = "monthly001",
-                    offerId = "intro7d",
-                    localizedPrice = "$4.99",
-                ),
-                AppActorStoreProduct(
-                    productId = "com.appactor.coins.100",
-                    productType = AppActorProductType.Consumable,
-                    localizedPrice = "$1.99",
-                ),
-            ),
+            resolvedProducts = startupFixtureProducts(),
         )
         AppActor.storeAdapterFactory = { fakeStoreAdapter }
 
@@ -640,27 +614,11 @@ class AppActorStartupTests {
 
     /**
      * Runs [block] against a backend whose offerings always fail over to the cache: a 304 to a
-     * request without an ETag is refused at once, where a 5xx would be retried for seconds. The
-     * store resolves the fixture's products, so fallback offerings keep their packages.
+     * request without an ETag is refused at once, where a 5xx would be retried for seconds.
      */
     private suspend fun withOfflineOfferings(block: suspend (configure: suspend (String) -> Unit) -> Unit) {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        val fakeStoreAdapter = FakeStoreAdapter(
-            resolvedProducts = listOf(
-                AppActorStoreProduct(
-                    productId = "com.appactor.pro.monthly",
-                    productType = AppActorProductType.Subscription,
-                    basePlanId = "monthly001",
-                    offerId = "intro7d",
-                    localizedPrice = "$4.99",
-                ),
-                AppActorStoreProduct(
-                    productId = "com.appactor.coins.100",
-                    productType = AppActorProductType.Consumable,
-                    localizedPrice = "$1.99",
-                ),
-            ),
-        )
+        val fakeStoreAdapter = FakeStoreAdapter(resolvedProducts = startupFixtureProducts())
         AppActor.storeAdapterFactory = { fakeStoreAdapter }
 
         TestBackendServer { request ->
@@ -691,6 +649,22 @@ class AppActorStartupTests {
             }
         }
     }
+
+    /** The Play products of offerings_android_sample.json, so its packages survive enrichment. */
+    private fun startupFixtureProducts(): List<AppActorStoreProduct> = listOf(
+        AppActorStoreProduct(
+            productId = "com.appactor.pro.monthly",
+            productType = AppActorProductType.Subscription,
+            basePlanId = "monthly001",
+            offerId = "intro7d",
+            localizedPrice = "$4.99",
+        ),
+        AppActorStoreProduct(
+            productId = "com.appactor.coins.100",
+            productType = AppActorProductType.Consumable,
+            localizedPrice = "$1.99",
+        ),
+    )
 
     private fun startupOfferingsFixture(): String {
         return requireNotNull(
