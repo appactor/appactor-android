@@ -20,7 +20,7 @@ class AppActorResponseSignatureVerifierTests {
         val nonce = "nonce_123"
         val timestamp = "1710000000"
         val body = """{"hello":"world"}"""
-        val payload = "$nonce\n$timestamp\n$body".toByteArray(Charsets.UTF_8)
+        val payload = "$nonce\n$timestamp\npk_test_123\n$body".toByteArray(Charsets.UTF_8)
         val signature = signPayload(privateKey, payload)
 
         val result = AppActorResponseSignatureVerifier.verify(
@@ -69,7 +69,7 @@ class AppActorResponseSignatureVerifierTests {
         val publicKey = privateKey.generatePublicKey().encoded
         val timestamp = "1710000000"
         val body = """{"hello":"world"}"""
-        val payload = "sent_nonce\n$timestamp\n$body".toByteArray(Charsets.UTF_8)
+        val payload = "sent_nonce\n$timestamp\npk_test_123\n$body".toByteArray(Charsets.UTF_8)
         val signature = signPayload(privateKey, payload)
 
         val result = AppActorResponseSignatureVerifier.verify(
@@ -352,23 +352,16 @@ class AppActorResponseSignatureVerifierTests {
             "GET\n/v1/customers/user_b\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             binding,
         )
-        val signature = signPayload(privateKey, "$nonce\n$timestamp\n$binding\n$body".toByteArray(Charsets.UTF_8))
+        val signature = signPayload(privateKey, "$nonce\n$timestamp\npk_test_123\n$binding\n$body".toByteArray(Charsets.UTF_8))
 
-        fun verifyFor(target: String) = AppActorResponseSignatureVerifier.verify(
-            headers = AppActorResponseSignatureHeaders(
-                requestNonce = nonce,
-                signature = Base64.toBase64String(signature),
-                signatureTimestamp = timestamp,
-            ),
+        fun verifyFor(target: String) = verifyBoundNonce(
+            signature = signature,
+            publicKey = publicKey,
+            nonce = nonce,
+            timestamp = timestamp,
             body = body,
-            sentNonce = nonce,
             apiKey = "pk_test_123",
-            requestPath = target,
-            eTag = "",
-            v1PublicKey = publicKey,
-            rootPublicKey = null,
-            nowEpochSeconds = timestamp.toDouble(),
-            requestBinding = AppActorResponseSignatureVerifier.requestBinding("GET", target, ByteArray(0)),
+            target = target,
         )
 
         assertEquals(AppActorResponseSignatureVerifier.VerificationResult.Success, verifyFor("/v1/customers/user_b"))
@@ -376,7 +369,68 @@ class AppActorResponseSignatureVerifierTests {
         assertEquals(AppActorResponseSignatureVerifier.VerificationResult.SignatureInvalid, verifyFor("/v1/customers/user_a"))
     }
 
+    @Test
+    fun `nonce signature verifies only for the api key the sdk sent`() {
+        val privateKey = Ed25519PrivateKeyParameters(SecureRandom())
+        val publicKey = privateKey.generatePublicKey().encoded
+        val nonce = "nonce_123"
+        val timestamp = "1710000000"
+        val body = """{"customer":{"entitlements":{"premium":{}}}}"""
+        val target = "/v1/customers/user_a"
+        val binding = AppActorResponseSignatureVerifier.requestBinding("GET", target, ByteArray(0))
+
+        fun verifySigned(payload: String) = verifyBoundNonce(
+            signature = signPayload(privateKey, payload.toByteArray(Charsets.UTF_8)),
+            publicKey = publicKey,
+            nonce = nonce,
+            timestamp = timestamp,
+            body = body,
+            apiKey = "pk_app",
+            target = target,
+        )
+
+        assertEquals(
+            AppActorResponseSignatureVerifier.VerificationResult.Success,
+            verifySigned("$nonce\n$timestamp\npk_app\n$binding\n$body"),
+        )
+        // Another project's answer, signed for the key a proxy swapped in.
+        assertEquals(
+            AppActorResponseSignatureVerifier.VerificationResult.SignatureInvalid,
+            verifySigned("$nonce\n$timestamp\npk_attacker\n$binding\n$body"),
+        )
+        // The payload without the key, which a proxy would get by stripping the header.
+        assertEquals(
+            AppActorResponseSignatureVerifier.VerificationResult.SignatureInvalid,
+            verifySigned("$nonce\n$timestamp\n$binding\n$body"),
+        )
+    }
+
     // ── Helper ──
+
+    private fun verifyBoundNonce(
+        signature: ByteArray,
+        publicKey: ByteArray,
+        nonce: String,
+        timestamp: String,
+        body: String,
+        apiKey: String,
+        target: String,
+    ) = AppActorResponseSignatureVerifier.verify(
+        headers = AppActorResponseSignatureHeaders(
+            requestNonce = nonce,
+            signature = Base64.toBase64String(signature),
+            signatureTimestamp = timestamp,
+        ),
+        body = body,
+        sentNonce = nonce,
+        apiKey = apiKey,
+        requestPath = target,
+        eTag = "",
+        v1PublicKey = publicKey,
+        rootPublicKey = null,
+        nowEpochSeconds = timestamp.toDouble(),
+        requestBinding = AppActorResponseSignatureVerifier.requestBinding("GET", target, ByteArray(0)),
+    )
 
     private fun signPayload(privateKey: Ed25519PrivateKeyParameters, payload: ByteArray): ByteArray {
         val signer = Ed25519Signer()

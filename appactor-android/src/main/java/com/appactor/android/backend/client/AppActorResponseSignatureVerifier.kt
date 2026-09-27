@@ -69,7 +69,7 @@ internal object AppActorResponseSignatureVerifier {
         requestBinding: String? = null,
     ): VerificationResult {
         if (sentNonce != null) {
-            return verifyNonceBased(headers, body, sentNonce, requestBinding, v1PublicKey, rootPublicKey, nowEpochSeconds)
+            return verifyNonceBased(headers, body, sentNonce, apiKey, requestBinding, v1PublicKey, rootPublicKey, nowEpochSeconds)
         }
         return verifySaltBased(headers, body, apiKey, requestPath, eTag, v1PublicKey, rootPublicKey, nowEpochSeconds)
     }
@@ -80,6 +80,7 @@ internal object AppActorResponseSignatureVerifier {
         headers: AppActorResponseSignatureHeaders?,
         body: String,
         sentNonce: String,
+        apiKey: String,
         requestBinding: String?,
         v1PublicKey: ByteArray?,
         rootPublicKey: ByteArray?,
@@ -93,7 +94,7 @@ internal object AppActorResponseSignatureVerifier {
             return VerificationResult.NonceMismatch
         }
 
-        val payload = noncePayloadBytes(sentNonce, timestamp, requestBinding, body)
+        val payload = noncePayloadBytes(sentNonce, timestamp, apiKey, requestBinding, body)
         return validateTimestampAndDispatch(signatureBase64, timestamp, payload, v1PublicKey, rootPublicKey, nowEpochSeconds)
     }
 
@@ -215,14 +216,18 @@ internal object AppActorResponseSignatureVerifier {
         return if (payloadValid) VerificationResult.Success else VerificationResult.SignatureInvalid
     }
 
+    // The API key as well: every nonce request sends `X-AppActor-Signature-Api-Key: include`.
+    // Every project is signed with the same key, so without it another project's signed answer
+    // would pass as this app's.
     private fun noncePayloadBytes(
         sentNonce: String,
         timestamp: String,
+        apiKey: String,
         requestBinding: String?,
         body: String,
     ): ByteArray {
         val bound = requestBinding?.let { "$it\n" }.orEmpty()
-        return "$sentNonce\n$timestamp\n$bound$body".toByteArray(Charsets.UTF_8)
+        return "$sentNonce\n$timestamp\n$apiKey\n$bound$body".toByteArray(Charsets.UTF_8)
     }
 
     /**
