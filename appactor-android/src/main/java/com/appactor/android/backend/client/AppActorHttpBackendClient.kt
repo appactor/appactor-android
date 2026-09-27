@@ -361,7 +361,6 @@ internal class AppActorHttpBackendClient(
 
                 when (rawResponse.statusCode) {
                     304 -> {
-                        rawResponse.notModifiedFailure(resolvedRequestId)?.let { throw it }
                         return@withContext AppActorBackendHttpResponse(
                             body = null,
                             statusCode = rawResponse.statusCode,
@@ -499,40 +498,48 @@ internal class AppActorHttpBackendClient(
     }
 
     /**
-     * A 304 that doesn't revalidate what its request sent (unsigned, or for another ETag) is
-     * fetched once more without the validator; a second bad 304 is refused by the caller.
-     */
-    private suspend fun executeRevalidating(request: Request, initialRequest: Request): RawBackendResponse {
-        val response = executeResendingReplayedNonce(request, initialRequest)
-        if (response.statusCode != 304 || response.sentETag == null || response.notModifiedFailure(null) == null) {
-            return response
-        }
-        return executeResendingReplayedNonce(resigned(initialRequest), initialRequest)
-    }
-
-    /**
      * A 304 revalidates only the validator its own request sent. A nonce signature doesn't cover
      * the ETag, so a proxy that rewrote If-None-Match to `*` once would otherwise get the cached
      * body re-stamped with the server's current ETag, and every genuine 304 after it would keep it.
+     * One that doesn't (unsigned, or for another ETag) is fetched once more without the validator;
+     * a 304 to a request that sent none is refused.
      */
-    private fun RawBackendResponse.notModifiedFailure(requestId: String?): AppActorBackendException? {
-        if (configuration.options.verifyResponseSignatures && !signatureVerified) {
-            return AppActorBackendException.Signature(
+    private suspend fun executeRevalidating(request: Request, initialRequest: Request): RawBackendResponse {
+        val response = executeResendingReplayedNonce(request, initialRequest)
+        if (response.revalidatesSentETag()) return response
+        if (response.sentETag == null) throw response.notModifiedFailure()
+        val refetched = executeResendingReplayedNonce(resigned(initialRequest), initialRequest)
+        if (!refetched.revalidatesSentETag()) throw refetched.notModifiedFailure()
+        return refetched
+    }
+
+    /** True for anything but a 304, and for a verified 304 of the ETag its request sent (W/ aside). */
+    private fun RawBackendResponse.revalidatesSentETag(): Boolean {
+        if (statusCode != 304) return true
+        val sent = sentETag ?: return false
+        if (isUnverified()) return false
+        return eTag == null || eTag.removePrefix("W/") == sent.removePrefix("W/")
+    }
+
+    private fun RawBackendResponse.notModifiedFailure(): AppActorBackendException =
+        if (isUnverified()) {
+            AppActorBackendException.Signature(
                 result = AppActorResponseSignatureVerifier.VerificationResult.SignatureMissing,
                 requestId = requestId,
             )
+        } else {
+            AppActorBackendException.Http(
+                statusCode = 304,
+                requestId = requestId,
+                error = AppActorBackendErrorDTO(
+                    code = "CACHE_INCONSISTENCY",
+                    message = "Server returned 304 for a validator this request did not send",
+                ),
+            )
         }
-        val sent = sentETag
-        if (sent != null && (eTag == null || eTag.removePrefix("W/") == sent.removePrefix("W/"))) return null
-        return AppActorBackendException.Http(
-            statusCode = 304,
-            requestId = requestId,
-            error = AppActorBackendErrorDTO(
-                code = "CACHE_INCONSISTENCY",
-                message = "Server returned 304 for a validator this request did not send",
-            ),
-        )
-    }
+
+    private fun RawBackendResponse.isUnverified(): Boolean =
+        configuration.options.verifyResponseSignatures && !signatureVerified
 
     private fun parseErrorEnvelope(rawBody: String?): AppActorBackendErrorEnvelopeDTO? {
         return rawBody

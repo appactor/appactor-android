@@ -38,6 +38,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -110,7 +111,7 @@ class GooglePlayBillingClientBridgeTests {
             mutableListOf(completed),
         )
 
-        val update = kotlinx.coroutines.withTimeout(5_000) { bridge.purchaseUpdates().first() }
+        val update = withTimeout(5_000) { bridge.purchaseUpdates().first() }
         assertEquals(setOf("token_new"), update.purchaseTokens)
         assertEquals(AppActorStorePurchaseState.Purchased, update.purchases.single().purchaseState)
         bridge.shutdown()
@@ -134,13 +135,13 @@ class GooglePlayBillingClientBridgeTests {
                 replacementMode = null,
             )
         }
-        kotlinx.coroutines.withTimeout(5_000) {
+        withTimeout(5_000) {
             while (fakeBillingClient.launchBillingFlowCalls == 0) delay(10)
         }
 
         bridge.shutdown()
 
-        val result = kotlinx.coroutines.withTimeout(5_000) { purchase.await() }
+        val result = withTimeout(5_000) { purchase.await() }
         assertEquals(AppActorError.NotConfigured, (result as AppActorBillingLaunchResult.Failed).error)
     }
 
@@ -213,7 +214,7 @@ class GooglePlayBillingClientBridgeTests {
 
         bridge.shutdown()
 
-        kotlinx.coroutines.withTimeout(5_000) { bridge.connect() }
+        withTimeout(5_000) { bridge.connect() }
         assertFalse(bridge.isConnected())
     }
 

@@ -1,13 +1,11 @@
 package com.appactor.android.pipeline
 
 import com.appactor.android.api.queueItem
+import com.appactor.android.internal.runtime.appActorBackgroundScope
 import com.appactor.android.storage.AppActorReceiptQueueStore
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
@@ -22,7 +20,7 @@ class AppActorRetryWakeSchedulerTests {
         val now = 1_000_000L
         val queueStore = mockk<AppActorReceiptQueueStore>()
         every { queueStore.snapshot() } returns listOf(queueItem().copy(nextRetryAtMillis = now))
-        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val scope = appActorBackgroundScope()
         val drainFinished = CompletableDeferred<Boolean>()
         lateinit var scheduler: AppActorRetryWakeScheduler
         scheduler = AppActorRetryWakeScheduler(

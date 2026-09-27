@@ -10,6 +10,7 @@ import com.appactor.android.backend.dto.AppActorGoogleRestoreRequestDTO
 import com.appactor.android.backend.dto.AppActorGoogleSyncRequestDTO
 import com.appactor.android.billing.AppActorStoreAdapter
 import com.appactor.android.billing.AppActorStorePurchase
+import com.appactor.android.internal.runtime.throwIfCancellation
 import com.appactor.android.managers.AppActorCustomerManager
 import com.appactor.android.models.AppActorCustomerInfo
 import com.appactor.android.models.AppActorError
@@ -407,15 +408,13 @@ internal class AppActorRestoreSyncCoordinator(
                         currentAppUserId,
                         forceRefresh = true,
                     )
-                }
-                val fallbackFailure = fallbackCustomer.exceptionOrNull()
-                if (fallbackFailure is CancellationException) throw fallbackFailure
+                }.onFailure(::throwIfCancellation)
                 val remainingHistoryRestore = restoreBatches
                     .subList(batchIndex, restoreBatches.size)
                     .any { remainingBatch -> remainingBatch.any { !it.isActive } }
                 if (remainingHistoryRestore) {
                     val error = restoreFailure(throwable, "Failed to restore full Google Play purchase history.")
-                    fallbackFailure?.let(error::addSuppressed)
+                    fallbackCustomer.exceptionOrNull()?.let(error::addSuppressed)
                     throw error
                 }
                 return fallbackCustomer.getOrElse { syncThrowable ->
@@ -690,8 +689,8 @@ internal class AppActorRestoreSyncCoordinator(
 // The canonical types for backend answers (a 5xx/429 Server error with its status and retry-after,
 // the Signature errors), and the restore's own message where the exception's would say less.
 private fun restoreFailure(throwable: Throwable, defaultMessage: String): AppActorError = when (throwable) {
-    is AppActorError -> throwable
     is AppActorBackendException.Network -> AppActorError.Network(defaultMessage, throwable)
+    is AppActorError,
     is AppActorBackendException.Http,
     is AppActorBackendException.Signature,
     is AppActorBackendException.CustomerNotFound -> throwable.toAppActorError(defaultMessage)

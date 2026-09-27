@@ -78,9 +78,15 @@ internal class AppActorETagManager(
         return System.currentTimeMillis() - entry.cachedAtMillis < ttlMillis
     }
 
+    /**
+     * Removes failed entries, and the unverified offerings and remote-config entries older versions
+     * stored from unsigned responses. The offline product catalog is derived from the offerings, so
+     * it goes with them.
+     */
     fun clearUnverifiedIfNeeded() {
-        if (responseVerificationEnabled) {
-            diskStore.clearAllUnverified()
+        if (!responseVerificationEnabled) return
+        if (AppActorCacheResource.Offerings.cacheKey in diskStore.clearAllUnverified()) {
+            diskStore.clear(AppActorCacheResource.OfflineProductCatalog)
         }
     }
 

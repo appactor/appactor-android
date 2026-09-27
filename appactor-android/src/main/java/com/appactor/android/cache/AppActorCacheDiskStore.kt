@@ -99,13 +99,9 @@ internal class AppActorCacheDiskStore(
         directory.deleteRecursively()
     }
 
-    /**
-     * Removes every entry that doesn't hold a verified response: failed ones, and the unverified
-     * offerings and remote-config entries older versions stored from unsigned responses. The
-     * offline product catalog is derived from the offerings, so it goes with them.
-     */
-    fun clearAllUnverified() = lock.withLock {
-        var offeringsPurged = false
+    /** Removes every entry that doesn't hold a verified response; returns the removed cache keys. */
+    fun clearAllUnverified(): Set<String> = lock.withLock {
+        val removed = mutableSetOf<String>()
         val files = directory.listFiles().orEmpty()
         files.filter { it.extension == "json" }.forEach { file ->
             val entry = runCatching {
@@ -113,11 +109,11 @@ internal class AppActorCacheDiskStore(
             }.onFailure { AppActorLogger.warn("[$TAG] Cache entry decode failed during cleanup: ${it.message}") }
                 .getOrNull()
             if (entry == null || !entry.resolvedStatus.isVerified) {
-                if (file.nameWithoutExtension == AppActorCacheResource.Offerings.cacheKey) offeringsPurged = true
+                removed += file.nameWithoutExtension
                 file.delete()
             }
         }
-        if (offeringsPurged) fileFor(AppActorCacheResource.OfflineProductCatalog).delete()
+        removed
     }
 
     private fun fileFor(resource: AppActorCacheResource): File {

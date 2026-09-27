@@ -25,7 +25,7 @@ import kotlinx.coroutines.launch
  *  - [drainingJob]: the wake coroutine while it drains, or null.
  *  - [retryWakeLock]: dedicated monitor guarding the fields above. It is exclusive
  *    to this collaborator — no other code touches this lock. All inspection and
- *    mutation of [retryWakeJob]/[scheduledRetryAtMillis] (including the cancel+assign
+ *    mutation of [retryWakeJob]/[scheduledRetryAtMillis]/[drainingJob] (including the cancel+assign
  *    sequence in [scheduleNextRetryWake] and the completion cleanup inside the launched
  *    wake coroutines) happens under this lock so they share a consistent happens-before
  *    relationship regardless of the calling thread or whether the pipeline mutex is held.
@@ -49,7 +49,7 @@ internal class AppActorRetryWakeScheduler(
 ) {
 
     // Dedicated monitor guarding the retry-wake scheduler state below. All
-    // reads/writes of retryWakeJob and scheduledRetryAtMillis — including the
+    // reads/writes of retryWakeJob, scheduledRetryAtMillis and drainingJob — including the
     // cancel+assign sequence in scheduleNextRetryWake() and the cleanup inside
     // the launched wake coroutines — must happen under this lock so they share a
     // consistent happens-before relationship regardless of the calling thread or
@@ -158,19 +158,17 @@ internal class AppActorRetryWakeScheduler(
             try {
                 runDrainUnderPipelineLock(limit)
             } finally {
-                val isStillActiveJob = synchronized(retryWakeLock) {
+                synchronized(retryWakeLock) {
                     if (retryWakeJob === thisJob) {
                         retryWakeJob = null
                         scheduledRetryAtMillis = null
                         drainingJob = null
-                        true
-                    } else {
-                        false
                     }
                 }
-                // Also after a failed drain: the wakes it asked for were held back. What it had
-                // claimed waits in Posting until the stale-claim threshold, so this can't spin.
-                if (isStillActiveJob && isActive) {
+                // Nothing replaces a draining job, so only a cancel (reset) skips this. Also after
+                // a failed drain: the wakes it asked for were held back, and what it had claimed
+                // waits in Posting until the stale-claim threshold, so this can't spin.
+                if (isActive) {
                     scheduleNextRetryWake(limit)
                 }
             }
