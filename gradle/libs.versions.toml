@@ -16,7 +16,7 @@ robolectric = "4.14.1"
 coroutines = "1.9.0"
 serializationJson = "1.8.0"
 okhttp = "4.12.0"
-bouncycastle = "1.83"
+tink = "1.23.0"
 billing = "8.3.0"
 installReferrer = "2.2"
 mockk = "1.13.11"
@@ -46,7 +46,7 @@ kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-
 kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "coroutines" }
 kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "serializationJson" }
 okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
-bouncycastle-bcprov = { group = "org.bouncycastle", name = "bcprov-jdk18on", version.ref = "bouncycastle" }
+tink-android = { group = "com.google.crypto.tink", name = "tink-android", version.ref = "tink" }
 google-play-billing = { group = "com.android.billingclient", name = "billing", version.ref = "billing" }
 google-install-referrer = { group = "com.android.installreferrer", name = "installreferrer", version.ref = "installReferrer" }
 mockk = { group = "io.mockk", name = "mockk", version.ref = "mockk" }

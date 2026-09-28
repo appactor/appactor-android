@@ -57,11 +57,6 @@ android {
     buildFeatures {
         buildConfig = true
     }
-    packaging {
-        resources {
-            excludes += "META-INF/versions/9/OSGI-INF/MANIFEST.MF"
-        }
-    }
     testOptions {
         unitTests.all {
             it.jvmArgs("-Xmx1g", "-XX:+UseParallelGC", "-XX:+TieredCompilation", "-XX:TieredStopAtLevel=1")
@@ -109,7 +104,7 @@ dependencies {
     implementation(libs.okhttp)
     implementation(libs.google.play.billing)
     implementation(libs.google.install.referrer)
-    implementation(libs.bouncycastle.bcprov)
+    implementation(libs.tink.android)
     testImplementation(libs.junit)
     testImplementation(libs.androidx.test.core)
     testImplementation(libs.robolectric)

@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.4.3
+
+- Changed: response signatures (Ed25519) are verified with Google's Tink (`com.google.crypto.tink:tink-android` 1.23.0) instead of BouncyCastle, and the SDK no longer brings in `bcprov-jdk18on`. bcprov and `org.jspecify:jspecify`, which `androidx.core` 1.17 brings in, both ship `META-INF/versions/9/OSGI-INF/MANIFEST.MF`, so an app on AGP 8.11 or older failed to build ("2 files found with path …") unless it excluded that file. bcprov's Java 25 classes could also fail builds with Jetifier on. Apps that added the exclude for the SDK can drop it. Tink uses Android's own Ed25519 where the device has it and its own implementation elsewhere, and brings in `gson`, `error_prone_annotations`, `jsr305` and `androidx.annotation`. (Flutter audit FL-1, FL-3, 2026-09-28)
+- Fixed: an entitlement's `originalPurchaseDate` was always null, and `latestPurchaseDate` ignored `renewedAt`. They now map as on iOS: `originalPurchaseDate` is the backend's `purchaseDate` for the entitlement, and `latestPurchaseDate` is its `renewedAt` (the latest transaction), else `purchaseDate`. The backend moves `purchaseDate` to the renewal after most renewals, so `originalPurchaseDate` is not always the first purchase. Entitlements the SDK builds for a queued purchase set both to that purchase's date. The Flutter, React Native and Capacitor plugins pass them on as `original_purchase_date` and `latest_purchase_date`. (Flutter audit FL-7)
+
 ## 2.4.2
 
 - Fixed: the signature on customer info, login, purchase, restore and sync responses didn't cover the API key. Every AppActor project is signed with the same key, so a proxy on the device could swap in its own project's API key and pass that project's signed answer (premium it granted itself) off as the app's. Nonce requests now send `X-AppActor-Signature-Api-Key: include`, and the SDK checks the signature against the API key it sent, as iOS 0.2.1 does. (iOS re-audit Y-1, 2026-09-27)

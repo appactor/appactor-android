@@ -1,8 +1,9 @@
 package com.appactor.android.backend.client
 
-import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters
-import org.bouncycastle.crypto.signers.Ed25519Signer
-import org.bouncycastle.util.encoders.Base64
+import com.google.crypto.tink.signature.Ed25519PublicKey
+import com.google.crypto.tink.subtle.Ed25519Verify
+import com.google.crypto.tink.util.Bytes
+import java.util.Base64
 import kotlin.math.abs
 import kotlin.math.max
 
@@ -50,8 +51,8 @@ internal object AppActorResponseSignatureVerifier {
             requestPath = requestPath,
             eTag = eTag,
             requestBinding = requestBinding,
-            v1PublicKey = decodeKey(v1PublicKeyBase64),
-            rootPublicKey = decodeKey(rootPublicKeyBase64),
+            v1PublicKey = decodeBase64(v1PublicKeyBase64),
+            rootPublicKey = decodeBase64(rootPublicKeyBase64),
             nowEpochSeconds = System.currentTimeMillis() / 1000.0,
         )
     }
@@ -132,7 +133,7 @@ internal object AppActorResponseSignatureVerifier {
             return VerificationResult.TimestampOutOfRange
         }
 
-        val signatureBlob = runCatching { Base64.decode(signatureBase64) }.getOrNull()
+        val signatureBlob = decodeBase64(signatureBase64)
             ?: return VerificationResult.SignatureInvalid
 
         return when (signatureBlob.size) {
@@ -252,21 +253,22 @@ internal object AppActorResponseSignatureVerifier {
         return "$salt\n$apiKey\n$requestPath\n$timestamp\n$eTag\n$body".toByteArray(Charsets.UTF_8)
     }
 
+    // Tink uses Conscrypt's Ed25519 where the device has it, else pure Java. Its first use loads
+    // classes, which is fine: the backend client only verifies on its IO dispatcher.
     private fun verifyEd25519(
         publicKey: ByteArray,
         signature: ByteArray,
         payload: ByteArray,
     ): Boolean {
         return runCatching {
-            val signer = Ed25519Signer()
-            signer.init(false, Ed25519PublicKeyParameters(publicKey, 0))
-            signer.update(payload, 0, payload.size)
-            signer.verifySignature(signature)
+            Ed25519Verify.create(Ed25519PublicKey.create(Bytes.copyFrom(publicKey))).verify(signature, payload)
+            true
         }.getOrDefault(false)
     }
 
-    private fun decodeKey(base64: String): ByteArray? {
-        return runCatching { Base64.decode(base64) }.getOrNull()
+    // Standard alphabet, as the backend encodes with Node's toString('base64').
+    private fun decodeBase64(base64: String): ByteArray? {
+        return runCatching { Base64.getDecoder().decode(base64) }.getOrNull()
     }
 
     private fun readUInt64BE(

@@ -80,6 +80,26 @@ class AppActorCustomerManagerTests {
     }
 
     @Test
+    fun `entitlement dates take the original from purchaseDate and the latest from renewedAt`() = runBlocking {
+        val fixture = fixtureCustomer("fixtures/backend/customer_android_active.json")
+        val premium = fixture.customer.entitlements.getValue("premium")
+        val renewed = fixture.copy(
+            customer = fixture.customer.copy(
+                entitlements = mapOf("premium" to premium.copy(renewedAt = "2026-04-14T09:00:00.000Z")),
+            ),
+        )
+        val mockClient = mockk<AppActorBackendClient>(relaxed = true)
+        coEvery { mockClient.getOfferings(any()) } returns freshOfferingsResponse(fixtureOfferings())
+        coEvery { mockClient.identify(any()) } returns freshCustomerResponse(renewed)
+        val manager = createCustomerManager(mockClient)
+
+        val entitlement = manager.identify().entitlements.getValue("premium")
+
+        assertEquals("2026-03-14T09:00:00.000Z", entitlement.originalPurchaseDate)
+        assertEquals("2026-04-14T09:00:00.000Z", entitlement.latestPurchaseDate)
+    }
+
+    @Test
     fun `identify sends sdk version telemetry`() = runBlocking {
         val identifyRequestSlot = slot<AppActorIdentifyRequestDTO>()
         val mockClient = mockk<AppActorBackendClient>(relaxed = true)
