@@ -253,9 +253,8 @@ internal object AppActorResponseSignatureVerifier {
         return "$salt\n$apiKey\n$requestPath\n$timestamp\n$eTag\n$body".toByteArray(Charsets.UTF_8)
     }
 
-    // Tink uses the platform's Ed25519 (Conscrypt) where it has one and its own pure Java
-    // implementation elsewhere. The first call loads the classes, so it stays off the main thread:
-    // every caller verifies inside the backend client's IO dispatcher.
+    // Tink uses Conscrypt's Ed25519 where the device has it, else pure Java. Its first use loads
+    // classes, which is fine: the backend client only verifies on its IO dispatcher.
     private fun verifyEd25519(
         publicKey: ByteArray,
         signature: ByteArray,

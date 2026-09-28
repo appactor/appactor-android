@@ -406,8 +406,7 @@ class AppActorResponseSignatureVerifierTests {
     @Test
     fun `nonce signature made the way the backend signs verifies`() {
         // Signed with Node's crypto.sign(null, payload, key), as response-signing.ts does, over
-        // nonce, timestamp, API key and a body that is not plain ASCII. The test's other
-        // signatures come from Tink itself, which verifies them too.
+        // nonce, timestamp, API key and a non-ASCII body. The other tests sign with Tink itself.
         val result = AppActorResponseSignatureVerifier.verify(
             headers = AppActorResponseSignatureHeaders(
                 requestNonce = "nonce_kat_1",
