@@ -58,6 +58,7 @@ internal class AppActorOfflineCustomerInfoBuilder(
                         purchaseDate = purchase.purchaseDateString(),
                         startsAt = purchase.purchaseDateString(),
                         latestPurchaseDate = purchase.purchaseDateString(),
+                        originalPurchaseDate = purchase.purchaseDateString(),
                     )
                 )
             }

@@ -49,4 +49,27 @@ class AppActorOfflineCustomerInfoBuilderTests {
         assertEquals(cached.managementUrl, info.managementUrl)
         assertTrue(info.isComputedOffline)
     }
+
+    @Test
+    fun `an offline entitlement dates its first and latest purchase to the purchase`() {
+        val builder = AppActorOfflineCustomerInfoBuilder(
+            AppActorConfiguration(context = context, apiKey = "pk_test_123"),
+        )
+        val purchase = AppActorStorePurchase(
+            productId = "com.appactor.no_ads",
+            productType = AppActorProductType.NonConsumable,
+            purchaseToken = "token_no_ads",
+            purchaseTimeMillis = 1_710_000_000_000,
+            purchaseState = AppActorStorePurchaseState.Purchased,
+        )
+
+        val entitlement = builder.buildOfflineCustomerInfo(
+            purchase = purchase,
+            appUserId = "user_1",
+            productEntitlements = mapOf("android:com.appactor.no_ads" to listOf("no_ads")),
+        )!!.entitlements.getValue("no_ads")
+
+        assertEquals(purchase.purchaseDateString(), entitlement.originalPurchaseDate)
+        assertEquals(purchase.purchaseDateString(), entitlement.latestPurchaseDate)
+    }
 }

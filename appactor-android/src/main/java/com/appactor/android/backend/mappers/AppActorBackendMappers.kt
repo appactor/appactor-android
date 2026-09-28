@@ -157,8 +157,10 @@ internal fun AppActorEntitlementDTO.toModel(identifier: String): AppActorEntitle
         cancellationReason = cancellationReason?.let(AppActorCancellationReason::fromWireValue),
         purchaseDate = purchaseDate,
         startsAt = startsAt,
-        latestPurchaseDate = purchaseDate,
-        originalPurchaseDate = null,
+        // As on iOS: the original purchase is the backend's purchaseDate, the latest its renewedAt
+        // (the latest transaction) when there is one.
+        latestPurchaseDate = renewedAt ?: purchaseDate,
+        originalPurchaseDate = purchaseDate,
         expirationDate = expiresAt,
         gracePeriodExpiresAt = gracePeriodExpiresAt,
         billingIssueDetectedAt = billingIssueDetectedAt,
