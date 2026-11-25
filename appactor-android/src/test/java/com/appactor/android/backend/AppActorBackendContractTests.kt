@@ -48,13 +48,107 @@ class AppActorBackendContractTests {
         val monthlyPackage = current?.monthly
         assertNotNull(monthlyPackage)
         assertEquals(AppActorPackageType.Monthly, monthlyPackage?.packageType)
+        assertEquals("pro_monthly", monthlyPackage?.lookupKey)
         assertEquals(AppActorStore.PlayStore, monthlyPackage?.store)
         assertEquals(AppActorProductType.Subscription, monthlyPackage?.productType)
+        assertEquals(monthlyPackage, current?.packageForLookupKey("pro_monthly"))
 
         val consumablePackage = current?.packages?.get(1)
         assertEquals(AppActorPackageType.Consumable, consumablePackage?.packageType)
+        assertEquals("coin_pack_100", consumablePackage?.lookupKey)
         assertEquals(AppActorProductType.Consumable, consumablePackage?.productType)
         assertEquals(100, consumablePackage?.tokenAmount)
+        assertEquals(consumablePackage, current?.packageForLookupKey("coin_pack_100"))
+    }
+
+    @Test
+    fun `offerings package lookupKey decodes valid, padded, null, absent, and blank values safely`() {
+        val rawJson = """
+            {
+              "data": {
+                "currentOffering": {
+                  "id": "off_lookup_cases",
+                  "lookupKey": "main",
+                  "displayName": "Main",
+                  "isCurrent": true,
+                  "metadata": {},
+                  "packages": [
+                    {
+                      "id": "pkg_valid",
+                      "packageType": "monthly",
+                      "lookupKey": "pro_monthly",
+                      "products": [
+                        { "store": "play_store", "productId": "com.appactor.valid", "productType": "subscription", "basePlanId": "p1" }
+                      ]
+                    },
+                    {
+                      "id": "pkg_padded",
+                      "packageType": "annual",
+                      "lookupKey": "  pro_annual \n ",
+                      "products": [
+                        { "store": "play_store", "productId": "com.appactor.padded", "productType": "subscription", "basePlanId": "p2" }
+                      ]
+                    },
+                    {
+                      "id": "pkg_null",
+                      "packageType": "weekly",
+                      "lookupKey": null,
+                      "products": [
+                        { "store": "play_store", "productId": "com.appactor.null", "productType": "subscription", "basePlanId": "p3" }
+                      ]
+                    },
+                    {
+                      "id": "pkg_absent",
+                      "packageType": "lifetime",
+                      "products": [
+                        { "store": "play_store", "productId": "com.appactor.absent", "productType": "non_consumable" }
+                      ]
+                    },
+                    {
+                      "id": "pkg_empty",
+                      "packageType": "consumable",
+                      "lookupKey": "",
+                      "products": [
+                        { "store": "play_store", "productId": "com.appactor.empty", "productType": "consumable" }
+                      ]
+                    },
+                    {
+                      "id": "pkg_blank",
+                      "packageType": "custom",
+                      "lookupKey": "   \t\n  ",
+                      "products": [
+                        { "store": "play_store", "productId": "com.appactor.blank", "productType": "consumable" }
+                      ]
+                    }
+                  ]
+                },
+                "offerings": [],
+                "productEntitlements": {}
+              },
+              "requestId": "req_lookup_cases"
+            }
+        """.trimIndent()
+
+        val offerings = AppActorBackendJson.instance
+            .decodeFromString<AppActorOfferingsEnvelopeDTO>(rawJson)
+            .toModel()
+        val packagesById = requireNotNull(offerings.current).packages.associateBy { it.id }
+
+        assertEquals("pro_monthly", packagesById["pkg_valid"]?.lookupKey)
+        assertEquals("monthly", packagesById["pkg_valid"]?.identifier)
+        assertEquals("pro_annual", packagesById["pkg_padded"]?.lookupKey)
+        assertNull(packagesById["pkg_null"]?.lookupKey)
+        assertNull(packagesById["pkg_absent"]?.lookupKey)
+        assertNull(packagesById["pkg_empty"]?.lookupKey)
+        assertNull(packagesById["pkg_blank"]?.lookupKey)
+
+        val offering = requireNotNull(offerings.current)
+        assertEquals("pkg_valid", offering.packageForLookupKey("pro_monthly")?.id)
+        assertEquals("pkg_padded", offering.packageForLookupKey("pro_annual")?.id)
+        assertNull(offering.packageForLookupKey("pkg_null"))
+        assertNull(offering.packageForLookupKey("weekly"))
+        assertNull(offering.packageForLookupKey(""))
+        assertNull(offering.packageForLookupKey("   "))
     }
 
     @Test

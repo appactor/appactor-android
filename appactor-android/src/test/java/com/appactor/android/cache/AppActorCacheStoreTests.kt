@@ -61,20 +61,109 @@ class AppActorCacheStoreTests {
     }
 
     @Test
-    fun `legacy offerings cache payloads remain readable for locale safe lookups`() {
-        val diskStore = AppActorCacheDiskStore(context, tempDirectory("cache-locale-legacy"))
+    fun `legacy pre-locale raw offerings cache payload is invalidated and cleared`() {
+        val directory = tempDirectory("cache-locale-legacy-raw")
+        val diskStore = AppActorCacheDiskStore(context, directory)
         val manager = AppActorETagManager(diskStore = diskStore, responseVerificationEnabled = false)
         val store = AppActorOfferingsCacheStore(manager)
 
         manager.storeFresh(
             resource = AppActorCacheResource.Offerings,
-            payload = """{"hello":"world"}""",
-            eTag = "\"etag_legacy\"",
+            payload = """{"data":{"offerings":[]}}""",
+            eTag = "\"etag_legacy_raw\"",
             verified = true,
         )
 
-        assertNotNull(store.loadLocaleCompatible(listOf(Locale.getDefault().toLanguageTag())))
-        assertNotNull(store.eTag(currentLocales = listOf(Locale.getDefault().toLanguageTag())))
+        val locale = listOf(Locale.getDefault().toLanguageTag())
+        assertNull(store.loadLocaleCompatible(locale))
+        assertNull(store.load())
+        assertNull(store.eTag(currentLocales = locale))
+        assertNull(store.handleNotModified(rotatedETag = "\"etag_rotated\"", currentLocales = locale))
+        assertFalse(File(directory, "${AppActorCacheResource.Offerings.cacheKey}.json").exists())
+    }
+
+    @Test
+    fun `legacy pre-bump v1 wrapped offerings cache payload without schemaVersion is invalidated and cleared`() {
+        val directory = tempDirectory("cache-legacy-v1-wrapped")
+        val diskStore = AppActorCacheDiskStore(context, directory)
+        val manager = AppActorETagManager(diskStore = diskStore, responseVerificationEnabled = false)
+        val store = AppActorOfferingsCacheStore(manager)
+        val locale = listOf("en-US")
+
+        // Exact shape written by SDK versions prior to cache schemaVersion bump (keyless DTO inside wrapper).
+        val legacyWrappedPayload = """{"payload":"{\"data\":{\"offerings\":[]}}","preferredLocales":["en-US"]}"""
+        manager.storeFresh(
+            resource = AppActorCacheResource.Offerings,
+            payload = legacyWrappedPayload,
+            eTag = "\"etag_v1\"",
+            verified = true,
+        )
+
+        assertNull(store.eTag(currentLocales = locale))
+        assertFalse(File(directory, "${AppActorCacheResource.Offerings.cacheKey}.json").exists())
+
+        // Re-seed and verify load(), loadLocaleCompatible(), and handleNotModified() also reject and clear it.
+        manager.storeFresh(
+            resource = AppActorCacheResource.Offerings,
+            payload = legacyWrappedPayload,
+            eTag = "\"etag_v1\"",
+            verified = true,
+        )
+        assertNull(store.load())
+        assertFalse(File(directory, "${AppActorCacheResource.Offerings.cacheKey}.json").exists())
+
+        manager.storeFresh(
+            resource = AppActorCacheResource.Offerings,
+            payload = legacyWrappedPayload,
+            eTag = "\"etag_v1\"",
+            verified = true,
+        )
+        assertNull(store.handleNotModified(rotatedETag = "\"etag_v1_new\"", currentLocales = locale))
+        assertFalse(File(directory, "${AppActorCacheResource.Offerings.cacheKey}.json").exists())
+    }
+
+    @Test
+    fun `offerings cache payload with mismatched schemaVersion is invalidated and cleared`() {
+        val directory = tempDirectory("cache-wrong-schema-version")
+        val diskStore = AppActorCacheDiskStore(context, directory)
+        val manager = AppActorETagManager(diskStore = diskStore, responseVerificationEnabled = false)
+        val store = AppActorOfferingsCacheStore(manager)
+
+        val wrongVersionWrapped = """{"payload":"{\"data\":{\"offerings\":[]}}","preferredLocales":["en-US"],"schemaVersion":1}"""
+        manager.storeFresh(
+            resource = AppActorCacheResource.Offerings,
+            payload = wrongVersionWrapped,
+            eTag = "\"etag_wrong_version\"",
+            verified = true,
+        )
+
+        assertNull(store.loadLocaleCompatible(listOf("en-US")))
+        assertNull(store.eTag(currentLocales = listOf("en-US")))
+        assertFalse(File(directory, "${AppActorCacheResource.Offerings.cacheKey}.json").exists())
+    }
+
+    @Test
+    fun `offerings cache round-trip persists schemaVersion and preserves package lookupKey`() {
+        val directory = tempDirectory("cache-v2-roundtrip")
+        val diskStore = AppActorCacheDiskStore(context, directory)
+        val manager = AppActorETagManager(diskStore = diskStore, responseVerificationEnabled = false)
+        val store = AppActorOfferingsCacheStore(manager)
+
+        val offeringsPayload = """{"data":{"offerings":[{"id":"off_1","lookupKey":"main","isCurrent":true,"packages":[{"id":"pkg_1","packageType":"monthly","lookupKey":"pro_monthly","products":[]}]}]}}"""
+        store.save(
+            payload = offeringsPayload,
+            eTag = "\"etag_v2\"",
+            verified = true,
+            preferredLocales = listOf("en-US"),
+        )
+
+        val rawEntry = requireNotNull(diskStore.load(AppActorCacheResource.Offerings))
+        assertTrue(rawEntry.payload.contains("\"schemaVersion\":${AppActorOfferingsCacheStore.CURRENT_SCHEMA_VERSION}"))
+
+        val loaded = store.loadLocaleCompatible(listOf("en-US"))
+        assertNotNull(loaded)
+        assertEquals(offeringsPayload, loaded?.payload)
+        assertEquals("\"etag_v2\"", store.eTag(currentLocales = listOf("en-US")))
     }
 
     @Test

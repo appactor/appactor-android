@@ -1163,6 +1163,7 @@ package com.appactor.android.models {
     method public com.appactor.android.models.AppActorPackage? getWeekly();
     method public boolean isCurrent();
     method public com.appactor.android.models.AppActorPackage? packageFor(com.appactor.android.models.AppActorPackageType type);
+    method public com.appactor.android.models.AppActorPackage? packageForLookupKey(String lookupKey);
     property public final com.appactor.android.models.AppActorPackage? annual;
     property public final String displayName;
     property public final String id;
@@ -1241,7 +1242,7 @@ package com.appactor.android.models {
   }
 
   public final class AppActorPackage {
-    ctor public AppActorPackage(String id, optional com.appactor.android.models.AppActorPackageType packageType, optional String? customTypeIdentifier, com.appactor.android.models.AppActorStore store, String productId, optional String? storeProductId, optional com.appactor.android.models.AppActorProductType productType, optional String? basePlanId, optional String? offerId, optional String? localizedPriceString, optional Double? price, optional String? currencyCode, optional String? displayName, optional String? productName, optional String? productDescription, optional java.util.Map<java.lang.String,? extends java.lang.Object?> metadata, optional Integer? tokenAmount, optional Integer? position, optional String? oldPurchaseToken, optional com.appactor.android.models.AppActorSubscriptionReplacementMode? replacementMode, optional String? offeringId, optional java.util.List<com.appactor.android.models.AppActorPricingPhase> pricingPhases);
+    ctor public AppActorPackage(String id, optional com.appactor.android.models.AppActorPackageType packageType, optional String? customTypeIdentifier, com.appactor.android.models.AppActorStore store, String productId, optional String? storeProductId, optional com.appactor.android.models.AppActorProductType productType, optional String? basePlanId, optional String? offerId, optional String? localizedPriceString, optional Double? price, optional String? currencyCode, optional String? displayName, optional String? productName, optional String? productDescription, optional java.util.Map<java.lang.String,? extends java.lang.Object?> metadata, optional Integer? tokenAmount, optional Integer? position, optional String? oldPurchaseToken, optional com.appactor.android.models.AppActorSubscriptionReplacementMode? replacementMode, optional String? offeringId, optional java.util.List<com.appactor.android.models.AppActorPricingPhase> pricingPhases, optional String? lookupKey);
     method public String component1();
     method public String? component10();
     method public Double? component11();
@@ -1257,6 +1258,7 @@ package com.appactor.android.models {
     method public com.appactor.android.models.AppActorSubscriptionReplacementMode? component20();
     method public String? component21();
     method public java.util.List<com.appactor.android.models.AppActorPricingPhase> component22();
+    method public String? component23();
     method public String? component3();
     method public com.appactor.android.models.AppActorStore component4();
     method public String component5();
@@ -1264,7 +1266,7 @@ package com.appactor.android.models {
     method public com.appactor.android.models.AppActorProductType component7();
     method public String? component8();
     method public String? component9();
-    method public com.appactor.android.models.AppActorPackage copy(String id, com.appactor.android.models.AppActorPackageType packageType, String? customTypeIdentifier, com.appactor.android.models.AppActorStore store, String productId, String? storeProductId, com.appactor.android.models.AppActorProductType productType, String? basePlanId, String? offerId, String? localizedPriceString, Double? price, String? currencyCode, String? displayName, String? productName, String? productDescription, java.util.Map<java.lang.String,? extends java.lang.Object?> metadata, Integer? tokenAmount, Integer? position, String? oldPurchaseToken, com.appactor.android.models.AppActorSubscriptionReplacementMode? replacementMode, String? offeringId, java.util.List<com.appactor.android.models.AppActorPricingPhase> pricingPhases);
+    method public com.appactor.android.models.AppActorPackage copy(String id, com.appactor.android.models.AppActorPackageType packageType, String? customTypeIdentifier, com.appactor.android.models.AppActorStore store, String productId, String? storeProductId, com.appactor.android.models.AppActorProductType productType, String? basePlanId, String? offerId, String? localizedPriceString, Double? price, String? currencyCode, String? displayName, String? productName, String? productDescription, java.util.Map<java.lang.String,? extends java.lang.Object?> metadata, Integer? tokenAmount, Integer? position, String? oldPurchaseToken, com.appactor.android.models.AppActorSubscriptionReplacementMode? replacementMode, String? offeringId, java.util.List<com.appactor.android.models.AppActorPricingPhase> pricingPhases, String? lookupKey);
     method public String? getBasePlanId();
     method public String? getCurrencyCode();
     method public String? getCustomTypeIdentifier();
@@ -1276,6 +1278,7 @@ package com.appactor.android.models {
     method public String getIdentifier();
     method public com.appactor.android.models.AppActorPricingPhase? getIntroPhase();
     method public String? getLocalizedPriceString();
+    method public String? getLookupKey();
     method public java.util.Map<java.lang.String,java.lang.Object?> getMetadata();
     method public String? getOfferId();
     method public String? getOfferingId();
@@ -1304,6 +1307,7 @@ package com.appactor.android.models {
     property public final String identifier;
     property public final com.appactor.android.models.AppActorPricingPhase? introPhase;
     property public final String? localizedPriceString;
+    property public final String? lookupKey;
     property public final java.util.Map<java.lang.String,java.lang.Object?> metadata;
     property public final String? offerId;
     property public final String? offeringId;

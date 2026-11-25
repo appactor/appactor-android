@@ -30,6 +30,11 @@ public data class AppActorPackage(
      * plans without a resolved store offer.
      */
     val pricingPhases: List<AppActorPricingPhase> = emptyList(),
+    /**
+     * Developer-defined package lookup key (matches `<Package key="...">` in XML screens), or
+     * `null` when absent. Never falls back to [id], [identifier], [packageType], or [productId].
+     */
+    val lookupKey: String? = null,
 ) {
     /**
      * Semantic identifier for package selection.

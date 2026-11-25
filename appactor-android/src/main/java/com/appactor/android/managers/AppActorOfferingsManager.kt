@@ -8,6 +8,7 @@ import com.appactor.android.backend.dto.AppActorOfferingDTO
 import com.appactor.android.backend.dto.AppActorOfferingsEnvelopeDTO
 import com.appactor.android.backend.dto.AppActorPackageDTO
 import com.appactor.android.backend.dto.AppActorProductReferenceDTO
+import com.appactor.android.backend.dto.normalizedPackageLookupKey
 import com.appactor.android.billing.AppActorStoreAdapter
 import com.appactor.android.billing.AppActorStoreProduct
 import com.appactor.android.billing.AppActorStoreProductRequest
@@ -650,6 +651,7 @@ internal class AppActorOfferingsManager(
             position = position,
             offeringId = offeringId,
             pricingPhases = resolved.pricingPhases,
+            lookupKey = lookupKey.normalizedPackageLookupKey(),
         )
     }
 

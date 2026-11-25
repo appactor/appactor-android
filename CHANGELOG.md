@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.4.4
+
+- Added: `AppActorPackage.lookupKey` (`String? = null`) carries the backend's package lookup key end-to-end from `AppActorPackageDTO` through mappers and Play-enriched offerings (`AppActorOfferingsManager`). Values are trimmed and blank/absent keys normalize to `null` (never falling back to `id`, `identifier`, `packageType`, or `productId`). Public API signature (`appactor-android/api.txt`) updated accordingly. (Plan 8-13)
+- Added: `AppActorOffering.packageForLookupKey(lookupKey: String): AppActorPackage?` performs a strict, case-sensitive exact match on `AppActorPackage.lookupKey`; empty/blank or unmatched keys return `null` with no fallback to `id`, `identifier`, `packageType`, `productId`, or another package.
+- Changed: `AppActorOfferingsCacheStore` now versions persisted offering payloads with `schemaVersion = 2` (`CURRENT_SCHEMA_VERSION = 2`) and discards legacy unversioned (keyless) or incompatible cache entries on read, ETag lookup, and 304 handling so upgraded apps refresh cleanly with `lookupKey`.
+- Added: `appactor-plugin` (`PackageSurrogate`) serializes `"lookup_key"` (trimmed non-empty value) in offering payloads for Flutter, React Native, and Capacitor wrappers.
+
 ## 2.4.3
 
 - Changed: response signatures (Ed25519) are verified with Google's Tink (`com.google.crypto.tink:tink-android` 1.23.0) instead of BouncyCastle, and the SDK no longer brings in `bcprov-jdk18on`. bcprov and `org.jspecify:jspecify`, which `androidx.core` 1.17 brings in, both ship `META-INF/versions/9/OSGI-INF/MANIFEST.MF`, so an app on AGP 8.11 or older failed to build ("2 files found with path …") unless it excluded that file. bcprov's Java 25 classes could also fail builds with Jetifier on. Apps that added the exclude for the SDK can drop it. Tink uses Android's own Ed25519 where the device has it and its own implementation elsewhere, and brings in `gson`, `error_prone_annotations`, `jsr305` and `androidx.annotation`. (Flutter audit FL-1, FL-3, 2026-09-28)
