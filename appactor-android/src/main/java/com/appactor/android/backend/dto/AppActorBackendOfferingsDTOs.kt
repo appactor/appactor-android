@@ -45,6 +45,7 @@ internal data class AppActorOfferingDTO(
 internal data class AppActorPackageDTO(
     val id: String,
     val packageType: String? = null,
+    val lookupKey: String? = null,
     val displayName: String? = null,
     val position: Int? = null,
     val isActive: Boolean? = null,
@@ -52,6 +53,9 @@ internal data class AppActorPackageDTO(
     val tokenAmount: Int? = null,
     val products: List<AppActorProductReferenceDTO> = emptyList(),
 )
+
+internal fun String?.normalizedPackageLookupKey(): String? =
+    this?.trim()?.takeIf { it.isNotEmpty() }
 
 @Serializable
 internal data class AppActorProductReferenceDTO(

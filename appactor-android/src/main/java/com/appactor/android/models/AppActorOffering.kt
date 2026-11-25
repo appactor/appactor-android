@@ -39,4 +39,19 @@ public data class AppActorOffering(
     public fun packageFor(type: AppActorPackageType): AppActorPackage? {
         return packages.firstOrNull { it.packageType == type }
     }
+
+    /**
+     * Returns the package whose [AppActorPackage.lookupKey] exactly matches [lookupKey], or `null`.
+     *
+     * Strict exact match only: empty/blank keys and unmatched keys return `null` and never fall
+     * back to [AppActorPackage.id], [AppActorPackage.identifier], [AppActorPackage.packageType],
+     * [AppActorPackage.productId], or another package.
+     */
+    public fun packageForLookupKey(lookupKey: String): AppActorPackage? {
+        if (lookupKey.isBlank()) return null
+        return packages.firstOrNull { pkg ->
+            val candidate = pkg.lookupKey
+            candidate != null && candidate.isNotBlank() && candidate == lookupKey
+        }
+    }
 }

@@ -20,6 +20,7 @@ import com.appactor.android.models.AppActorPurchaseResult
 import com.appactor.android.models.AppActorStore
 import com.appactor.plugin.AppActorPlugin
 import com.appactor.plugin.encoding.CustomerInfoSurrogate
+import com.appactor.plugin.encoding.OfferingsSurrogate
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -27,7 +28,13 @@ import io.mockk.mockkObject
 import io.mockk.mockk
 import io.mockk.unmockkObject
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -287,6 +294,79 @@ class PluginRequestRouterTests {
             assertTrue(result is PluginResult.Success)
             coVerify(exactly = 1) {
                 AppActor.offerings(AppActorOfferingsFetchPolicy.CacheOnly)
+            }
+        } finally {
+            unmockkObject(AppActor)
+        }
+    }
+
+    @Test
+    fun `get offerings and get cached offerings serialize package lookup_key with null handling`() = runBlocking {
+        val keyedPackage = AppActorPackage(
+            id = "pkg_monthly",
+            packageType = AppActorPackageType.Monthly,
+            store = AppActorStore.PlayStore,
+            productId = "com.appactor.pro.monthly",
+            productType = AppActorProductType.Subscription,
+            basePlanId = "monthly001",
+            offeringId = "off_main",
+            lookupKey = "pro_monthly",
+        )
+        val keylessPackage = AppActorPackage(
+            id = "pkg_annual",
+            packageType = AppActorPackageType.Annual,
+            store = AppActorStore.PlayStore,
+            productId = "com.appactor.pro.annual",
+            productType = AppActorProductType.Subscription,
+            basePlanId = "annual001",
+            offeringId = "off_main",
+            lookupKey = null,
+        )
+        val blankKeyPackage = AppActorPackage(
+            id = "pkg_lifetime",
+            packageType = AppActorPackageType.Lifetime,
+            store = AppActorStore.PlayStore,
+            productId = "com.appactor.pro.lifetime",
+            productType = AppActorProductType.NonConsumable,
+            offeringId = "off_main",
+            lookupKey = "   ",
+        )
+        val offering = AppActorOffering(
+            id = "off_main",
+            displayName = "Main",
+            isCurrent = true,
+            lookupKey = "main",
+            packages = listOf(keyedPackage, keylessPackage, blankKeyPackage),
+        )
+        val offerings = AppActorOfferings(
+            current = offering,
+            all = mapOf("off_main" to offering),
+        )
+
+        mockkObject(AppActor)
+        try {
+            coEvery { AppActor.offerings(any()) } returns offerings
+            every { AppActor.cachedOfferings } returns offerings
+
+            for (method in listOf("get_offerings", "get_cached_offerings")) {
+                val result = PluginRequestRouter.route(method, "{}") as PluginResult.Success
+                val root = PluginCoder.json.parseToJsonElement(result.payload).jsonObject
+                val packages = root.getValue("current").jsonObject.getValue("packages").jsonArray
+
+                assertEquals(3, packages.size)
+                val firstPkg = packages[0].jsonObject
+                val secondPkg = packages[1].jsonObject
+                val thirdPkg = packages[2].jsonObject
+
+                assertEquals("pro_monthly", firstPkg.getValue("lookup_key").jsonPrimitive.content)
+                assertFalse("Bridge wire format must use snake_case lookup_key", firstPkg.containsKey("lookupKey"))
+                assertTrue("Null lookup_key must serialize explicitly", secondPkg["lookup_key"] is JsonNull)
+                assertTrue("Blank lookup_key must normalize to null", thirdPkg["lookup_key"] is JsonNull)
+
+                val decoded = PluginCoder.json.decodeFromString(OfferingsSurrogate.serializer(), result.payload)
+                assertEquals("pro_monthly", decoded.current?.packages?.get(0)?.lookupKey)
+                assertNull(decoded.current?.packages?.get(1)?.lookupKey)
+                assertNull(decoded.current?.packages?.get(2)?.lookupKey)
             }
         } finally {
             unmockkObject(AppActor)

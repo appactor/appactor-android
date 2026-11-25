@@ -13,6 +13,7 @@ import com.appactor.android.backend.dto.AppActorOfferingsEnvelopeDTO
 import com.appactor.android.backend.dto.AppActorPackageDTO
 import com.appactor.android.backend.dto.AppActorProductReferenceDTO
 import com.appactor.android.backend.dto.AppActorSubscriptionDTO
+import com.appactor.android.backend.dto.normalizedPackageLookupKey
 import com.appactor.android.models.AppActorCancellationReason
 import com.appactor.android.models.AppActorCustomerInfo
 import com.appactor.android.models.AppActorEntitlementInfo
@@ -93,6 +94,7 @@ internal fun AppActorPackageDTO.toModel(): AppActorPackage {
         metadata = metadata.toMetadata(),
         tokenAmount = tokenAmount,
         position = position,
+        lookupKey = lookupKey.normalizedPackageLookupKey(),
     )
 }
 

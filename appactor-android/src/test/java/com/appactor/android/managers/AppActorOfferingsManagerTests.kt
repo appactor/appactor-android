@@ -77,7 +77,12 @@ class AppActorOfferingsManagerTests {
         assertEquals("off_main_android", offerings.current?.id)
         assertEquals(2, offerings.current?.packages?.size)
         assertEquals("$4.99", offerings.current?.monthly?.localizedPriceString)
-        assertEquals("$1.99", offerings.current?.packages?.firstOrNull { it.productId == "com.appactor.coins.100" }?.localizedPriceString)
+        assertEquals("pro_monthly", offerings.current?.monthly?.lookupKey)
+        assertEquals(offerings.current?.monthly, offerings.current?.packageForLookupKey("pro_monthly"))
+        val coins = offerings.current?.packages?.firstOrNull { it.productId == "com.appactor.coins.100" }
+        assertEquals("$1.99", coins?.localizedPriceString)
+        assertEquals("coin_pack_100", coins?.lookupKey)
+        assertEquals(coins, offerings.current?.packageForLookupKey("coin_pack_100"))
         assertEquals(listOf("premium"), offerings.productEntitlements["android:com.appactor.pro.monthly:monthly001"])
     }
 
@@ -661,37 +666,201 @@ class AppActorOfferingsManagerTests {
     }
 
     @Test
-    fun `cache only serves legacy raw offerings cache during locale safe upgrade path`() = runBlocking {
-        val directory = File(context.cacheDir, "tests/offerings-cache-only-legacy-${UUID.randomUUID()}").apply {
+    fun `cache only rejects legacy raw and pre-bump v1 keyless offerings cache on upgrade`() = runBlocking {
+        val currentLocale = Locale.getDefault().toLanguageTag()
+        val keylessDto = fixtureKeylessOfferings()
+        val keylessJson = AppActorBackendJson.instance.encodeToString(keylessDto)
+        val v1WrappedJson = """{"payload":${AppActorBackendJson.instance.encodeToString(keylessJson)},"preferredLocales":["$currentLocale"]}"""
+
+        for ((label, legacyPayload) in listOf("raw" to keylessJson, "v1-wrapped" to v1WrappedJson)) {
+            val directory = File(context.cacheDir, "tests/offerings-cache-only-legacy-$label-${UUID.randomUUID()}").apply {
+                mkdirs()
+            }
+            val diskStore = AppActorCacheDiskStore(context, directory)
+            val eTagManager = AppActorETagManager(diskStore = diskStore, responseVerificationEnabled = false)
+            eTagManager.storeFresh(
+                resource = AppActorCacheResource.Offerings,
+                payload = legacyPayload,
+                eTag = "\"etag_legacy\"",
+                verified = true,
+            )
+            val cacheStore = AppActorOfferingsCacheStore(eTagManager)
+            val mockClient = mockk<AppActorBackendClient>(relaxed = true)
+            val manager = AppActorOfferingsManager(
+                backendClient = mockClient,
+                cacheStore = cacheStore,
+                offlineProductCatalogStore = offlineProductCatalogStore("offerings-cache-only-legacy-$label"),
+                storeAdapter = pricedStoreAdapter(),
+            )
+
+            val error = runCatching {
+                manager.getOfferings(fetchPolicy = AppActorOfferingsFetchPolicy.CacheOnly)
+            }.exceptionOrNull()
+
+            assertTrue("Expected cache miss for $label legacy cache", error is AppActorError.InvalidConfiguration)
+            assertEquals("Offerings cache miss.", error?.message)
+            assertFalse(File(directory, "${AppActorCacheResource.Offerings.cacheKey}.json").exists())
+            coVerify(exactly = 0) { mockClient.getOfferings(any()) }
+        }
+    }
+
+    @Test
+    fun `upgraded app discards pre-bump keyless disk cache, skips stale etag, and fetches fresh lookupKeys`() = runBlocking {
+        val currentLocale = Locale.getDefault().toLanguageTag()
+        val directory = File(context.cacheDir, "tests/offerings-upgrade-keyless-${UUID.randomUUID()}").apply {
             mkdirs()
         }
         val diskStore = AppActorCacheDiskStore(context, directory)
         val eTagManager = AppActorETagManager(diskStore = diskStore, responseVerificationEnabled = false)
+        val keylessJson = AppActorBackendJson.instance.encodeToString(fixtureKeylessOfferings())
+        val legacyV1Wrapper = """{"payload":${AppActorBackendJson.instance.encodeToString(keylessJson)},"preferredLocales":["$currentLocale"]}"""
         eTagManager.storeFresh(
             resource = AppActorCacheResource.Offerings,
-            payload = AppActorBackendJson.instance.encodeToString(fixtureOfferings()),
-            eTag = "\"etag_legacy\"",
+            payload = legacyV1Wrapper,
+            eTag = "\"etag_same_backend_hash\"",
             verified = true,
         )
+
         val cacheStore = AppActorOfferingsCacheStore(eTagManager)
         val mockClient = mockk<AppActorBackendClient>(relaxed = true)
-        val mockStoreAdapter = mockk<AppActorStoreAdapter>(relaxed = true)
-        coEvery { mockStoreAdapter.queryProductDetails(any()) } answers {
-            val requests = firstArg<List<AppActorStoreProductRequest>>()
-            requests.mapNotNull { request -> pricedProducts()[requestKey(request)] }
+        coEvery { mockClient.getOfferings(any()) } answers {
+            // Simulate live backend: if the SDK sent the old ETag it would get 304; with null it gets fresh 200.
+            if (firstArg<String?>() == "\"etag_same_backend_hash\"") {
+                notModifiedResponse(eTag = "\"etag_same_backend_hash\"")
+            } else {
+                freshOfferingsResponse(fixtureOfferings(), eTag = "\"etag_same_backend_hash\"")
+            }
         }
         val manager = AppActorOfferingsManager(
             backendClient = mockClient,
             cacheStore = cacheStore,
-            offlineProductCatalogStore = offlineProductCatalogStore("offerings-cache-only-legacy"),
-            storeAdapter = mockStoreAdapter,
+            offlineProductCatalogStore = offlineProductCatalogStore("offerings-upgrade-keyless"),
+            storeAdapter = pricedStoreAdapter(),
         )
 
-        val offerings = manager.getOfferings(fetchPolicy = AppActorOfferingsFetchPolicy.CacheOnly)
+        val offerings = manager.getOfferings(fetchPolicy = AppActorOfferingsFetchPolicy.ReturnCachedThenRefresh)
+        val current = requireNotNull(offerings.current)
 
-        assertNotNull(offerings.current)
-        assertEquals("off_main_android", offerings.current?.id)
-        coVerify(exactly = 0) { mockClient.getOfferings(any()) }
+        // Must NOT have sent the legacy ETag and must have fetched fresh lookupKeys.
+        coVerify(exactly = 1) { mockClient.getOfferings(null) }
+        assertEquals("pro_monthly", current.monthly?.lookupKey)
+        assertEquals("pkg_pro_monthly", current.packageForLookupKey("pro_monthly")?.id)
+        assertEquals("pkg_coin_pack_100", current.packageForLookupKey("coin_pack_100")?.id)
+        assertNull(current.packageForLookupKey("nonexistent_key"))
+    }
+
+    @Test
+    fun `offline launch after upgrade with legacy keyless disk cache fails instead of serving keyless packages`() = runBlocking {
+        val currentLocale = Locale.getDefault().toLanguageTag()
+        val directory = File(context.cacheDir, "tests/offerings-offline-upgrade-keyless-${UUID.randomUUID()}").apply {
+            mkdirs()
+        }
+        val diskStore = AppActorCacheDiskStore(context, directory)
+        val eTagManager = AppActorETagManager(diskStore = diskStore, responseVerificationEnabled = false)
+        val keylessJson = AppActorBackendJson.instance.encodeToString(fixtureKeylessOfferings())
+        val legacyV1Wrapper = """{"payload":${AppActorBackendJson.instance.encodeToString(keylessJson)},"preferredLocales":["$currentLocale"]}"""
+        eTagManager.storeFresh(
+            resource = AppActorCacheResource.Offerings,
+            payload = legacyV1Wrapper,
+            eTag = "\"etag_v1\"",
+            verified = true,
+        )
+
+        val mockClient = mockk<AppActorBackendClient>(relaxed = true)
+        coEvery { mockClient.getOfferings(any()) } throws AppActorBackendException.Network("offline")
+        val manager = AppActorOfferingsManager(
+            backendClient = mockClient,
+            cacheStore = AppActorOfferingsCacheStore(eTagManager),
+            offlineProductCatalogStore = offlineProductCatalogStore("offerings-offline-upgrade-keyless"),
+            storeAdapter = pricedStoreAdapter(),
+        )
+
+        val error = runCatching { manager.getOfferings() }.exceptionOrNull()
+
+        assertTrue(error is AppActorError.Network)
+        assertNull(manager.cached())
+        assertFalse(File(directory, "${AppActorCacheResource.Offerings.cacheKey}.json").exists())
+    }
+
+    @Test
+    fun `offline launch with v2 disk cache preserves lookupKey and returns null without fallback for missing or unmatched key`() = runBlocking {
+        val directory = File(context.cacheDir, "tests/offerings-offline-v2-lookup-${UUID.randomUUID()}").apply {
+            mkdirs()
+        }
+        val diskStore = AppActorCacheDiskStore(context, directory)
+        val cacheStore = AppActorOfferingsCacheStore(
+            AppActorETagManager(diskStore = diskStore, responseVerificationEnabled = false)
+        )
+        val offlineCatalogStore = offlineProductCatalogStore("offerings-offline-v2-lookup")
+
+        // First launch (online): cache a v2 offering with one keyed package and one keyless package.
+        val fixture = fixtureOfferings()
+        fun clearCoinLookupKey(offering: AppActorOfferingDTO): AppActorOfferingDTO = offering.copy(
+            packages = offering.packages.map { pkg ->
+                if (pkg.id == "pkg_coin_pack_100") pkg.copy(lookupKey = null) else pkg
+            }
+        )
+        val mixedDto = fixture.copy(
+            data = fixture.data.copy(
+                currentOffering = fixture.data.currentOffering?.let(::clearCoinLookupKey),
+                offerings = fixture.data.offerings.map(::clearCoinLookupKey),
+            )
+        )
+        val onlineClient = mockk<AppActorBackendClient>(relaxed = true)
+        coEvery { onlineClient.getOfferings(any()) } returns freshOfferingsResponse(mixedDto, eTag = "\"etag_v2\"")
+        val firstLaunchManager = AppActorOfferingsManager(
+            backendClient = onlineClient,
+            cacheStore = cacheStore,
+            offlineProductCatalogStore = offlineCatalogStore,
+            storeAdapter = pricedStoreAdapter(),
+        )
+        firstLaunchManager.getOfferings()
+
+        // Second launch (cold start, completely offline): loads from v2 disk cache.
+        val offlineClient = mockk<AppActorBackendClient>(relaxed = true)
+        coEvery { offlineClient.getOfferings(any()) } throws AppActorBackendException.Network("offline")
+        val secondLaunchManager = AppActorOfferingsManager(
+            backendClient = offlineClient,
+            cacheStore = cacheStore,
+            offlineProductCatalogStore = offlineCatalogStore,
+            storeAdapter = pricedStoreAdapter(),
+        )
+
+        val offlineOfferings = secondLaunchManager.getOfferings()
+        val current = requireNotNull(offlineOfferings.current)
+
+        assertEquals("pkg_pro_monthly", current.packageForLookupKey("pro_monthly")?.id)
+        assertEquals("pro_monthly", current.monthly?.lookupKey)
+        assertNull(current.packages.first { it.id == "pkg_coin_pack_100" }.lookupKey)
+
+        // Missing, unmatched, blank, or non-lookupKey identifiers must return null and NEVER fall back.
+        assertNull(current.packageForLookupKey("coin_pack_100"))
+        assertNull(current.packageForLookupKey("unknown_key"))
+        assertNull(current.packageForLookupKey(""))
+        assertNull(current.packageForLookupKey("   "))
+        assertNull(current.packageForLookupKey("pkg_pro_monthly"))
+        assertNull(current.packageForLookupKey("monthly"))
+        assertNull(current.packageForLookupKey("com.appactor.pro.monthly"))
+    }
+
+    @Test
+    fun `offline launch with bundled fallback offerings preserves lookupKey and never falls back on unmatched key`() = runBlocking {
+        val mockClient = mockk<AppActorBackendClient>(relaxed = true)
+        coEvery { mockClient.getOfferings(any()) } throws AppActorBackendException.Network("offline")
+        val manager = offeringsManager(
+            name = "offerings-fallback-lookup",
+            backendClient = mockClient,
+            storeAdapter = pricedStoreAdapter(),
+        )
+        manager.setFallbackOfferings(fixtureOfferings())
+
+        val offerings = manager.getOfferings()
+        val current = requireNotNull(offerings.current)
+
+        assertEquals("pkg_pro_monthly", current.packageForLookupKey("pro_monthly")?.id)
+        assertEquals("pkg_coin_pack_100", current.packageForLookupKey("coin_pack_100")?.id)
+        assertNull(current.packageForLookupKey("missing_in_fallback"))
+        assertNull(current.packageForLookupKey("monthly"))
     }
 
     @Test
@@ -1259,6 +1428,19 @@ class AppActorOfferingsManagerTests {
             javaClass.classLoader?.getResource("fixtures/backend/offerings_android_sample.json")
         ).readText()
         return AppActorBackendJson.instance.decodeFromString(payload)
+    }
+
+    private fun fixtureKeylessOfferings(): AppActorOfferingsEnvelopeDTO {
+        val fixture = fixtureOfferings()
+        fun stripLookupKeys(offering: AppActorOfferingDTO): AppActorOfferingDTO = offering.copy(
+            packages = offering.packages.map { it.copy(lookupKey = null) }
+        )
+        return fixture.copy(
+            data = fixture.data.copy(
+                currentOffering = fixture.data.currentOffering?.let(::stripLookupKeys),
+                offerings = fixture.data.offerings.map(::stripLookupKeys),
+            )
+        )
     }
 
     private fun fixtureOfferingsWithLogicalCoinProductId(): AppActorOfferingsEnvelopeDTO {

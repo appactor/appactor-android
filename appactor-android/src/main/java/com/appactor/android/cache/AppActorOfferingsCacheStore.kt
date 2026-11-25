@@ -13,19 +13,20 @@ internal class AppActorOfferingsCacheStore(
         currentLocales: List<String>? = null,
     ): String? {
         if (forceRefresh) return null
-        val cachedValue = eTagManager.cached(AppActorCacheResource.Offerings) ?: return null
-        if (currentLocales != null && !isLocaleCompatible(cachedValue, currentLocales)) return null
+        val (cachedValue, wrapped) = loadValidStoredEntry() ?: return null
+        if (currentLocales != null && !isLocaleCompatible(wrapped, currentLocales)) return null
         return cachedValue.eTag
     }
 
     fun load(): AppActorCachedValue? {
-        return eTagManager.cached(AppActorCacheResource.Offerings)?.unwrap()
+        val (cachedValue, wrapped) = loadValidStoredEntry() ?: return null
+        return cachedValue.copy(payload = wrapped.payload)
     }
 
     fun loadLocaleCompatible(currentLocales: List<String>): AppActorCachedValue? {
-        val cachedValue = eTagManager.cached(AppActorCacheResource.Offerings) ?: return null
-        if (!isLocaleCompatible(cachedValue, currentLocales)) return null
-        return cachedValue.unwrap()
+        val (cachedValue, wrapped) = loadValidStoredEntry() ?: return null
+        if (!isLocaleCompatible(wrapped, currentLocales)) return null
+        return cachedValue.copy(payload = wrapped.payload)
     }
 
     fun save(
@@ -38,6 +39,7 @@ internal class AppActorOfferingsCacheStore(
             StoredOfferingsPayload(
                 payload = payload,
                 preferredLocales = preferredLocales,
+                schemaVersion = CURRENT_SCHEMA_VERSION,
             )
         )
         eTagManager.storeFresh(
@@ -52,44 +54,58 @@ internal class AppActorOfferingsCacheStore(
         rotatedETag: String? = null,
         currentLocales: List<String>? = null,
     ): AppActorCachedValue? {
-        val cachedValue = eTagManager.handleNotModified(
+        val (_, existingWrapped) = loadValidStoredEntry() ?: return null
+        if (currentLocales != null && !isLocaleCompatible(existingWrapped, currentLocales)) return null
+        val updated = eTagManager.handleNotModified(
             resource = AppActorCacheResource.Offerings,
             rotatedETag = rotatedETag,
         ) ?: return null
-        if (currentLocales != null && !isLocaleCompatible(cachedValue, currentLocales)) return null
-        return cachedValue.unwrap()
+        val updatedWrapped = decodeValidStoredPayload(updated.payload) ?: return null
+        if (currentLocales != null && !isLocaleCompatible(updatedWrapped, currentLocales)) return null
+        return updated.copy(payload = updatedWrapped.payload)
     }
 
     fun clear() {
         eTagManager.clear(AppActorCacheResource.Offerings)
     }
 
-    private fun AppActorCachedValue.unwrap(): AppActorCachedValue {
-        val wrapped = decodeStoredPayload(payload) ?: return this
-        return copy(payload = wrapped.payload)
+    private fun loadValidStoredEntry(): Pair<AppActorCachedValue, StoredOfferingsPayload>? {
+        val cachedValue = eTagManager.cached(AppActorCacheResource.Offerings) ?: return null
+        val wrapped = decodeValidStoredPayload(cachedValue.payload)
+        if (wrapped == null) {
+            // Discard legacy (pre-schema-bump keyless or pre-locale) or incompatible cache entries
+            // so upgraded apps never send a legacy ETag for 304 or serve keyless packages.
+            eTagManager.clear(AppActorCacheResource.Offerings)
+            return null
+        }
+        return cachedValue to wrapped
     }
 
     private fun isLocaleCompatible(
-        cachedValue: AppActorCachedValue,
+        wrapped: StoredOfferingsPayload,
         currentLocales: List<String>,
     ): Boolean {
         if (currentLocales.isEmpty()) return false
-        // Pre-locale cache entries stored the raw offerings payload directly. Keep
-        // them readable during upgrade so offline users do not lose their cache
-        // until the next successful network refresh.
-        val wrapped = decodeStoredPayload(cachedValue.payload) ?: return true
         return wrapped.preferredLocales == currentLocales
     }
 
-    private fun decodeStoredPayload(payload: String): StoredOfferingsPayload? {
-        return runCatching {
+    private fun decodeValidStoredPayload(payload: String): StoredOfferingsPayload? {
+        val wrapped = runCatching {
             AppActorBackendJson.instance.decodeFromString<StoredOfferingsPayload>(payload)
-        }.getOrNull()
+        }.getOrNull() ?: return null
+        return wrapped.takeIf { it.schemaVersion == CURRENT_SCHEMA_VERSION }
+    }
+
+    internal companion object {
+        // v1 (unversioned) cached offerings DTOs before AppActorPackageDTO carried lookupKey.
+        // v2 requires schemaVersion == 2 so upgraded apps invalidate keyless disk cache cleanly.
+        const val CURRENT_SCHEMA_VERSION: Int = 2
     }
 
     @Serializable
     private data class StoredOfferingsPayload(
         val payload: String,
         val preferredLocales: List<String>,
+        val schemaVersion: Int,
     )
 }

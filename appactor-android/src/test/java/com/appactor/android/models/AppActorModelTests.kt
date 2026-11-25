@@ -2,6 +2,7 @@ package com.appactor.android.models
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -39,6 +40,54 @@ class AppActorModelTests {
 
         assertEquals("monthly", defaultPackage.identifier)
         assertEquals("hero_offer", customPackage.identifier)
+        assertNull(defaultPackage.lookupKey)
+        assertNull(customPackage.lookupKey)
+    }
+
+    @Test
+    fun `offering packageForLookupKey uses strict exact match and never falls back`() {
+        val monthly = AppActorPackage(
+            id = "pkg_uuid_monthly",
+            packageType = AppActorPackageType.Monthly,
+            store = AppActorStore.PlayStore,
+            productId = "com.appactor.pro.monthly",
+            lookupKey = "pro_monthly",
+        )
+        val custom = AppActorPackage(
+            id = "pkg_uuid_custom",
+            packageType = AppActorPackageType.Custom,
+            customTypeIdentifier = "hero_custom",
+            store = AppActorStore.PlayStore,
+            productId = "com.appactor.pro.custom",
+            lookupKey = null,
+        )
+        val blankKeyPackage = AppActorPackage(
+            id = "pkg_uuid_blank",
+            packageType = AppActorPackageType.Annual,
+            store = AppActorStore.PlayStore,
+            productId = "com.appactor.pro.annual",
+            lookupKey = "   ",
+        )
+        val offering = AppActorOffering(
+            id = "off_main",
+            lookupKey = "main",
+            packages = listOf(monthly, custom, blankKeyPackage),
+        )
+
+        assertEquals(monthly, offering.packageForLookupKey("pro_monthly"))
+        // Blank, empty, padded, or unmatched keys must never match or fall back to another package.
+        assertNull(offering.packageForLookupKey(""))
+        assertNull(offering.packageForLookupKey("   "))
+        assertNull(offering.packageForLookupKey(" pro_monthly "))
+        assertNull(offering.packageForLookupKey("PRO_MONTHLY"))
+        assertNull(offering.packageForLookupKey("missing_key"))
+        // Must never fall back to id, identifier, packageType, customTypeIdentifier, or productId.
+        assertNull(offering.packageForLookupKey("pkg_uuid_monthly"))
+        assertNull(offering.packageForLookupKey("pkg_uuid_custom"))
+        assertNull(offering.packageForLookupKey("monthly"))
+        assertNull(offering.packageForLookupKey("hero_custom"))
+        assertNull(offering.packageForLookupKey("com.appactor.pro.monthly"))
+        assertNull(offering.packageForLookupKey("annual"))
     }
 
     @Test

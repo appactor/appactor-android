@@ -42,6 +42,7 @@ internal data class OfferingSurrogate(
 internal data class PackageSurrogate(
     val id: String,
     @SerialName("package_type") val packageType: String,
+    @SerialName("lookup_key") val lookupKey: String? = null,
     @SerialName("product_id") val productId: String,
     @SerialName("store_product_id") val storeProductId: String? = null,
     @SerialName("product_type") val productType: String,
@@ -63,6 +64,7 @@ internal data class PackageSurrogate(
     constructor(from: AppActorPackage) : this(
         id = from.id,
         packageType = from.packageType.wireValue,
+        lookupKey = from.lookupKey?.trim()?.takeIf { it.isNotEmpty() },
         productId = from.productId,
         storeProductId = from.storeProductId,
         productType = from.productType.wireValue,
